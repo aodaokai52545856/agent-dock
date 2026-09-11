@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { paneDragging } from '../lib/layout'
 
-defineProps<{
+const props = defineProps<{
   label: string
+  canToggle?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -38,9 +39,9 @@ function onPointerDown(event: PointerEvent) {
     :class="{ 'is-dragging': paneDragging }"
     role="separator"
     :aria-label="label"
-    title="拖动调整宽度，双击收起或展开"
+    :title="props.canToggle === false ? '拖动调整宽度' : '拖动调整宽度，双击收起或展开'"
     @pointerdown="onPointerDown"
-    @dblclick="emit('toggle')"
+    @dblclick="props.canToggle === false ? undefined : emit('toggle')"
   />
 </template>
 

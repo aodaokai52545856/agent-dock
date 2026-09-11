@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
-import { pathTail, relativeTime } from '../lib/format'
-import { endPaneAnim, layout, paneDragging, sidebarPaneWidth, toggleSidebar } from '../lib/layout'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import { relativeTime } from '../lib/format'
+import { endPaneAnim, layout, sidebarPaneWidth, toggleProjects } from '../lib/layout'
 import { isPendingSessionId } from '../lib/liveBind'
-import { liveOfProject } from '../lib/livePty'
-import { findLiveForSession, isSessionScanning, isToolScanning, setSessionToolFilter, store, visibleSessions } from '../lib/store'
+import { liveDotForPty, liveDotTitle, projectLiveDot, type LiveDotKind } from '../lib/livePulse'
+import { isCurrentSession, liveOfProject } from '../lib/livePty'
+import { findLiveForSession, isSessionScanning, setSessionToolFilter, store, visibleSessions } from '../lib/store'
 import { TOOLS, type SessionToolFilter, type ToolId } from '../lib/types'
 
 const emit = defineEmits<{
@@ -19,6 +20,7 @@ const emit = defineEmits<{
   'start-rename': [payload: { sessionId: string; toolId: ToolId }]
   rename: [id: string]
   close: [payload: { sessionId: string; toolId: ToolId }]
+  'close-all': [projectId?: string]
   delete: [payload: { sessionId: string; toolId: ToolId }]
   cite: [payload: { sessionId: string; toolId: ToolId }]
 }>()
@@ -30,8 +32,9 @@ defineProps<{
 const renaming = defineModel<string>('renaming', { default: '' })
 const draft = defineModel<string>('draft', { default: '' })
 const menu = ref<{ x: number; y: number; sessionId: string; toolId: ToolId; focus: number } | null>(null)
+const projectMenu = ref<{ x: number; y: number; projectId: string } | null>(null)
 const MENU_WIDTH = 228
-const MENU_HEIGHT = 188
+const MENU_HEIGHT = 226
 const filterOpen = ref(false)
 const filterFocus = ref(0)
 
@@ -65,6 +68,26 @@ function isLive(sessionId: string, toolId: ToolId) {
   return Boolean(findLiveForSession(sessionId, toolId))
 }
 
+function isCurrent(sessionId: string, toolId: ToolId) {
+  return isCurrentSession(sessionId, toolId, {
+    activePtyId: store.activePtyId,
+    focused: store.focusedSession,
+    live: findLiveForSession(sessionId, toolId)
+  })
+}
+
+const now = ref(Date.now())
+let pulseTimer = 0
+
+function sessionDot(sessionId: string, toolId: ToolId): LiveDotKind {
+  const live = findLiveForSession(sessionId, toolId)
+  return liveDotForPty(live, live ? store.ptyDataAt[live.ptyId] : undefined, now.value)
+}
+
+function projectDot(projectId: string): LiveDotKind {
+  return projectLiveDot(store.live, projectId, store.ptyDataAt, now.value)
+}
+
 function isPending(sessionId: string) {
   return isPendingSessionId(sessionId)
 }
@@ -75,6 +98,7 @@ function projectLiveCount(projectId: string) {
 
 function closeMenu() {
   menu.value = null
+  projectMenu.value = null
 }
 
 function closeFilter() {
@@ -107,6 +131,7 @@ function openMenu(event: MouseEvent, sessionId: string, toolId: ToolId) {
   event.preventDefault()
   event.stopPropagation()
   closeFilter()
+  projectMenu.value = null
   menu.value = {
     x: Math.min(event.clientX, window.innerWidth - MENU_WIDTH - 8),
     y: Math.min(event.clientY, window.innerHeight - MENU_HEIGHT - 8),
@@ -118,6 +143,10 @@ function openMenu(event: MouseEvent, sessionId: string, toolId: ToolId) {
 
 function menuLive() {
   return menu.value ? isLive(menu.value.sessionId, menu.value.toolId) : false
+}
+
+function menuCanCloseAll() {
+  return liveOfProject(store.live, store.selectedProjectId).length > 0
 }
 
 function menuPending() {
@@ -132,7 +161,8 @@ function activateMenu(index: number) {
   if (index === 0 && !menuPending()) renameSession()
   if (index === 1 && menuCanCite()) citeSession()
   if (index === 2 && menuLive()) closeSession()
-  if (index === 3 && !menuPending()) deleteSession()
+  if (index === 3 && menuCanCloseAll()) closeAllSessions()
+  if (index === 4 && !menuPending()) deleteSession()
 }
 
 function citeSession() {
@@ -145,6 +175,23 @@ function closeSession() {
   const current = menu.value
   closeMenu()
   if (current) emit('close', { sessionId: current.sessionId, toolId: current.toolId })
+}
+
+function closeAllSessions(projectId?: string) {
+  closeMenu()
+  emit('close-all', projectId || store.selectedProjectId)
+}
+
+function openProjectMenu(event: MouseEvent, projectId: string) {
+  event.preventDefault()
+  event.stopPropagation()
+  closeFilter()
+  menu.value = null
+  projectMenu.value = {
+    x: Math.min(event.clientX, window.innerWidth - MENU_WIDTH - 8),
+    y: Math.min(event.clientY, window.innerHeight - 52),
+    projectId
+  }
 }
 
 function deleteSession() {
@@ -185,14 +232,17 @@ function onKey(event: KeyboardEvent) {
       return
     }
   }
-  if (!menu.value) return
+  if (!menu.value) {
+    if (projectMenu.value && event.key === 'Escape') closeMenu()
+    return
+  }
   if (event.key === 'Escape') {
     closeMenu()
     return
   }
   if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
     event.preventDefault()
-    const next = event.key === 'ArrowDown' ? (menu.value.focus + 1) % 4 : (menu.value.focus + 3) % 4
+    const next = event.key === 'ArrowDown' ? (menu.value.focus + 1) % 5 : (menu.value.focus + 4) % 5
     menu.value = { ...menu.value, focus: next }
     return
   }
@@ -207,23 +257,37 @@ function onKey(event: KeyboardEvent) {
   }
 }
 
+watch(
+  () => [store.activePtyId, store.focusedSession?.sessionId, store.selectedProjectId] as const,
+  async () => {
+    await nextTick()
+    const rail = document.querySelector<HTMLElement>('.rail[aria-label="工作区"]')
+    if (!rail || rail.offsetParent === null) return
+    rail.querySelector('.row--current')?.scrollIntoView({ block: 'nearest' })
+  }
+)
+
 onMounted(() => {
   window.addEventListener('click', closePopovers)
   window.addEventListener('blur', closePopovers)
   window.addEventListener('keydown', onKey)
+  pulseTimer = window.setInterval(() => {
+    now.value = Date.now()
+  }, 500)
 })
 
 onUnmounted(() => {
   window.removeEventListener('click', closePopovers)
   window.removeEventListener('blur', closePopovers)
   window.removeEventListener('keydown', onKey)
+  window.clearInterval(pulseTimer)
 })
 </script>
 
 <template>
   <aside
     class="rail"
-    :class="{ 'rail--collapsed': collapsed, 'rail--static': paneDragging }"
+    :class="{ 'rail--collapsed': collapsed }"
     :style="{ width: sidebarPaneWidth() + 'px' }"
     aria-label="工作区"
     @transitionend="onPaneTransitionEnd"
@@ -231,7 +295,6 @@ onUnmounted(() => {
     <div class="body" :style="{ width: layout.sidebarWidth + 'px' }" :aria-hidden="collapsed">
       <div class="head">
         <p class="kicker">工作区</p>
-        <button type="button" class="icon-btn" title="收起工作区" @click="toggleSidebar">‹</button>
       </div>
 
       <button type="button" class="start-btn" @click="$emit('create')">
@@ -241,34 +304,40 @@ onUnmounted(() => {
 
       <div class="block">
         <div class="block-head">
-          <p class="kicker">项目</p>
+          <button type="button" class="fold-btn" :aria-expanded="!layout.projectsCollapsed" @click="toggleProjects">
+            <svg class="fold-caret" :class="{ 'is-closed': layout.projectsCollapsed }" viewBox="0 0 16 16" aria-hidden="true">
+              <path d="M6 4.5 10 8l-4 3.5" />
+            </svg>
+            <span class="kicker">项目</span>
+          </button>
           <button type="button" class="text-btn" @click="$emit('add')">添加</button>
         </div>
-        <ul v-if="store.projects.length" class="projects">
+        <ul v-if="!layout.projectsCollapsed && store.projects.length" class="projects">
           <li v-for="project in store.projects" :key="project.id">
             <div
               class="project"
               :class="{
                 'project--active': store.selectedProjectId === project.id,
-                'project--proxy': project.proxyEnabled
+                'project--live': projectDot(project.id) !== 'off',
+                'project--busy': projectDot(project.id) === 'busy'
               }"
+              :title="liveDotTitle(projectDot(project.id), 'project') || undefined"
+              @contextmenu="openProjectMenu($event, project.id)"
             >
               <button type="button" class="project-main" @click="$emit('select', project.id)">
                 <svg class="glyph" viewBox="0 0 16 16" aria-hidden="true">
                   <path d="M2.5 5h4.1l1.1 1.3H13.5V12.5H2.5z" />
                 </svg>
                 <span class="project-body">
-                  <span class="project-name">{{ project.name }}</span>
-                  <span class="project-path" :title="project.path">{{ pathTail(project.path) }}</span>
+                  <span class="project-name" :title="project.path">{{ project.name }}</span>
                 </span>
                 <span
                   v-if="projectLiveCount(project.id)"
                   class="project-live"
-                  :title="projectLiveCount(project.id) + ' 个终端在运行'"
+                  :title="projectLiveCount(project.id) + ' 个已打开会话'"
                 >
                   {{ projectLiveCount(project.id) }}
                 </span>
-                <span v-if="project.proxyEnabled" class="proxy-dot" title="代理开" />
               </button>
               <div class="project-ops">
                 <button type="button" class="row-btn" @click.stop="$emit('edit', project.id)">编辑</button>
@@ -277,7 +346,7 @@ onUnmounted(() => {
             </div>
           </li>
         </ul>
-        <p v-else class="muted pad">还没有项目。先添加一个目录。</p>
+        <p v-else-if="!layout.projectsCollapsed" class="muted pad">还没有项目。先添加一个目录。</p>
       </div>
 
       <div class="block block--sessions">
@@ -340,19 +409,11 @@ onUnmounted(() => {
 
         <div v-else-if="!store.selectedProjectId" class="muted pad">点上面的项目，或新建会话时再选。</div>
 
-        <div v-else class="groups">
+        <div v-else class="session-pane">
+        <div class="groups">
           <section v-for="group in groups" :key="group.tool.id" class="group">
-            <p
-              v-if="visibleTools.length > 1 || isToolScanning(group.tool.id)"
-              class="group-title"
-            >
+            <p v-if="visibleTools.length > 1" class="group-title">
               <span>{{ group.tool.label }}</span>
-              <span
-                v-if="isToolScanning(group.tool.id)"
-                class="scan-spin"
-                role="status"
-                :aria-label="`正在扫描 ${group.tool.label} 会话`"
-              />
             </p>
             <div v-if="group.error" class="group-error">
               <p>{{ group.error.message }}</p>
@@ -369,13 +430,18 @@ onUnmounted(() => {
               <li v-for="session in group.sessions" :key="session.id">
                 <div
                   class="row"
-                  :class="{ 'row--live': isLive(session.id, session.toolId) }"
+                  :class="{
+                    'row--live': isLive(session.id, session.toolId),
+                    'row--busy': sessionDot(session.id, session.toolId) === 'busy',
+                    'row--current': isCurrent(session.id, session.toolId)
+                  }"
                   @contextmenu="openMenu($event, session.id, session.toolId)"
                 >
                   <button
                     type="button"
                     class="row-main"
-                    :title="session.title"
+                    :title="[session.title, liveDotTitle(sessionDot(session.id, session.toolId), 'session')].filter(Boolean).join(' · ')"
+                    :aria-current="isCurrent(session.id, session.toolId) ? 'true' : undefined"
                     @click="$emit('open', { sessionId: session.id, toolId: session.toolId })"
                   >
                     <span v-if="renaming !== session.id" class="row-title">{{ session.title }}</span>
@@ -388,23 +454,20 @@ onUnmounted(() => {
                       @keydown.enter="$emit('rename', session.id)"
                       @keydown.esc="renaming = ''"
                     />
-                    <span v-if="isLive(session.id, session.toolId)" class="live-dot" title="进行中" />
                     <span class="row-time">{{ relativeTime(session.updatedAt) }}</span>
                   </button>
                 </div>
               </li>
             </ul>
-            <p v-else-if="isToolScanning(group.tool.id)" class="muted group-empty">正在扫描</p>
             <p v-else class="muted group-empty">暂无会话</p>
           </section>
         </div>
+          <div v-if="store.sessionRefreshBusy" class="session-mask" role="status" aria-live="polite">
+            <span class="scan-spin" aria-hidden="true" />
+            <span>正在刷新会话</span>
+          </div>
+        </div>
       </div>
-    </div>
-
-    <div class="strip" :aria-hidden="!collapsed">
-      <button type="button" class="icon-btn" title="展开工作区" @click="toggleSidebar">›</button>
-      <span class="collapsed-label">工作区</span>
-      <button type="button" class="icon-btn" title="新建会话" @click="$emit('create')">+</button>
     </div>
 
     <Teleport to="body">
@@ -452,17 +515,48 @@ onUnmounted(() => {
         >
           <span>关闭会话</span>
         </button>
+        <button
+          type="button"
+          role="menuitem"
+          class="ad-menu-item"
+          :class="{ 'is-focus': menu.focus === 3 }"
+          :disabled="!menuCanCloseAll()"
+          @mouseenter="menu.focus = 3"
+          @click="closeAllSessions()"
+        >
+          <span>关闭所有会话</span>
+        </button>
         <div class="ad-menu-sep" role="separator" />
         <button
           type="button"
           role="menuitem"
           class="ad-menu-item ad-menu-item--danger"
-          :class="{ 'is-focus': menu.focus === 3 }"
+          :class="{ 'is-focus': menu.focus === 4 }"
           :disabled="menuPending()"
-          @mouseenter="menu.focus = 3"
+          @mouseenter="menu.focus = 4"
           @click="deleteSession"
         >
           <span>删除会话</span>
+        </button>
+      </div>
+    </Teleport>
+    <Teleport to="body">
+      <div
+        v-if="projectMenu"
+        class="ad-menu menu"
+        role="menu"
+        :style="{ left: projectMenu.x + 'px', top: projectMenu.y + 'px', width: MENU_WIDTH + 'px' }"
+        @click.stop
+        @contextmenu.prevent
+      >
+        <button
+          type="button"
+          role="menuitem"
+          class="ad-menu-item"
+          :disabled="!liveOfProject(store.live, projectMenu.projectId).length"
+          @click="closeAllSessions(projectMenu.projectId)"
+        >
+          <span>关闭所有会话</span>
         </button>
       </div>
     </Teleport>
@@ -476,11 +570,6 @@ onUnmounted(() => {
   background: var(--ad-sidebar);
   min-width: 0;
   overflow: hidden;
-  transition: width var(--ad-pane-move);
-}
-
-.rail--static {
-  transition: none;
 }
 
 .body {
@@ -488,32 +577,6 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   min-height: 0;
-  opacity: 1;
-  transition: opacity var(--ad-pane-fade);
-}
-
-.rail--collapsed .body {
-  opacity: 0;
-  pointer-events: none;
-}
-
-.strip {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 0;
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity var(--ad-pane-fade);
-}
-
-.rail--collapsed .strip {
-  opacity: 1;
-  pointer-events: auto;
-  transition-delay: 60ms;
 }
 
 .head,
@@ -567,6 +630,36 @@ onUnmounted(() => {
 .block-head {
   padding: 0 12px;
   height: 32px;
+}
+
+.fold-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  height: 28px;
+  padding: 0 4px 0 0;
+  color: inherit;
+}
+
+.fold-btn:hover .kicker {
+  color: var(--ad-text);
+}
+
+.fold-caret {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+  fill: none;
+  stroke: var(--ad-muted);
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transform: rotate(90deg);
+}
+
+.fold-caret.is-closed {
+  transform: rotate(0deg);
 }
 
 .block-head-start {
@@ -703,13 +796,7 @@ onUnmounted(() => {
   stroke: var(--ad-text);
 }
 
-.proxy-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--ad-success);
-  flex-shrink: 0;
-}
+
 
 .project-live {
   min-width: 16px;
@@ -739,7 +826,6 @@ onUnmounted(() => {
   color: var(--ad-text);
 }
 
-.project-path,
 .muted,
 .group-empty,
 .group-error p {
@@ -791,11 +877,39 @@ onUnmounted(() => {
   border-radius: var(--ad-radius-control);
 }
 
+.session-pane {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
 .groups {
   flex: 1;
   min-height: 0;
   overflow: auto;
   padding: 8px 12px 16px;
+}
+
+.session-mask {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: rgb(13 13 13 / 0.72);
+  color: var(--ad-muted);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.session-mask .scan-spin {
+  width: 18px;
+  height: 18px;
 }
 
 .group {
@@ -861,13 +975,16 @@ onUnmounted(() => {
   background: transparent;
 }
 
-.live-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--ad-success);
-  flex-shrink: 0;
+.row--current {
+  background: var(--ad-selected);
+  box-shadow: inset 0 0 0 1px rgba(236, 236, 236, 0.28);
 }
+
+.row--current .row-title {
+  color: var(--ad-text);
+}
+
+
 
 .row-main {
   flex: 1;

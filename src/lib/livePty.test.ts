@@ -4,6 +4,7 @@ import {
   focusedFromLive,
   forgetPty,
   groupLiveByProject,
+  isCurrentSession,
   liveOfProject,
   pickPtyForProject,
   projectSwitchView
@@ -88,6 +89,46 @@ test('forgetPty clears only the remembered slot', () => {
   const last = forgetPty({ aitools: 'a1', dock: 'd1' }, 'a1')
   assert.equal(last.aitools, undefined)
   assert.equal(last.dock, 'd1')
+})
+
+test('isCurrentSession follows the active PTY, not just a live background session', () => {
+  const current = live[0]!
+  const background = live[1]!
+  assert.equal(
+    isCurrentSession(current.sessionId!, current.toolId, {
+      activePtyId: current.ptyId,
+      focused: focusedFromLive(current),
+      live: current
+    }),
+    true
+  )
+  assert.equal(
+    isCurrentSession(background.sessionId!, background.toolId, {
+      activePtyId: current.ptyId,
+      focused: focusedFromLive(current),
+      live: background
+    }),
+    false
+  )
+})
+
+test('isCurrentSession falls back to focused row when no window is open', () => {
+  assert.equal(
+    isCurrentSession('s1', 'grokbuild', {
+      activePtyId: '',
+      focused: { toolId: 'grokbuild', sessionId: 's1', title: '修圆角' },
+      live: null
+    }),
+    true
+  )
+  assert.equal(
+    isCurrentSession('s2', 'grokbuild', {
+      activePtyId: '',
+      focused: { toolId: 'grokbuild', sessionId: 's1', title: '修圆角' },
+      live: null
+    }),
+    false
+  )
 })
 
 test('focusedFromLive uses a pending id until the disk session exists', () => {

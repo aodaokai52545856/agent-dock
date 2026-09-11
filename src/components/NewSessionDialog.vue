@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, reactive, watch } from 'vue'
+import ToolMark from './ToolMark.vue'
 import { TOOLS, type ToolId } from '../lib/types'
 import { store } from '../lib/store'
 
@@ -87,7 +88,9 @@ function submit() {
               :aria-checked="form.toolId === tool.id"
               @click="form.toolId = tool.id"
             >
-              <span class="tool-dot" :style="{ background: tool.tint }" aria-hidden="true" />
+              <span class="tool-mark" aria-hidden="true">
+                <ToolMark :id="tool.id" />
+              </span>
               {{ tool.label }}
             </button>
           </div>
@@ -167,10 +170,10 @@ select {
   color: var(--ad-text);
 }
 
-.tool-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
+.tool-mark {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
 }
 
 .err {

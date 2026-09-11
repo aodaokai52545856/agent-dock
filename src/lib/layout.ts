@@ -1,7 +1,7 @@
 import { reactive, ref, watch } from 'vue'
 
 const STORAGE_KEY = 'agent-dock-layout'
-export const LAYOUT_VERSION = 2
+export const LAYOUT_VERSION = 3
 
 export const COLLAPSED_WIDTH = 40
 export const SIDEBAR_MIN = 240
@@ -12,6 +12,7 @@ export const DOCRAIL_MAX = 320
 export type LayoutState = {
   sidebarWidth: number
   sidebarCollapsed: boolean
+  projectsCollapsed: boolean
   docRailWidth: number
   docRailCollapsed: boolean
 }
@@ -23,8 +24,12 @@ export type StoredLayout = Partial<LayoutState> & {
 }
 
 export function migrateStoredLayout(stored: StoredLayout): StoredLayout {
-  if (stored.layoutVersion === LAYOUT_VERSION) return stored
-  return { ...stored, docRailCollapsed: true, layoutVersion: LAYOUT_VERSION }
+  const version = stored.layoutVersion ?? 0
+  if (version >= LAYOUT_VERSION) return stored
+  const next = { ...stored, layoutVersion: LAYOUT_VERSION }
+  if (version < 2) next.docRailCollapsed = true
+  if (version < 3) next.sidebarCollapsed = false
+  return next
 }
 
 function clamp(n: number, min: number, max: number) {
@@ -44,7 +49,8 @@ const stored = readStored()
 
 export const layout = reactive<LayoutState>({
   sidebarWidth: clamp(stored.sidebarWidth ?? stored.sessionWidth ?? 280, SIDEBAR_MIN, SIDEBAR_MAX),
-  sidebarCollapsed: Boolean(stored.sidebarCollapsed ?? stored.projectCollapsed),
+  sidebarCollapsed: false,
+  projectsCollapsed: Boolean(stored.projectsCollapsed),
   docRailWidth: clamp(stored.docRailWidth ?? 260, DOCRAIL_MIN, DOCRAIL_MAX),
   docRailCollapsed: stored.docRailCollapsed ?? true
 })
@@ -141,23 +147,17 @@ export function endPaneDrag() {
 }
 
 export function sidebarPaneWidth() {
-  return layout.sidebarCollapsed ? COLLAPSED_WIDTH : layout.sidebarWidth
+  return layout.sidebarWidth
 }
 
-export function toggleSidebar() {
-  if (!paneDragging.value) beginPaneAnim()
-  layout.sidebarCollapsed = !layout.sidebarCollapsed
+export function toggleProjects() {
+  layout.projectsCollapsed = !layout.projectsCollapsed
 }
 
 let sidebarRaf = 0
 let sidebarPending: number | null = null
 
 function applySidebarSize(next: number) {
-  if (next < SIDEBAR_MIN - 24) {
-    layout.sidebarCollapsed = true
-    return
-  }
-  layout.sidebarCollapsed = false
   layout.sidebarWidth = clamp(next, SIDEBAR_MIN, SIDEBAR_MAX)
 }
 

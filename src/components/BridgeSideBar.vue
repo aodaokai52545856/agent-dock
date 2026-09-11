@@ -1,7 +1,9 @@
 <script setup lang="ts">
-import { computed } from 'vue'
-import { pathTail, relativeTime } from '../lib/format'
-import { endPaneAnim, layout, paneDragging, sidebarPaneWidth, toggleSidebar } from '../lib/layout'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { relativeTime } from '../lib/format'
+import { endPaneAnim, layout, sidebarPaneWidth, toggleProjects } from '../lib/layout'
+import { liveDotTitle, projectLiveDot, type LiveDotKind } from '../lib/livePulse'
+import { liveOfProject } from '../lib/livePty'
 import { refreshCodexThreads, toggleBridgeThread } from '../lib/pipeline'
 import { currentPipeline, ensurePipeline, store } from '../lib/store'
 import { GATE_LABEL } from '../lib/types'
@@ -32,6 +34,27 @@ function onSelectProject(id: string) {
   ensurePipeline(id)
 }
 
+const now = ref(Date.now())
+let pulseTimer = 0
+
+function projectDot(projectId: string): LiveDotKind {
+  return projectLiveDot(store.live, projectId, store.ptyDataAt, now.value)
+}
+
+function projectLiveCount(projectId: string) {
+  return liveOfProject(store.live, projectId).length
+}
+
+onMounted(() => {
+  pulseTimer = window.setInterval(() => {
+    now.value = Date.now()
+  }, 500)
+})
+
+onUnmounted(() => {
+  window.clearInterval(pulseTimer)
+})
+
 const gate = computed(() => currentPipeline.value?.gate ?? 'idle')
 const slice = computed(() => currentPipeline.value?.slice ?? 1)
 const retryCount = computed(() => currentPipeline.value?.retryCount ?? 0)
@@ -54,7 +77,7 @@ const gateProgress = computed(() => {
 <template>
   <aside
     class="rail"
-    :class="{ 'rail--collapsed': collapsed, 'rail--static': paneDragging }"
+    :class="{ 'rail--collapsed': collapsed }"
     :style="{ width: sidebarPaneWidth() + 'px' }"
     aria-label="编排工作区"
     @transitionend="onPaneTransitionEnd"
@@ -62,32 +85,43 @@ const gateProgress = computed(() => {
     <div class="body" :style="{ width: layout.sidebarWidth + 'px' }" :aria-hidden="collapsed">
       <div class="head">
         <p class="kicker">编排</p>
-        <button type="button" class="icon-btn" title="收起工作区" @click="toggleSidebar">‹</button>
       </div>
 
       <div class="block">
         <div class="block-head">
-          <p class="kicker">项目</p>
+          <button type="button" class="fold-btn" :aria-expanded="!layout.projectsCollapsed" @click="toggleProjects">
+            <svg class="fold-caret" :class="{ 'is-closed': layout.projectsCollapsed }" viewBox="0 0 16 16" aria-hidden="true">
+              <path d="M6 4.5 10 8l-4 3.5" />
+            </svg>
+            <span class="kicker">项目</span>
+          </button>
           <button type="button" class="text-btn" @click="emit('add')">添加</button>
         </div>
-        <ul v-if="store.projects.length" class="projects">
+        <ul v-if="!layout.projectsCollapsed && store.projects.length" class="projects">
           <li v-for="project in store.projects" :key="project.id">
             <div
               class="project"
               :class="{
                 'project--active': store.selectedProjectId === project.id,
-                'project--proxy': project.proxyEnabled
+                'project--live': projectDot(project.id) !== 'off',
+                'project--busy': projectDot(project.id) === 'busy'
               }"
+              :title="liveDotTitle(projectDot(project.id), 'project') || undefined"
             >
               <button type="button" class="project-main" @click="onSelectProject(project.id)">
                 <svg class="glyph" viewBox="0 0 16 16" aria-hidden="true">
                   <path d="M2.5 5h4.1l1.1 1.3H13.5V12.5H2.5z" />
                 </svg>
                 <span class="project-body">
-                  <span class="project-name">{{ project.name }}</span>
-                  <span class="project-path" :title="project.path">{{ pathTail(project.path) }}</span>
+                  <span class="project-name" :title="project.path">{{ project.name }}</span>
                 </span>
-                <span v-if="project.proxyEnabled" class="proxy-dot" title="代理开" />
+                <span
+                  v-if="projectLiveCount(project.id)"
+                  class="project-live"
+                  :title="projectLiveCount(project.id) + ' 个已打开会话'"
+                >
+                  {{ projectLiveCount(project.id) }}
+                </span>
               </button>
               <div class="project-ops">
                 <button type="button" class="row-btn" @click.stop="emit('edit', project.id)">编辑</button>
@@ -98,7 +132,7 @@ const gateProgress = computed(() => {
             </div>
           </li>
         </ul>
-        <p v-else class="muted pad">还没有项目</p>
+        <p v-else-if="!layout.projectsCollapsed" class="muted pad">还没有项目</p>
       </div>
 
       <div class="block gate-block">
@@ -146,10 +180,6 @@ const gateProgress = computed(() => {
       </div>
     </div>
 
-    <div class="strip" :aria-hidden="!collapsed">
-      <button type="button" class="icon-btn" title="展开工作区" @click="toggleSidebar">›</button>
-      <span class="collapsed-label">编排</span>
-    </div>
   </aside>
 </template>
 
@@ -160,11 +190,6 @@ const gateProgress = computed(() => {
   background: var(--ad-sidebar);
   min-width: 0;
   overflow: hidden;
-  transition: width var(--ad-pane-move);
-}
-
-.rail--static {
-  transition: none;
 }
 
 .body {
@@ -172,32 +197,6 @@ const gateProgress = computed(() => {
   display: flex;
   flex-direction: column;
   min-height: 0;
-  opacity: 1;
-  transition: opacity var(--ad-pane-fade);
-}
-
-.rail--collapsed .body {
-  opacity: 0;
-  pointer-events: none;
-}
-
-.strip {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 0;
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity var(--ad-pane-fade);
-}
-
-.rail--collapsed .strip {
-  opacity: 1;
-  pointer-events: auto;
-  transition-delay: 60ms;
 }
 
 .head,
@@ -229,6 +228,32 @@ const gateProgress = computed(() => {
 .block-head {
   padding: 0 12px;
   height: 32px;
+}
+
+.fold-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  height: 28px;
+  padding: 0 4px 0 0;
+  color: inherit;
+}
+
+.fold-caret {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+  fill: none;
+  stroke: var(--ad-muted);
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transform: rotate(90deg);
+}
+
+.fold-caret.is-closed {
+  transform: rotate(0deg);
 }
 
 .kicker {
@@ -299,11 +324,17 @@ const gateProgress = computed(() => {
   stroke: var(--ad-text);
 }
 
-.proxy-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--ad-success);
+.project-live {
+  min-width: 16px;
+  height: 16px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: rgba(74, 222, 128, 0.16);
+  color: #4ade80;
+  font-size: 11px;
+  line-height: 16px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
   flex-shrink: 0;
 }
 
@@ -323,7 +354,6 @@ const gateProgress = computed(() => {
   color: var(--ad-text);
 }
 
-.project-path,
 .muted,
 .hint,
 .thread-preview,
@@ -334,7 +364,6 @@ const gateProgress = computed(() => {
   color: var(--ad-muted);
 }
 
-.project-path,
 .thread-preview {
   overflow: hidden;
   text-overflow: ellipsis;

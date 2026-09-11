@@ -29,6 +29,20 @@ export function pickPtyForProject(
   return ofProject[0] ?? null
 }
 
+export function isCurrentSession(
+  sessionId: string,
+  toolId: ToolId,
+  opts: {
+    activePtyId: string
+    focused: FocusedSession | null
+    live: LivePtyInfo | null
+  }
+) {
+  if (opts.live && opts.activePtyId) return opts.live.ptyId === opts.activePtyId
+  if (opts.activePtyId) return false
+  return opts.focused?.sessionId === sessionId && opts.focused.toolId === toolId
+}
+
 export function focusedFromLive(item: LivePtyInfo): FocusedSession | null {
   if (item.sessionId) {
     return {

@@ -26,9 +26,9 @@ import {
   paneDragging,
   resizeDocRail,
   resizeSidebar,
-  toggleDocRail,
-  toggleSidebar
+  toggleDocRail
 } from './lib/layout'
+import { liveOfProject } from './lib/livePty'
 import {
   boot,
   deleteCurrentSession,
@@ -60,7 +60,8 @@ const settingsOpen = ref(false)
 const versionOpen = ref(false)
 const accountOpen = ref(false)
 const confirmOpen = ref(false)
-const confirmMode = ref<'remove' | 'close' | 'delete'>('remove')
+const confirmMode = ref<'remove' | 'close' | 'delete' | 'close-all'>('remove')
+const closingProjectId = ref('')
 const removingId = ref('')
 const closingPtyId = ref('')
 const deletingSession = ref<{ sessionId: string; toolId: ToolId; title: string } | null>(null)
@@ -218,6 +219,18 @@ function askCloseSession(sessionId: string, toolId: ToolId) {
   confirmOpen.value = true
 }
 
+function askCloseAll(projectId?: string) {
+  const id = projectId || store.selectedProjectId
+  const items = liveOfProject(store.live, id)
+  if (!items.length) {
+    showToast('这个项目没有打开的会话')
+    return
+  }
+  closingProjectId.value = id
+  confirmMode.value = 'close-all'
+  confirmOpen.value = true
+}
+
 function askDeleteSession(sessionId: string, toolId: ToolId) {
   if (isPendingSessionId(sessionId)) {
     showToast('这个会话还在写入磁盘，关掉终端即可')
@@ -252,6 +265,17 @@ async function onConfirm() {
     termRef.value?.dispose(id)
     markPtyExit(id)
     closingPtyId.value = ''
+    return
+  }
+  if (confirmMode.value === 'close-all') {
+    const items = liveOfProject(store.live, closingProjectId.value)
+    closingProjectId.value = ''
+    for (const item of items) {
+      await api.ptyKill(item.ptyId)
+      termRef.value?.dispose(item.ptyId)
+      markPtyExit(item.ptyId)
+    }
+    showToast(items.length ? `已关闭 ${items.length} 个会话` : '没有打开的会话')
     return
   }
   if (confirmMode.value === 'delete' && deletingSession.value) {
@@ -446,6 +470,14 @@ const confirmCopy = () => {
       action: '删除会话'
     }
   }
+  if (confirmMode.value === 'close-all') {
+    const count = liveOfProject(store.live, closingProjectId.value).length
+    return {
+      title: '关闭所有会话',
+      body: `将关闭本项目下 ${count} 个已打开的终端。对话还在磁盘上，可以再点会话打开。`,
+      action: '全部关闭'
+    }
+  }
   return {
     title: '关闭会话',
     body: '关闭后这个终端会结束。对话还在磁盘上，可以再点会话打开。',
@@ -474,15 +506,16 @@ const confirmCopy = () => {
           @start-rename="startRename"
           @rename="commitRename"
           @close="(payload) => askCloseSession(payload.sessionId, payload.toolId)"
+          @close-all="askCloseAll"
           @delete="(payload) => askDeleteSession(payload.sessionId, payload.toolId)"
           @cite="openCiteTurns"
         />
         <PaneGutter
           label="调整工作区宽度"
+          :can-toggle="false"
           @start="beginPaneDrag"
           @drag="onSidebarDrag"
           @end="endPaneDrag"
-          @toggle="toggleSidebar"
         />
         <div class="main">
           <LaunchStrip
@@ -533,10 +566,10 @@ const confirmCopy = () => {
         />
         <PaneGutter
           label="调整工作区宽度"
+          :can-toggle="false"
           @start="beginPaneDrag"
           @drag="onSidebarDrag"
           @end="endPaneDrag"
-          @toggle="toggleSidebar"
         />
         <BridgePane />
       </div>

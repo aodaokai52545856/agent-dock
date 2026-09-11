@@ -3,12 +3,15 @@ import {
   COLLAPSED_WIDTH,
   DOCRAIL_MIN,
   LAYOUT_VERSION,
+  SIDEBAR_MIN,
   docRailPaneWidth,
   layout,
   migrateStoredLayout,
   resizeDocRail,
+  resizeSidebar,
   sidebarPaneWidth,
-  toggleDocRail
+  toggleDocRail,
+  toggleProjects
 } from './layout.ts'
 
 function test(name: string, fn: () => void) {
@@ -47,10 +50,28 @@ test('expanded doc rail reports its own width, not the sidebar collapsed strip',
   }
 })
 
-test('sidebar still uses the 40px collapsed strip', () => {
+test('workspace width is only the dragged size, never a collapsed strip', () => {
   layout.sidebarCollapsed = true
+  layout.sidebarWidth = 280
   try {
-    assert.equal(sidebarPaneWidth(), COLLAPSED_WIDTH)
+    assert.equal(sidebarPaneWidth(), 280)
+    resizeSidebar(SIDEBAR_MIN - 80)
+    assert.equal(layout.sidebarWidth, SIDEBAR_MIN)
+    assert.equal(sidebarPaneWidth(), SIDEBAR_MIN)
+  } finally {
+    restore()
+  }
+})
+
+test('project list fold does not change workspace width', () => {
+  layout.projectsCollapsed = false
+  layout.sidebarWidth = 280
+  try {
+    toggleProjects()
+    assert.equal(layout.projectsCollapsed, true)
+    assert.equal(sidebarPaneWidth(), 280)
+    toggleProjects()
+    assert.equal(layout.projectsCollapsed, false)
   } finally {
     restore()
   }
@@ -87,6 +108,17 @@ test('layouts already on the overlay version keep an opened doc rail', () => {
     layoutVersion: LAYOUT_VERSION
   })
   assert.equal(next.docRailCollapsed, false)
+})
+
+test('v2 layouts keep the overlay rail and stop collapsing the workspace', () => {
+  const next = migrateStoredLayout({
+    sidebarCollapsed: true,
+    docRailCollapsed: false,
+    layoutVersion: 2
+  })
+  assert.equal(next.sidebarCollapsed, false)
+  assert.equal(next.docRailCollapsed, false)
+  assert.equal(next.layoutVersion, LAYOUT_VERSION)
 })
 
 test('dragging the doc rail below the minimum collapses it to zero width', () => {
