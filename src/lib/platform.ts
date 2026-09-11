@@ -11,16 +11,23 @@ export function detectHostOs(): HostOs {
 export const hostOs = detectHostOs()
 export const isMac = hostOs === 'macos'
 export const isWindows = hostOs === 'windows'
+export const isLinux = hostOs === 'linux'
+
+export function defaultShellPathFor(os: HostOs): string {
+  if (os === 'windows') return 'powershell.exe'
+  if (os === 'macos') return '/bin/zsh'
+  return '/bin/bash'
+}
 
 export function defaultShellPath(): string {
-  if (isWindows) return 'powershell.exe'
-  return '/bin/zsh'
+  return defaultShellPathFor(hostOs)
 }
 
 export function applyHostOsClass() {
   if (typeof document === 'undefined') return
   document.documentElement.classList.toggle('ad-mac', isMac)
   document.documentElement.classList.toggle('ad-windows', isWindows)
+  document.documentElement.classList.toggle('ad-linux', isLinux)
   document.documentElement.classList.toggle(
     'ad-desktop-glass',
     typeof window !== 'undefined' && !!(window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__

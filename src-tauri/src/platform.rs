@@ -77,6 +77,10 @@ pub fn extra_bin_dirs() -> Vec<PathBuf> {
         dirs.push(PathBuf::from("/usr/local/bin"));
         dirs.push(PathBuf::from("/usr/local/sbin"));
     }
+    #[cfg(target_os = "linux")]
+    {
+        dirs.push(PathBuf::from("/home/linuxbrew/.linuxbrew/bin"));
+    }
     dirs
 }
 

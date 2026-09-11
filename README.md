@@ -1,13 +1,13 @@
 # Agent Dock
 
-Windows / macOS 桌面启动器，同一窗口两种顶层模式（标题栏切换，默认控制台）：
+Windows / macOS / Linux 桌面启动器，同一窗口两种顶层模式（标题栏切换，默认控制台）：
 
 - **控制台**：左侧挂项目文件夹，中间按 OpenCode / Grok / Kimi 扫描 CLI session，在内嵌终端里续对话。
 - **编排**：同一套项目，主画布没有终端。把 Cursor（开发）和 Codex（审查）串成过闸流水线：写完一块再 `review/start` detached，未通过不能进入下一片。不会去遥控 Codex 桌面窗口里的 live turn。
 
 代理只写进控制台打开的终端的 `HTTP_PROXY` / `HTTPS_PROXY`。切到编排不会关掉已开的 PTY。
 
-Windows 使用 PowerShell + ConPTY；macOS 使用系统 Shell（默认 `$SHELL` / zsh）+ Unix PTY。
+Windows 使用 PowerShell + ConPTY；macOS 使用系统 Shell（默认 `$SHELL` / zsh）+ Unix PTY；Linux 使用系统 Shell（默认 `$SHELL` / bash）+ Unix PTY。
 
 ## 启动
 
@@ -18,28 +18,26 @@ npm run icon:gen
 npm run tauri:dev
 ```
 
-需要本机已安装 Rust。Windows 还需要 WebView2；macOS 使用系统 WKWebView。三个 CLI 本身请自行安装并登录；本工具不代登录。
+需要本机已安装 Rust。Windows 还需要 WebView2；macOS 使用系统 WKWebView；Linux 需要 WebKitGTK 4.1。三个 CLI 本身请自行安装并登录；本工具不代登录。
 
-从 Finder 打开时，应用会自动补上 Homebrew / nvm / `~/.local/bin` / `~/.kimi-code/bin` 等常见 PATH，避免找不到 `kimi`、`grok`、`opencode`、`npm`。
+从 Finder / 应用菜单打开时，应用会自动补上 Homebrew / nvm / `~/.local/bin` / `~/.kimi-code/bin` 等常见 PATH，避免找不到 `kimi`、`grok`、`opencode`、`npm`。
 
 ## 打包
 
-开发热更新固定走 `http://localhost:1421`，避开常见的 1422 / 1433。打好的 exe 把界面打进二进制，不再监听端口。
+开发热更新固定走 `http://localhost:1421`。打好的安装包把界面打进二进制，不再监听端口。
+
+**必须在对应系统上打包**，不能从 Windows 打出 `.dmg` / `.AppImage`。
 
 ```bash
-npm run pack:exe
+npm run pack          # 当前系统
+npm run pack:win      # Windows：AgentDock.exe + AgentDock-Setup.exe
+npm run pack:mac      # macOS：Agent Dock.app + AgentDock.dmg
+npm run pack:linux    # Linux：AgentDock.AppImage + AgentDock.deb
 ```
 
-Windows 产物在 `release/`：
+产物都落到 `release/`。`npm run pack:exe` 仍可用，等同 `pack:win`。
 
-- `AgentDock.exe` — 可直接双击
-- `AgentDock-Setup.exe` — 当前用户安装包，不需要管理员
-
-```bash
-npm run tauri:build
-```
-
-仍可打全平台包：Windows NSIS、macOS `.app` / `.dmg`。
+GitHub 上打 tag `v*` 或手动跑 `release` workflow，会分别在 Windows / macOS / Ubuntu runner 上打包并上传 artifact。
 
 ## 代理
 
