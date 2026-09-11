@@ -48,3 +48,4 @@ cd agent-dock
 npm run test:bridge
 npm run spike:app-server -- "D:\\path\\to\\project"
 ```
+<img width="1650" height="1069" alt="image" src="https://github.com/user-attachments/assets/a38f48dd-55ea-450b-a893-84aaeb0e57b5" />
