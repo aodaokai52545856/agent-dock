@@ -17,6 +17,7 @@
     "test:bridge": "node --experimental-strip-types src/lib/reviewVerdict.test.ts",
     "test:usage": "node --experimental-strip-types src/lib/grokUsage.test.ts",
     "test:cite": "node --experimental-strip-types src/lib/sessionCite.test.ts && node --experimental-strip-types src/lib/markdown.test.ts",
+    "test:live": "node --experimental-strip-types src/lib/livePty.test.ts && node --experimental-strip-types src/lib/liveBind.test.ts",
     "spike:app-server": "node scripts/spike_app_server.mjs"
   },
   "dependencies": {

@@ -2,8 +2,9 @@
 import { computed, onUnmounted, ref, watch } from 'vue'
 import * as api from '../lib/api'
 import { relativeTime } from '../lib/format'
-import { docRailPaneWidth, endPaneAnim, layout, paneDragging, toggleDocRail } from '../lib/layout'
+import { layout, toggleDocRail } from '../lib/layout'
 import { kindLabel } from '../lib/sessionCite'
+import { isPendingSessionId } from '../lib/liveBind'
 import { activeLive, selectedProject, store } from '../lib/store'
 import { toolLabel, type SessionDoc, type ToolId } from '../lib/types'
 
@@ -23,12 +24,15 @@ let pollTimer = 0
 let loadSeq = 0
 
 const railSession = computed(() => {
-  if (store.focusedSession) return store.focusedSession
+  if (store.focusedSession && !isPendingSessionId(store.focusedSession.sessionId)) {
+    return store.focusedSession
+  }
   const live = store.live.find(
     (item) =>
       item.projectId === store.selectedProjectId &&
       item.alive &&
       item.sessionId &&
+      !isPendingSessionId(item.sessionId) &&
       (item.toolId === 'grokbuild' || item.toolId === 'kimi')
   )
   if (live?.sessionId) {
@@ -41,12 +45,6 @@ const canCiteTurns = computed(() => {
   const session = railSession.value
   return Boolean(session && (session.toolId === 'grokbuild' || session.toolId === 'kimi'))
 })
-
-function onPaneTransitionEnd(event: TransitionEvent) {
-  if (event.propertyName !== 'width') return
-  if (event.target !== event.currentTarget) return
-  endPaneAnim()
-}
 
 async function loadDocs() {
   const project = selectedProject.value
@@ -131,13 +129,7 @@ const emptyCopy = computed(() => {
 </script>
 
 <template>
-  <aside
-    class="rail"
-    :class="{ 'rail--collapsed': collapsed, 'rail--static': paneDragging }"
-    :style="{ width: docRailPaneWidth() + 'px' }"
-    aria-label="会话文档"
-    @transitionend="onPaneTransitionEnd"
-  >
+  <aside class="rail" aria-label="会话文档">
     <div class="body" :style="{ width: layout.docRailWidth + 'px' }" :aria-hidden="collapsed">
       <div class="head">
         <p class="kicker">文档</p>
@@ -173,26 +165,17 @@ const emptyCopy = computed(() => {
         </li>
       </ul>
     </div>
-
-    <div class="strip" :aria-hidden="!collapsed">
-      <button type="button" class="icon-btn" title="展开文档栏" @click="toggleDocRail">‹</button>
-      <span class="collapsed-label">文档</span>
-    </div>
   </aside>
 </template>
 
 <style scoped>
 .rail {
   position: relative;
-  flex-shrink: 0;
-  background: var(--ad-sidebar);
+  flex: 1;
   min-width: 0;
+  height: 100%;
+  background: var(--ad-sidebar);
   overflow: hidden;
-  transition: width var(--ad-pane-move);
-}
-
-.rail--static {
-  transition: none;
 }
 
 .body {
@@ -200,32 +183,6 @@ const emptyCopy = computed(() => {
   display: flex;
   flex-direction: column;
   min-height: 0;
-  opacity: 1;
-  transition: opacity var(--ad-pane-fade);
-}
-
-.rail--collapsed .body {
-  opacity: 0;
-  pointer-events: none;
-}
-
-.strip {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 0;
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity var(--ad-pane-fade);
-}
-
-.rail--collapsed .strip {
-  opacity: 1;
-  pointer-events: auto;
-  transition-delay: 60ms;
 }
 
 .head {
@@ -353,13 +310,5 @@ const emptyCopy = computed(() => {
 .icon-btn:hover {
   color: var(--ad-text);
   background: var(--ad-hover);
-}
-
-.collapsed-label {
-  writing-mode: vertical-rl;
-  font-size: 12px;
-  line-height: 20px;
-  color: var(--ad-muted);
-  letter-spacing: 2px;
 }
 </style>

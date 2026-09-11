@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onUnmounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import * as api from '../lib/api'
 import {
   GROK_USAGE_INTERVAL_MS,
@@ -8,13 +8,19 @@ import {
   shouldShowGrokUsage,
   usageTone
 } from '../lib/grokUsage'
-import { currentPipeline, selectedProject, store } from '../lib/store'
-import { GATE_LABEL } from '../lib/types'
+import { groupLiveByProject, toolTint } from '../lib/livePty'
+import { currentPipeline, jumpToLive, selectedProject, store } from '../lib/store'
+import { GATE_LABEL, toolLabel } from '../lib/types'
 import type { GrokUsage } from '../lib/types'
+
+defineProps<{
+  docsOpen?: boolean
+}>()
 
 defineEmits<{
   settings: []
   refresh: []
+  docs: []
 }>()
 
 const usage = ref<GrokUsage | null>(null)
@@ -37,6 +43,57 @@ const usageTitle = computed(() => {
 })
 
 const usageClass = computed(() => usageTone(usage.value?.ok ? usage.value.remainingPercent : null))
+
+const liveOpen = ref(false)
+const liveBtn = ref<HTMLElement | null>(null)
+const liveMenuStyle = ref<Record<string, string>>({})
+const liveCount = computed(() => store.live.filter((item) => item.alive !== false).length)
+const liveGroups = computed(() => groupLiveByProject(store.live, store.projects))
+const liveLabel = computed(() => {
+  const n = liveCount.value
+  if (store.appMode === 'bridge') {
+    return n ? `后台仍有 ${n} 个终端` : '0 个终端'
+  }
+  return `${n} 个终端`
+})
+
+function placeLiveMenu() {
+  const el = liveBtn.value
+  if (!el) return
+  const rect = el.getBoundingClientRect()
+  const width = 300
+  const left = Math.min(Math.max(8, rect.left), window.innerWidth - width - 8)
+  liveMenuStyle.value = {
+    position: 'fixed',
+    left: `${left}px`,
+    bottom: `${Math.max(8, window.innerHeight - rect.top + 6)}px`,
+    width: `${width}px`,
+    zIndex: '50'
+  }
+}
+
+function closeLiveMenu() {
+  liveOpen.value = false
+}
+
+function toggleLiveMenu() {
+  if (!liveCount.value) return
+  liveOpen.value = !liveOpen.value
+  if (liveOpen.value) placeLiveMenu()
+}
+
+async function onJump(ptyId: string) {
+  closeLiveMenu()
+  await jumpToLive(ptyId)
+}
+
+function onDocClick() {
+  closeLiveMenu()
+}
+
+function onKey(event: KeyboardEvent) {
+  if (event.key === 'Escape') closeLiveMenu()
+}
 
 async function loadUsage() {
   if (!showGrokUsage.value) return
@@ -94,9 +151,22 @@ watch(
   { immediate: true }
 )
 
+onMounted(() => {
+  window.addEventListener('click', onDocClick)
+  window.addEventListener('keydown', onKey)
+  window.addEventListener('resize', closeLiveMenu)
+})
+
 onUnmounted(() => {
   usageSeq += 1
   stopUsageTimer()
+  window.removeEventListener('click', onDocClick)
+  window.removeEventListener('keydown', onKey)
+  window.removeEventListener('resize', closeLiveMenu)
+})
+
+watch(liveCount, (n) => {
+  if (!n) closeLiveMenu()
 })
 </script>
 
@@ -105,11 +175,53 @@ onUnmounted(() => {
     <span>{{ store.projects.length }} 个项目</span>
     <span v-if="selectedProject" class="path" :title="selectedProject.path">{{ selectedProject.path }}</span>
     <span>{{ selectedProject?.proxyEnabled ? '代理开' : '代理关' }}</span>
-    <template v-if="store.appMode === 'bridge'">
-      <span>闸门 {{ GATE_LABEL[currentPipeline?.gate ?? 'idle'] }}</span>
-      <span v-if="store.live.length">后台仍有 {{ store.live.length }} 个终端</span>
-    </template>
-    <span v-else>{{ store.live.length }} 个终端</span>
+    <span v-if="store.appMode === 'bridge'">闸门 {{ GATE_LABEL[currentPipeline?.gate ?? 'idle'] }}</span>
+    <div class="live-wrap">
+      <button
+        v-if="liveCount"
+        ref="liveBtn"
+        type="button"
+        class="link live-btn"
+        :class="{ 'is-open': liveOpen }"
+        :aria-expanded="liveOpen"
+        aria-haspopup="menu"
+        :title="liveOpen ? '收起终端列表' : '查看已打开的终端'"
+        @click.stop="toggleLiveMenu"
+      >
+        {{ liveLabel }}
+        <span class="live-caret" aria-hidden="true">{{ liveOpen ? '▴' : '▾' }}</span>
+      </button>
+      <span v-else>{{ liveLabel }}</span>
+      <Teleport to="body">
+        <div
+          v-if="liveOpen"
+          class="ad-menu live-menu"
+          role="menu"
+          :style="liveMenuStyle"
+          @click.stop
+        >
+          <p class="live-kicker">已打开的终端</p>
+          <template v-for="group in liveGroups" :key="group.projectId">
+            <p class="live-project">{{ group.projectName }}</p>
+            <button
+              v-for="item in group.items"
+              :key="item.ptyId"
+              type="button"
+              role="menuitem"
+              class="ad-menu-item live-item"
+              :class="{ 'is-active': item.ptyId === store.activePtyId }"
+              @click="onJump(item.ptyId)"
+            >
+              <span class="live-main">
+                <span class="live-dot" :style="{ background: toolTint(item.toolId) }" aria-hidden="true" />
+                <span class="live-title">{{ item.title }}</span>
+              </span>
+              <span class="ad-menu-hint">{{ toolLabel(item.toolId) }}</span>
+            </button>
+          </template>
+        </div>
+      </Teleport>
+    </div>
     <button
       v-if="showGrokUsage"
       type="button"
@@ -122,6 +234,16 @@ onUnmounted(() => {
       {{ usageText }}
     </button>
     <span class="spacer" />
+    <button
+      v-if="store.appMode === 'console'"
+      type="button"
+      class="link"
+      :class="{ on: docsOpen }"
+      :aria-pressed="docsOpen"
+      @click="$emit('docs')"
+    >
+      文档
+    </button>
     <button type="button" class="link" @click="$emit('refresh')">
       {{ store.appMode === 'bridge' ? '刷新线程' : '刷新会话' }}
     </button>
@@ -179,7 +301,8 @@ onUnmounted(() => {
 }
 
 .usage:hover:not(:disabled),
-.link:hover {
+.link:hover,
+.link.on {
   color: var(--ad-text);
   background: var(--ad-hover);
 }
@@ -187,5 +310,68 @@ onUnmounted(() => {
 .usage:disabled {
   cursor: default;
   opacity: 0.72;
+}
+
+.live-wrap {
+  position: relative;
+}
+
+.live-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.live-btn.is-open {
+  color: var(--ad-text);
+  background: var(--ad-hover);
+}
+
+.live-caret {
+  font-size: 10px;
+  line-height: 1;
+  opacity: 0.7;
+}
+
+.live-menu {
+  max-height: min(360px, calc(100vh - 48px));
+  overflow: auto;
+}
+
+.live-kicker,
+.live-project {
+  margin: 0;
+  padding: 6px 10px 4px;
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--ad-faint);
+}
+
+.live-project {
+  padding-top: 8px;
+}
+
+.live-item {
+  gap: 12px;
+}
+
+.live-main {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.live-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.live-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 </style>

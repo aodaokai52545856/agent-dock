@@ -107,6 +107,7 @@ export interface PtyOpened {
   reused: boolean
   sessionId?: string | null
   title: string
+  openedAt?: number | null
 }
 
 export interface LivePtyInfo {
@@ -117,6 +118,7 @@ export interface LivePtyInfo {
   sessionId?: string | null
   title: string
   alive: boolean
+  openedAt?: number | null
 }
 
 export interface ProjectDraft {

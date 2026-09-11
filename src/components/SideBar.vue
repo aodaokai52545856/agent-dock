@@ -2,7 +2,9 @@
 import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { pathTail, relativeTime } from '../lib/format'
 import { endPaneAnim, layout, paneDragging, sidebarPaneWidth, toggleSidebar } from '../lib/layout'
-import { filteredSessions, isSessionScanning, isToolScanning, setSessionToolFilter, store } from '../lib/store'
+import { isPendingSessionId } from '../lib/liveBind'
+import { liveOfProject } from '../lib/livePty'
+import { findLiveForSession, isSessionScanning, isToolScanning, setSessionToolFilter, store, visibleSessions } from '../lib/store'
 import { TOOLS, type SessionToolFilter, type ToolId } from '../lib/types'
 
 const emit = defineEmits<{
@@ -48,7 +50,7 @@ const visibleTools = computed(() => {
 const groups = computed(() =>
   visibleTools.value.map((tool) => ({
     tool,
-    sessions: filteredSessions.value.filter((item) => item.toolId === tool.id),
+    sessions: visibleSessions.value.filter((item) => item.toolId === tool.id),
     error: store.sessionErrors[tool.id]
   }))
 )
@@ -60,12 +62,15 @@ function onPaneTransitionEnd(event: TransitionEvent) {
 }
 
 function isLive(sessionId: string, toolId: ToolId) {
-  return store.live.some(
-    (item) =>
-      item.projectId === store.selectedProjectId &&
-      item.toolId === toolId &&
-      item.sessionId === sessionId
-  )
+  return Boolean(findLiveForSession(sessionId, toolId))
+}
+
+function isPending(sessionId: string) {
+  return isPendingSessionId(sessionId)
+}
+
+function projectLiveCount(projectId: string) {
+  return liveOfProject(store.live, projectId).length
 }
 
 function closeMenu() {
@@ -115,15 +120,19 @@ function menuLive() {
   return menu.value ? isLive(menu.value.sessionId, menu.value.toolId) : false
 }
 
+function menuPending() {
+  return menu.value ? isPending(menu.value.sessionId) : false
+}
+
 function menuCanCite() {
-  return menu.value?.toolId === 'grokbuild' || menu.value?.toolId === 'kimi'
+  return Boolean(menu.value && !menuPending() && (menu.value.toolId === 'grokbuild' || menu.value.toolId === 'kimi'))
 }
 
 function activateMenu(index: number) {
-  if (index === 0) renameSession()
+  if (index === 0 && !menuPending()) renameSession()
   if (index === 1 && menuCanCite()) citeSession()
   if (index === 2 && menuLive()) closeSession()
-  if (index === 3) deleteSession()
+  if (index === 3 && !menuPending()) deleteSession()
 }
 
 function citeSession() {
@@ -251,6 +260,13 @@ onUnmounted(() => {
                 <span class="project-body">
                   <span class="project-name">{{ project.name }}</span>
                   <span class="project-path" :title="project.path">{{ pathTail(project.path) }}</span>
+                </span>
+                <span
+                  v-if="projectLiveCount(project.id)"
+                  class="project-live"
+                  :title="projectLiveCount(project.id) + ' 个终端在运行'"
+                >
+                  {{ projectLiveCount(project.id) }}
                 </span>
                 <span v-if="project.proxyEnabled" class="proxy-dot" title="代理开" />
               </button>
@@ -405,6 +421,7 @@ onUnmounted(() => {
           role="menuitem"
           class="ad-menu-item"
           :class="{ 'is-focus': menu.focus === 0 }"
+          :disabled="menuPending()"
           @mouseenter="menu.focus = 0"
           @click="renameSession"
         >
@@ -441,6 +458,7 @@ onUnmounted(() => {
           role="menuitem"
           class="ad-menu-item ad-menu-item--danger"
           :class="{ 'is-focus': menu.focus === 3 }"
+          :disabled="menuPending()"
           @mouseenter="menu.focus = 3"
           @click="deleteSession"
         >
@@ -690,6 +708,20 @@ onUnmounted(() => {
   height: 6px;
   border-radius: 50%;
   background: var(--ad-success);
+  flex-shrink: 0;
+}
+
+.project-live {
+  min-width: 16px;
+  height: 16px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: rgba(61, 154, 106, 0.16);
+  color: var(--ad-success);
+  font-size: 11px;
+  line-height: 16px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
   flex-shrink: 0;
 }
 

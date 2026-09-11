@@ -20,8 +20,10 @@ import TerminalPane from './components/TerminalPane.vue'
 import * as api from './lib/api'
 import {
   beginPaneDrag,
+  docRailPaneWidth,
   endPaneDrag,
   layout,
+  paneDragging,
   resizeDocRail,
   resizeSidebar,
   toggleDocRail,
@@ -31,7 +33,8 @@ import {
   boot,
   deleteCurrentSession,
   dropProject,
-  focusSession,
+  bindLiveSession,
+  findLiveForSession,
   markPtyExit,
   markWindowBlurred,
   noteGrokAccountChange,
@@ -44,8 +47,10 @@ import {
   selectProject,
   selectedProject,
   showToast,
-  store
+  store,
+  watchPendingSession
 } from './lib/store'
+import { isPendingSessionId, resolveOpenTarget } from './lib/liveBind'
 import { refreshCodexThreads } from './lib/pipeline'
 import type { ProjectDraft, SessionDoc, ToolId } from './lib/types'
 
@@ -93,6 +98,11 @@ onUnmounted(() => {
   window.removeEventListener('blur', markWindowBlurred)
 })
 
+async function onSelectProject(id: string) {
+  await selectProject(id)
+  if (store.appMode === 'console') await finishPaneReady()
+}
+
 async function onSelectBridgeProject(id: string) {
   await selectProject(id)
   void refreshCodexThreads()
@@ -111,7 +121,7 @@ function onAddProjectFromSession() {
 
 function openEdit(id: string) {
   if (store.selectedProjectId !== id) {
-    void selectProject(id)
+    void onSelectProject(id)
   }
   editing.value = true
   projectOpen.value = true
@@ -175,29 +185,20 @@ watch(
       void refreshCodexThreads()
       return
     }
-    await nextTick()
-    await waitPaint()
-    termRef.value?.fitActive(true)
+    await finishPaneReady()
   }
 )
 
 watch(
-  () => layout.docRailCollapsed,
-  async () => {
-    if (store.appMode !== 'console') return
-    await nextTick()
-    await waitPaint()
-    termRef.value?.fitActive(true)
+  () => store.activePtyId,
+  async (id) => {
+    if (!id || paneLoading.value || store.appMode !== 'console') return
+    await finishPaneReady()
   }
 )
 
 function liveForSession(sessionId: string, toolId: ToolId) {
-  return store.live.find(
-    (item) =>
-      item.projectId === store.selectedProjectId &&
-      item.toolId === toolId &&
-      item.sessionId === sessionId
-  )
+  return findLiveForSession(sessionId, toolId)
 }
 
 function askClose() {
@@ -218,6 +219,10 @@ function askCloseSession(sessionId: string, toolId: ToolId) {
 }
 
 function askDeleteSession(sessionId: string, toolId: ToolId) {
+  if (isPendingSessionId(sessionId)) {
+    showToast('这个会话还在写入磁盘，关掉终端即可')
+    return
+  }
   const session = store.sessions.find((item) => item.id === sessionId && item.toolId === toolId)
   deletingSession.value = {
     sessionId,
@@ -308,57 +313,53 @@ async function openSession(sessionId?: string, toolId?: ToolId) {
     return
   }
   const tool = toolId ?? store.selectedTool
-  if (sessionId) {
-    const existing = liveForSession(sessionId, tool)
-    if (existing) {
-      if (existing.ptyId === store.activePtyId) return
-      paneLoadingText.value = '正在切换会话'
-      paneLoading.value = true
-      try {
-        store.activePtyId = existing.ptyId
-        store.selectedTool = tool
-        focusSession({
-          toolId: tool,
-          sessionId,
-          title: existing.title
-        })
-        await finishPaneReady()
-      } finally {
-        paneLoading.value = false
-      }
-      return
-    }
-  }
   const session = sessionId ? store.sessions.find((item) => item.id === sessionId && item.toolId === tool) : undefined
+  const target = resolveOpenTarget(store.live, {
+    projectId: project.id,
+    toolId: tool,
+    sessionId: sessionId ?? null,
+    sessionUpdatedAt: session?.updatedAt
+  })
+  if (target.action === 'switch' || target.action === 'bind-and-switch') {
+    if (target.action === 'bind-and-switch') {
+      await bindLiveSession(target.ptyId, target.sessionId, session?.title)
+    }
+    const existing = store.live.find((item) => item.ptyId === target.ptyId)
+    if (!existing) return
+    if (existing.ptyId === store.activePtyId && target.action === 'switch') return
+    paneLoadingText.value = '正在切换会话'
+    paneLoading.value = true
+    try {
+      rememberOpened(existing)
+      await finishPaneReady()
+    } finally {
+      paneLoading.value = false
+    }
+    return
+  }
   paneLoadingText.value = '正在打开会话'
   paneLoading.value = true
   try {
     const opened = await api.ptyOpen({
       projectId: project.id,
       toolId: tool,
-      sessionId: sessionId ?? null,
+      sessionId: target.sessionId,
       title: session?.title ?? '新会话',
       cols: 120,
       rows: 32
     })
     store.selectedTool = tool
-    const focusedId = opened.sessionId ?? sessionId ?? ''
-    if (focusedId) {
-      focusSession({
-        toolId: tool,
-        sessionId: focusedId,
-        title: opened.title
-      })
-    }
     rememberOpened({
       ptyId: opened.ptyId,
       key: opened.key,
       projectId: project.id,
       toolId: tool,
-      sessionId: opened.sessionId ?? sessionId ?? null,
+      sessionId: opened.sessionId ?? target.sessionId,
       title: opened.title,
-      alive: true
+      alive: true,
+      openedAt: opened.openedAt ?? Date.now()
     })
+    if (!target.sessionId) watchPendingSession(opened.ptyId)
     await finishPaneReady()
   } catch (err) {
     showToast(err instanceof Error ? err.message : String(err))
@@ -465,7 +466,7 @@ const confirmCopy = () => {
           @add="openAdd"
           @edit="openEdit"
           @remove="askRemove"
-          @select="selectProject"
+          @select="onSelectProject"
           @create="newSessionOpen = true"
           @open="(payload) => openSession(payload.sessionId, payload.toolId)"
           @retry="refreshSessions"
@@ -484,27 +485,43 @@ const confirmCopy = () => {
           @toggle="toggleSidebar"
         />
         <div class="main">
-          <LaunchStrip :loading="paneLoading" :loading-text="paneLoadingText" @close="askClose" />
-          <TerminalPane
-            ref="termRef"
+          <LaunchStrip
             :loading="paneLoading"
             :loading-text="paneLoadingText"
-            :font-size="store.settings.terminalFontSize"
-            @start="onEmptyStart"
+            :docs-open="!layout.docRailCollapsed"
+            @close="askClose"
+            @toggle-docs="toggleDocRail"
           />
+          <div class="term-stack">
+            <TerminalPane
+              ref="termRef"
+              :loading="paneLoading"
+              :loading-text="paneLoadingText"
+              :font-size="store.settings.terminalFontSize"
+              @start="onEmptyStart"
+            />
+            <div
+              class="doc-layer"
+              :class="{ 'is-collapsed': layout.docRailCollapsed, 'is-static': paneDragging }"
+              :style="{ width: docRailPaneWidth() + 'px' }"
+              :aria-hidden="layout.docRailCollapsed"
+            >
+              <PaneGutter
+                v-show="!layout.docRailCollapsed"
+                label="调整文档栏宽度"
+                @start="beginPaneDrag"
+                @drag="onDocRailDrag"
+                @end="endPaneDrag"
+                @toggle="toggleDocRail"
+              />
+              <DocRail
+                :collapsed="layout.docRailCollapsed"
+                @open="openDocPreview"
+                @cite="openCiteTurns"
+              />
+            </div>
+          </div>
         </div>
-        <PaneGutter
-          label="调整文档栏宽度"
-          @start="beginPaneDrag"
-          @drag="onDocRailDrag"
-          @end="endPaneDrag"
-          @toggle="toggleDocRail"
-        />
-        <DocRail
-          :collapsed="layout.docRailCollapsed"
-          @open="openDocPreview"
-          @cite="openCiteTurns"
-        />
       </div>
       <div v-show="store.appMode === 'bridge'" ref="bridgeWs" class="workspace">
         <BridgeSideBar
@@ -525,8 +542,10 @@ const confirmCopy = () => {
       </div>
     </div>
     <StatusBar
+      :docs-open="!layout.docRailCollapsed"
       @settings="settingsOpen = true"
       @refresh="store.appMode === 'bridge' ? refreshCodexThreads() : refreshSessions()"
+      @docs="toggleDocRail"
     />
 
     <NewSessionDialog
@@ -620,6 +639,40 @@ const confirmCopy = () => {
   flex-direction: column;
   overflow: hidden;
   background: var(--ad-editor);
+}
+
+.term-stack {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.doc-layer {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 4;
+  display: flex;
+  overflow: hidden;
+  background: var(--ad-sidebar);
+  border-left: 1px solid var(--ad-border);
+  box-shadow: -8px 0 24px rgba(0, 0, 0, 0.4);
+  transition: width var(--ad-pane-move);
+}
+
+.doc-layer.is-collapsed {
+  border-left: none;
+  box-shadow: none;
+  pointer-events: none;
+}
+
+.doc-layer.is-static {
+  transition: none;
 }
 
 .toast {

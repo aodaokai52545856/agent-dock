@@ -181,15 +181,38 @@ export async function ptyOpen(payload: {
 }
 
 export async function ptyWrite(ptyId: string, data: string): Promise<void> {
+  if (!isTauri) return
   return invoke('pty_write', { ptyId, data })
 }
 
 export async function ptyResize(ptyId: string, cols: number, rows: number): Promise<void> {
+  if (!isTauri) return
   return invoke('pty_resize', { ptyId, cols, rows })
 }
 
 export async function ptyKill(ptyId: string): Promise<void> {
+  if (!isTauri) return
   return invoke('pty_kill', { ptyId })
+}
+
+export async function ptyBindSession(
+  ptyId: string,
+  sessionId: string,
+  title?: string | null
+): Promise<LivePtyInfo> {
+  if (!isTauri) {
+    return {
+      ptyId,
+      key: '',
+      projectId: '',
+      toolId: 'grokbuild',
+      sessionId,
+      title: title || '新会话',
+      alive: true,
+      openedAt: Date.now()
+    }
+  }
+  return invoke('pty_bind_session', { ptyId, sessionId, title: title ?? null })
 }
 
 export async function listLivePtys(): Promise<LivePtyInfo[]> {
