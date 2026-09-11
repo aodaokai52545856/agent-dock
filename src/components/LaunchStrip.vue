@@ -5,11 +5,13 @@ import { activeLive, selectedProject, store } from '../lib/store'
 
 const emit = defineEmits<{
   close: []
+  'toggle-docs': []
 }>()
 
 const props = defineProps<{
   loading?: boolean
   loadingText?: string
+  docsOpen?: boolean
 }>()
 
 const proxyText = computed(() => {
@@ -36,6 +38,15 @@ const live = computed(() => Boolean(activeLive.value))
     <span class="status" :class="{ 'status--live': live && !loading, 'status--loading': loading }">
       {{ loading ? (props.loadingText || '正在打开') : live ? '进行中' : '空闲' }}
     </span>
+    <button
+      type="button"
+      class="btn btn-ghost btn-small"
+      :class="{ 'is-on': docsOpen }"
+      :aria-pressed="docsOpen"
+      @click="emit('toggle-docs')"
+    >
+      文档
+    </button>
     <button v-if="live" type="button" class="btn btn-ghost btn-small" @click="emit('close')">关闭终端</button>
   </header>
 </template>
@@ -95,5 +106,10 @@ const live = computed(() => Boolean(activeLive.value))
 
 .status--loading {
   color: var(--ad-accent);
+}
+
+.btn.is-on {
+  background: var(--ad-selected);
+  border-color: rgba(255, 255, 255, 0.1);
 }
 </style>

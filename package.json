@@ -13,6 +13,7 @@
     "pack:exe": "tauri build --bundles nsis && node scripts/collect-win-exe.mjs",
     "icon:gen": "python scripts/generate_icon.py",
     "test:fit": "node --experimental-strip-types src/lib/termFit.test.ts",
+    "test:layout": "node --experimental-strip-types src/lib/layout.test.ts",
     "test:bridge": "node --experimental-strip-types src/lib/reviewVerdict.test.ts",
     "test:usage": "node --experimental-strip-types src/lib/grokUsage.test.ts",
     "test:cite": "node --experimental-strip-types src/lib/sessionCite.test.ts && node --experimental-strip-types src/lib/markdown.test.ts",

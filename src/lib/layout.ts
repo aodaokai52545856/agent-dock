@@ -1,6 +1,7 @@
 import { reactive, ref, watch } from 'vue'
 
 const STORAGE_KEY = 'agent-dock-layout'
+export const LAYOUT_VERSION = 2
 
 export const COLLAPSED_WIDTH = 40
 export const SIDEBAR_MIN = 240
@@ -15,16 +16,27 @@ export type LayoutState = {
   docRailCollapsed: boolean
 }
 
+export type StoredLayout = Partial<LayoutState> & {
+  sessionWidth?: number
+  projectCollapsed?: boolean
+  layoutVersion?: number
+}
+
+export function migrateStoredLayout(stored: StoredLayout): StoredLayout {
+  if (stored.layoutVersion === LAYOUT_VERSION) return stored
+  return { ...stored, docRailCollapsed: true, layoutVersion: LAYOUT_VERSION }
+}
+
 function clamp(n: number, min: number, max: number) {
   return Math.min(max, Math.max(min, Math.round(n)))
 }
 
-function readStored(): Partial<LayoutState> & { sessionWidth?: number; projectCollapsed?: boolean } {
+function readStored(): StoredLayout {
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
-    return raw ? JSON.parse(raw) : {}
+    return migrateStoredLayout(raw ? JSON.parse(raw) : {})
   } catch {
-    return {}
+    return migrateStoredLayout({})
   }
 }
 
@@ -34,7 +46,7 @@ export const layout = reactive<LayoutState>({
   sidebarWidth: clamp(stored.sidebarWidth ?? stored.sessionWidth ?? 280, SIDEBAR_MIN, SIDEBAR_MAX),
   sidebarCollapsed: Boolean(stored.sidebarCollapsed ?? stored.projectCollapsed),
   docRailWidth: clamp(stored.docRailWidth ?? 260, DOCRAIL_MIN, DOCRAIL_MAX),
-  docRailCollapsed: Boolean(stored.docRailCollapsed)
+  docRailCollapsed: stored.docRailCollapsed ?? true
 })
 
 export const paneDragging = ref(false)
@@ -112,7 +124,7 @@ watch(
     if (typeof window === 'undefined') return
     window.clearTimeout(persistTimer)
     persistTimer = window.setTimeout(() => {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(value))
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...value, layoutVersion: LAYOUT_VERSION }))
     }, 200)
   },
   { deep: true }
@@ -166,11 +178,10 @@ export function resizeSidebar(next: number) {
 }
 
 export function docRailPaneWidth() {
-  return layout.docRailCollapsed ? COLLAPSED_WIDTH : layout.docRailWidth
+  return layout.docRailCollapsed ? 0 : layout.docRailWidth
 }
 
 export function toggleDocRail() {
-  if (!paneDragging.value) beginPaneAnim()
   layout.docRailCollapsed = !layout.docRailCollapsed
 }
 
