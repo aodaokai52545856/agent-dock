@@ -422,6 +422,16 @@ fn pty_kill(hub: State<Arc<PtyHub>>, pty_id: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn pty_bind_session(
+    hub: State<Arc<PtyHub>>,
+    pty_id: String,
+    session_id: String,
+    title: Option<String>,
+) -> Result<LivePtyInfo, String> {
+    hub.bind_session(&pty_id, &session_id, title)
+}
+
+#[tauri::command]
 fn list_live_ptys(hub: State<Arc<PtyHub>>) -> Vec<LivePtyInfo> {
     hub.list()
 }
@@ -573,6 +583,7 @@ pub fn run() {
             pty_write,
             pty_resize,
             pty_kill,
+            pty_bind_session,
             list_live_ptys,
             codex_probe,
             list_codex_threads,

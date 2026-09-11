@@ -21,6 +21,7 @@ pub struct PtyOpened {
     pub reused: bool,
     pub session_id: Option<String>,
     pub title: String,
+    pub opened_at: i64,
 }
 
 #[derive(Clone, Serialize)]
@@ -46,6 +47,7 @@ pub struct LivePtyInfo {
     pub session_id: Option<String>,
     pub title: String,
     pub alive: bool,
+    pub opened_at: i64,
 }
 
 struct LivePty {
@@ -55,6 +57,7 @@ struct LivePty {
     tool_id: ToolId,
     session_id: Option<String>,
     title: String,
+    opened_at: i64,
     master: Box<dyn portable_pty::MasterPty + Send>,
     writer: Box<dyn Write + Send>,
     child: Box<dyn portable_pty::Child + Send + Sync>,
@@ -95,18 +98,7 @@ impl PtyHub {
     pub fn list(&self) -> Vec<LivePtyInfo> {
         let mut sessions = self.sessions.lock().expect("pty lock");
         reap_dead(&mut sessions);
-        sessions
-            .values()
-            .map(|pty| LivePtyInfo {
-                pty_id: pty.id.clone(),
-                key: pty.key.clone(),
-                project_id: pty.project_id.clone(),
-                tool_id: pty.tool_id,
-                session_id: pty.session_id.clone(),
-                title: pty.title.clone(),
-                alive: true,
-            })
-            .collect()
+        sessions.values().map(live_info).collect()
     }
 
     pub fn write(&self, pty_id: &str, data: &str) -> Result<(), String> {
@@ -156,7 +148,7 @@ impl PtyHub {
         rows: u16,
     ) -> Result<PtyOpened, String> {
         let key = match session_id.as_deref() {
-            Some(id) => format!("{}|{}|{id}", project_id, tool_id.as_str()),
+            Some(id) => session_live_key(project_id, tool_id, id),
             None => format!("{}|{}|new:{}", project_id, tool_id.as_str(), Uuid::new_v4()),
         };
         {
@@ -169,6 +161,7 @@ impl PtyHub {
                     reused: true,
                     session_id: existing.session_id.clone(),
                     title: existing.title.clone(),
+                    opened_at: existing.opened_at,
                 });
             }
         }
@@ -183,10 +176,7 @@ impl PtyHub {
         let exe = tools::resolve_binary(tool_id, &state.settings)?;
         let shell = platform::resolve_shell(&state.settings.powershell_path)?;
         let env_pairs = proxy_env(project.proxy_enabled, &project.proxy_url)?;
-        let extra_args = match session_id.as_deref() {
-            Some(id) => tools::resume_args(tool_id, id),
-            None => Vec::new(),
-        };
+        let extra_args = tools::launch_args(tool_id, session_id.as_deref());
         let kind = shell_kind(&shell);
         let launch = match kind {
             ShellKind::PowerShell => wrap_utf8_launch(&build_launch_command(&exe, &extra_args)),
@@ -212,6 +202,7 @@ impl PtyHub {
         cmd.env("TERM", "xterm-256color");
         cmd.env("COLORTERM", "truecolor");
         cmd.env("PATH", platform::augmented_path());
+        scrub_host_terminal_env(&mut cmd);
         #[cfg(unix)]
         if std::env::var_os("LANG").is_none() && std::env::var_os("LC_ALL").is_none() {
             cmd.env("LANG", "en_US.UTF-8");
@@ -235,10 +226,11 @@ impl PtyHub {
 
         let pty_id = Uuid::new_v4().to_string();
         let resolved_session = session_id.clone();
+        let opened_at = now_millis();
         let display_title = if title.trim().is_empty() {
             resolved_session
                 .clone()
-                .unwrap_or_else(|| "新 Session".into())
+                .unwrap_or_else(|| "新会话".into())
         } else {
             title
         };
@@ -254,6 +246,7 @@ impl PtyHub {
                     tool_id,
                     session_id: resolved_session.clone(),
                     title: display_title.clone(),
+                    opened_at,
                     master: pair.master,
                     writer,
                     child,
@@ -292,8 +285,77 @@ impl PtyHub {
             reused: false,
             session_id: resolved_session,
             title: display_title,
+            opened_at,
         })
     }
+
+    pub fn bind_session(
+        &self,
+        pty_id: &str,
+        session_id: &str,
+        title: Option<String>,
+    ) -> Result<LivePtyInfo, String> {
+        let session_id = session_id.trim();
+        if session_id.is_empty() {
+            return Err("会话还没有编号，稍后再试".into());
+        }
+        let mut sessions = self.sessions.lock().expect("pty lock");
+        reap_dead(&mut sessions);
+        let (project_id, tool_id) = {
+            let pty = sessions
+                .get(pty_id)
+                .ok_or_else(|| "这个终端已经关闭，无法绑定会话".to_string())?;
+            (pty.project_id.clone(), pty.tool_id)
+        };
+        let key = session_live_key(&project_id, tool_id, session_id);
+        if let Some(existing) = sessions
+            .values()
+            .find(|pty| pty.key == key && pty.id != pty_id)
+        {
+            return Ok(live_info(existing));
+        }
+        let pty = sessions
+            .get_mut(pty_id)
+            .ok_or_else(|| "这个终端已经关闭，无法绑定会话".to_string())?;
+        if let Some(current) = pty.session_id.as_deref() {
+            if current != session_id {
+                return Err("这个终端已经绑定了另一个会话".into());
+            }
+        }
+        pty.session_id = Some(session_id.to_string());
+        pty.key = key;
+        if let Some(title) = title {
+            let title = title.trim();
+            if !title.is_empty() {
+                pty.title = title.to_string();
+            }
+        }
+        Ok(live_info(pty))
+    }
+}
+
+pub fn session_live_key(project_id: &str, tool_id: ToolId, session_id: &str) -> String {
+    format!("{}|{}|{session_id}", project_id, tool_id.as_str())
+}
+
+fn live_info(pty: &LivePty) -> LivePtyInfo {
+    LivePtyInfo {
+        pty_id: pty.id.clone(),
+        key: pty.key.clone(),
+        project_id: pty.project_id.clone(),
+        tool_id: pty.tool_id,
+        session_id: pty.session_id.clone(),
+        title: pty.title.clone(),
+        alive: true,
+        opened_at: pty.opened_at,
+    }
+}
+
+fn now_millis() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
 }
 
 fn reap_dead(sessions: &mut HashMap<String, LivePty>) {
@@ -375,9 +437,21 @@ pub fn clamp_pty_size(cols: u16, rows: u16) -> (u16, u16) {
     (cols.max(20), rows.max(8))
 }
 
+pub const HOST_TERMINAL_ENV: &[&str] = &[
+    "TERMINAL_EMULATOR",
+    "TERM_PROGRAM",
+    "TERM_PROGRAM_VERSION",
+];
+
+fn scrub_host_terminal_env(cmd: &mut CommandBuilder) {
+    for key in HOST_TERMINAL_ENV {
+        cmd.env_remove(key);
+    }
+}
+
 pub fn wrap_utf8_launch(launch: &str) -> String {
     format!(
-        "$env:TERM='xterm-256color'; $env:COLORTERM='truecolor'; [Console]::InputEncoding = [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); {launch}"
+        "Remove-Item Env:TERMINAL_EMULATOR,Env:TERM_PROGRAM,Env:TERM_PROGRAM_VERSION -ErrorAction SilentlyContinue; $env:TERM='xterm-256color'; $env:COLORTERM='truecolor'; [Console]::InputEncoding = [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); {launch}"
     )
 }
 
@@ -438,7 +512,14 @@ mod tests {
         let wrapped = wrap_utf8_launch("& 'grok.exe'");
         assert!(wrapped.contains("[Console]::OutputEncoding"));
         assert!(wrapped.contains("xterm-256color"));
+        assert!(wrapped.contains("Remove-Item Env:TERMINAL_EMULATOR"));
         assert!(wrapped.ends_with("& 'grok.exe'"));
+    }
+
+    #[test]
+    fn host_terminal_env_includes_jetbrains_identity() {
+        assert!(HOST_TERMINAL_ENV.contains(&"TERMINAL_EMULATOR"));
+        assert!(HOST_TERMINAL_ENV.contains(&"TERM_PROGRAM"));
     }
 
     #[test]
@@ -458,6 +539,14 @@ mod tests {
         assert_eq!(shell_kind("powershell.exe"), ShellKind::PowerShell);
         assert_eq!(shell_kind("/bin/zsh"), ShellKind::Posix);
         assert_eq!(shell_kind("/opt/homebrew/bin/fish"), ShellKind::Fish);
+    }
+
+    #[test]
+    fn session_live_key_is_stable_for_resume() {
+        assert_eq!(
+            session_live_key("proj", ToolId::Grokbuild, "abc"),
+            "proj|grokbuild|abc"
+        );
     }
 
     #[test]

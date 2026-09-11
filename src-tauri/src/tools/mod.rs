@@ -167,6 +167,17 @@ pub fn resume_args(tool: ToolId, session_id: &str) -> Vec<String> {
     }
 }
 
+pub fn launch_args(tool: ToolId, session_id: Option<&str>) -> Vec<String> {
+    let mut args = Vec::new();
+    if tool == ToolId::Grokbuild {
+        args.push("--fullscreen".into());
+    }
+    if let Some(id) = session_id {
+        args.extend(resume_args(tool, id));
+    }
+    args
+}
+
 pub fn truncate_title(text: &str, max_chars: usize) -> String {
     let trimmed = text.trim().replace('\n', " ");
     if trimmed.chars().count() <= max_chars {
@@ -258,6 +269,20 @@ mod tests {
         assert_eq!(resume_args(ToolId::Opencode, "ses_1"), vec!["--session", "ses_1"]);
         assert_eq!(resume_args(ToolId::Grokbuild, "abc"), vec!["--resume", "abc"]);
         assert_eq!(resume_args(ToolId::Kimi, "session_1"), vec!["--session", "session_1"]);
+    }
+
+    #[test]
+    fn grok_launch_forces_fullscreen_so_jetbrains_env_cannot_auto_minimal() {
+        assert_eq!(launch_args(ToolId::Grokbuild, None), vec!["--fullscreen"]);
+        assert_eq!(
+            launch_args(ToolId::Grokbuild, Some("abc")),
+            vec!["--fullscreen", "--resume", "abc"]
+        );
+        assert!(launch_args(ToolId::Opencode, None).is_empty());
+        assert_eq!(
+            launch_args(ToolId::Kimi, Some("session_1")),
+            vec!["--session", "session_1"]
+        );
     }
 
     #[test]
