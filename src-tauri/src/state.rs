@@ -26,6 +26,26 @@ pub struct AppSettings {
     #[serde(default = "crate::platform::default_shell")]
     pub powershell_path: String,
     pub terminal_font_size: u32,
+    #[serde(default = "default_ui_font_size")]
+    pub ui_font_size: u32,
+    #[serde(default = "default_ui_theme")]
+    pub ui_theme: String,
+    #[serde(default)]
+    pub ui_accent: String,
+    #[serde(default)]
+    pub ui_background: String,
+    #[serde(default)]
+    pub ui_foreground: String,
+    #[serde(default)]
+    pub ui_font_family: String,
+    #[serde(default)]
+    pub content_font_family: String,
+    #[serde(default)]
+    pub code_font_family: String,
+    #[serde(default = "default_ui_contrast")]
+    pub ui_contrast: u32,
+    #[serde(default = "default_translucent_sidebar")]
+    pub translucent_sidebar: bool,
     #[serde(default = "default_ui_opacity")]
     pub ui_opacity: u32,
     #[serde(default = "default_session_tool_filter")]
@@ -37,7 +57,30 @@ pub struct AppSettings {
 }
 
 fn default_ui_opacity() -> u32 {
-    10
+    0
+}
+
+fn default_ui_font_size() -> u32 {
+    13
+}
+
+fn default_ui_theme() -> String {
+    "system".into()
+}
+
+fn default_ui_contrast() -> u32 {
+    60
+}
+
+fn default_translucent_sidebar() -> bool {
+    true
+}
+
+fn normalize_ui_theme(value: &str) -> String {
+    match value {
+        "light" | "dark" | "system" => value.to_string(),
+        _ => default_ui_theme(),
+    }
 }
 
 fn default_session_tool_filter() -> String {
@@ -60,6 +103,16 @@ impl Default for AppSettings {
             kimi_path: String::new(),
             powershell_path: crate::platform::default_shell(),
             terminal_font_size: 13,
+            ui_font_size: default_ui_font_size(),
+            ui_theme: default_ui_theme(),
+            ui_accent: String::new(),
+            ui_background: String::new(),
+            ui_foreground: String::new(),
+            ui_font_family: String::new(),
+            content_font_family: String::new(),
+            code_font_family: String::new(),
+            ui_contrast: default_ui_contrast(),
+            translucent_sidebar: default_translucent_sidebar(),
             ui_opacity: default_ui_opacity(),
             session_tool_filter: default_session_tool_filter(),
             cursor_api_key: String::new(),
@@ -112,10 +165,31 @@ pub fn load_state(app: &AppHandle) -> Result<AppState, String> {
     if state.settings.terminal_font_size < 10 || state.settings.terminal_font_size > 22 {
         state.settings.terminal_font_size = 13;
     }
-    if state.settings.ui_opacity > 80 {
+    let mut dirty = false;
+    if state.settings.ui_font_size < 11 || state.settings.ui_font_size > 18 {
+        state.settings.ui_font_size = default_ui_font_size();
+        dirty = true;
+    }
+    if state.settings.ui_contrast > 100 {
+        state.settings.ui_contrast = default_ui_contrast();
+        dirty = true;
+    }
+    let theme = normalize_ui_theme(&state.settings.ui_theme);
+    if theme != state.settings.ui_theme {
+        state.settings.ui_theme = theme;
+        dirty = true;
+    }
+    if state.settings.ui_opacity > 80
+        || state.settings.ui_opacity == 40
+        || state.settings.ui_opacity == 10
+    {
         state.settings.ui_opacity = default_ui_opacity();
+        dirty = true;
     }
     state.settings.session_tool_filter = normalize_session_tool_filter(&state.settings.session_tool_filter);
+    if dirty {
+        let _ = save_state(app, &state);
+    }
     Ok(state)
 }
 

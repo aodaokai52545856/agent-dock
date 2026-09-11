@@ -33,10 +33,16 @@ import type {
   ToolId,
   ToolProbeMap
 } from './types'
+import {
+  appearanceFromSettings,
+  appearanceToSettings,
+  applyAppearance,
+  watchSystemTheme
+} from './appearance'
 
 export const UI_OPACITY_MIN = 0
 export const UI_OPACITY_MAX = 80
-export const UI_OPACITY_DEFAULT = 10
+export const UI_OPACITY_DEFAULT = 0
 
 const defaultSettings = (): AppSettings => ({
   defaultProxyUrl: 'http://127.0.0.1:7890',
@@ -45,6 +51,16 @@ const defaultSettings = (): AppSettings => ({
   kimiPath: '',
   powershellPath: defaultShellPath(),
   terminalFontSize: 13,
+  uiFontSize: 13,
+  uiTheme: 'system',
+  uiAccent: '',
+  uiBackground: '',
+  uiForeground: '',
+  uiFontFamily: '',
+  contentFontFamily: '',
+  codeFontFamily: '',
+  uiContrast: 60,
+  translucentSidebar: true,
   uiOpacity: UI_OPACITY_DEFAULT,
   sessionToolFilter: 'all',
   cursorApiKey: '',
@@ -71,6 +87,12 @@ export function clampUiOpacity(value: number) {
   return Math.min(UI_OPACITY_MAX, Math.max(UI_OPACITY_MIN, Math.round(n)))
 }
 
+function migrateLoadedUiOpacity(value: number) {
+  const n = clampUiOpacity(value)
+  if (n === 40 || n === 10) return UI_OPACITY_DEFAULT
+  return n
+}
+
 export function applyUiOpacity(value: number) {
   document.documentElement.style.setProperty('--ad-ui-opacity', String(clampUiOpacity(value)))
 }
@@ -87,10 +109,12 @@ export const store = reactive({
   sessionError: '',
   sessionErrors: {} as Partial<Record<ToolId, { kind: string; message: string }>>,
   sessionLoading: { opencode: false, grokbuild: false, kimi: false } as Record<ToolId, boolean>,
+  sessionRefreshBusy: false,
   sessionQuery: '',
   sessionToolFilter: 'all' as SessionToolFilter,
   probes: null as ToolProbeMap | null,
   live: [] as LivePtyInfo[],
+  ptyDataAt: {} as Record<string, number>,
   activePtyId: '' as string,
   focusedSession: null as FocusedSession | null,
   toast: '' as string,
@@ -191,7 +215,8 @@ export function applyState(state: AppState) {
   store.settings = {
     ...defaultSettings(),
     ...state.settings,
-    uiOpacity: clampUiOpacity(state.settings.uiOpacity),
+    uiOpacity: migrateLoadedUiOpacity(state.settings.uiOpacity),
+    ...appearanceToSettings(appearanceFromSettings(state.settings)),
     sessionToolFilter: parseSessionToolFilter(state.settings.sessionToolFilter),
     cursorApiKey: state.settings.cursorApiKey ?? '',
     codexPath: state.settings.codexPath ?? ''
@@ -199,6 +224,7 @@ export function applyState(state: AppState) {
   store.sessionToolFilter = store.settings.sessionToolFilter
   store.ready = true
   applyUiOpacity(store.settings.uiOpacity)
+  applyAppearance(appearanceFromSettings(store.settings))
   if (!store.selectedProjectId || !store.projects.some((item) => item.id === store.selectedProjectId)) {
     store.selectedProjectId = store.projects[0]?.id ?? ''
   }
@@ -217,6 +243,7 @@ export function showToast(message: string) {
 }
 
 export async function boot() {
+  watchSystemTheme(() => appearanceFromSettings(store.settings))
   if (!api.isTauri) {
     // Browser preview only: seed projects and sessions so the dock chrome can be reviewed without Tauri.
     const now = Date.now()
@@ -330,6 +357,7 @@ export async function boot() {
     store.sessionToolFilter = parseSessionToolFilter(localStorage.getItem(FILTER_STORAGE_KEY))
     store.settings.sessionToolFilter = store.sessionToolFilter
     applyUiOpacity(store.settings.uiOpacity)
+    applyAppearance(appearanceFromSettings(store.settings))
     restoreAppMode()
     store.pipelines = loadPipelines()
     if (store.selectedProjectId) ensurePipeline(store.selectedProjectId)
@@ -404,11 +432,13 @@ async function refreshSessionsNow(opts?: { silent?: boolean }) {
     store.sessions = []
     store.sessionErrors = {}
     store.sessionLoading = { opencode: false, grokbuild: false, kimi: false }
+    store.sessionRefreshBusy = false
     store.sessionStatus = 'idle'
     return
   }
   if (!api.isTauri) {
     applyPreviewSessions()
+    store.sessionRefreshBusy = false
     return
   }
   const projectId = store.selectedProjectId
@@ -416,35 +446,40 @@ async function refreshSessionsNow(opts?: { silent?: boolean }) {
   store.sessionError = ''
   store.sessionErrorKind = ''
   store.sessionStatus = 'ready'
-  for (const toolId of tools) {
-    store.sessionLoading[toolId] = true
-    if (!opts?.silent) delete store.sessionErrors[toolId]
+  if (!opts?.silent) store.sessionRefreshBusy = true
+  try {
+    for (const toolId of tools) {
+      store.sessionLoading[toolId] = true
+      if (!opts?.silent) delete store.sessionErrors[toolId]
+    }
+    await Promise.all(
+      tools.map(async (toolId) => {
+        try {
+          const result = await api.listSessions(projectId, toolId)
+          if (store.selectedProjectId !== projectId) return
+          applyToolScan(toolId, result)
+        } catch (err) {
+          if (store.selectedProjectId !== projectId) return
+          store.sessionErrors[toolId] = {
+            kind: 'scan_failed',
+            message: err instanceof Error ? err.message : String(err)
+          }
+          store.sessions = store.sessions.filter((item) => item.toolId !== toolId)
+        } finally {
+          if (store.selectedProjectId === projectId) {
+            store.sessionLoading[toolId] = false
+          }
+        }
+      })
+    )
+    if (store.selectedProjectId !== projectId) return
+    await reconcileLiveBinds(projectId)
+    store.sessionStatus = store.sessions.length || pendingSessionRows(store.live, store.sessions, projectId).length
+      ? 'ready'
+      : 'empty'
+  } finally {
+    store.sessionRefreshBusy = false
   }
-  await Promise.all(
-    tools.map(async (toolId) => {
-      try {
-        const result = await api.listSessions(projectId, toolId)
-        if (store.selectedProjectId !== projectId) return
-        applyToolScan(toolId, result)
-      } catch (err) {
-        if (store.selectedProjectId !== projectId) return
-        store.sessionErrors[toolId] = {
-          kind: 'scan_failed',
-          message: err instanceof Error ? err.message : String(err)
-        }
-        store.sessions = store.sessions.filter((item) => item.toolId !== toolId)
-      } finally {
-        if (store.selectedProjectId === projectId) {
-          store.sessionLoading[toolId] = false
-        }
-      }
-    })
-  )
-  if (store.selectedProjectId !== projectId) return
-  await reconcileLiveBinds(projectId)
-  store.sessionStatus = store.sessions.length || pendingSessionRows(store.live, store.sessions, projectId).length
-    ? 'ready'
-    : 'empty'
 }
 
 function applyToolScan(toolId: ToolId, result: Awaited<ReturnType<typeof api.listSessions>>) {
@@ -619,8 +654,14 @@ export async function refreshLive() {
   }
 }
 
+export function notePtyData(ptyId: string, at = Date.now()) {
+  if (!ptyId) return
+  store.ptyDataAt[ptyId] = at
+}
+
 export function markPtyExit(ptyId: string) {
   stopPendingWatch(ptyId)
+  delete store.ptyDataAt[ptyId]
   const dying = store.live.find((item) => item.ptyId === ptyId)
   store.live = store.live.filter((item) => item.ptyId !== ptyId)
   adoptLiveFallback(ptyId, dying?.projectId ?? store.selectedProjectId)

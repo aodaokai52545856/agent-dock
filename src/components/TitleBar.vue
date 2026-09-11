@@ -155,13 +155,15 @@ onUnmounted(() => {
 .titlebar {
   position: relative;
   z-index: 6;
-  height: 40px;
+  height: max(40px, calc(var(--ad-font) + 27px));
   flex-shrink: 0;
   display: flex;
   align-items: center;
   background: var(--ad-sidebar);
   border-bottom: 1px solid var(--ad-border);
   color: var(--ad-muted);
+  font-size: var(--ad-font);
+  font-family: var(--ad-sans);
   user-select: none;
 }
 
@@ -175,9 +177,9 @@ onUnmounted(() => {
 }
 
 .brand {
-  font-size: 13px;
-  line-height: 20px;
-  font-weight: 500;
+  font-size: var(--ad-font);
+  line-height: 1.5;
+  font-weight: 600;
   color: var(--ad-text);
   padding-right: 8px;
 }
@@ -190,10 +192,10 @@ onUnmounted(() => {
 }
 
 .file-btn {
-  height: 40px;
+  height: 100%;
   padding: 0 12px;
-  font-size: 13px;
-  line-height: 20px;
+  font-size: var(--ad-font);
+  line-height: 1.5;
   color: var(--ad-muted);
 }
 
@@ -214,7 +216,7 @@ onUnmounted(() => {
 .modes {
   display: flex;
   align-items: center;
-  height: 28px;
+  height: calc(var(--ad-font) + 15px);
   margin-left: 8px;
   padding: 2px;
   border: 1px solid var(--ad-border);
@@ -223,10 +225,10 @@ onUnmounted(() => {
 }
 
 .mode {
-  height: 24px;
+  height: 100%;
   padding: 0 10px;
   border-radius: 6px;
-  font-size: 12px;
+  font-size: var(--ad-font-sm);
   color: var(--ad-muted);
   white-space: nowrap;
 }

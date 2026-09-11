@@ -1,7 +1,11 @@
 :root {
-  --ad-ui-opacity: 10;
+  --ad-ui-opacity: 0;
+  --ad-ui-font-size: 13;
   --ad-fill: calc(var(--ad-ui-opacity) / 100);
   --ad-veil: calc(0.86 - var(--ad-fill) * 0.7);
+  --ad-font: calc(var(--ad-ui-font-size) * 1px);
+  --ad-font-sm: calc(var(--ad-ui-font-size) * 1px - 1px);
+  --ad-font-xs: calc(var(--ad-ui-font-size) * 1px - 2px);
 
   --ad-ink: #0d0d0d;
   --ad-editor: #0d0d0d;
@@ -17,6 +21,7 @@
   --ad-muted: #8a8a8a;
   --ad-faint: #5c5c5c;
   --ad-border: rgba(255, 255, 255, 0.06);
+  --ad-border-strong: rgba(255, 255, 255, 0.12);
   --ad-accent: #ececec;
   --ad-accent-hover: #ffffff;
   --ad-accent-active: #d4d4d4;
@@ -27,6 +32,8 @@
   --ad-opencode: #6ee7b7;
   --ad-grok: #a78bfa;
   --ad-kimi: #fb923c;
+  --ad-primary: #f4f4f4;
+  --ad-primary-text: #111111;
 
   --ad-glass: var(--ad-hover);
   --ad-glass-strong: var(--ad-raised);
@@ -36,9 +43,12 @@
   --ad-mask: rgba(0, 0, 0, 0.56);
   --ad-blur: 0px;
   --ad-blur-strong: 0px;
+  --ad-focus-ring: rgba(255, 255, 255, 0.06);
+  --ad-range-accent: #d4d4d4;
 
   --ad-display: "Segoe UI Variable Display", "Segoe UI", "Microsoft YaHei UI", "PingFang SC", sans-serif;
   --ad-sans: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", "PingFang SC", "Hiragino Sans GB", -apple-system, BlinkMacSystemFont, sans-serif;
+  --ad-content: var(--ad-sans);
   --ad-mono: "Cascadia Mono", "Cascadia Code", "SF Mono", Menlo, Monaco, Consolas, monospace;
 
   --ad-radius-control: 8px;
@@ -52,6 +62,35 @@
   --ad-transition: 160ms ease;
   --ad-pane-move: 220ms cubic-bezier(0.22, 1, 0.36, 1);
   --ad-pane-fade: 160ms ease;
+}
+
+html[data-theme='light'] {
+  --ad-ink: #f3f3f3;
+  --ad-editor: #ffffff;
+  --ad-sidebar: rgb(243 243 243 / var(--ad-veil));
+  --ad-harbor: #ececec;
+  --ad-bg: #f3f3f3;
+  --ad-raised: #ffffff;
+  --ad-hover: #e7e7e7;
+  --ad-selected: #dcdcdc;
+  --ad-text: #171717;
+  --ad-muted: #6f6f6f;
+  --ad-faint: #8a8a8a;
+  --ad-border: rgba(0, 0, 0, 0.08);
+  --ad-border-strong: rgba(0, 0, 0, 0.16);
+  --ad-accent: #171717;
+  --ad-accent-hover: #000000;
+  --ad-accent-active: #333333;
+  --ad-filament: #171717;
+  --ad-glass-soft: rgba(0, 0, 0, 0.04);
+  --ad-mask: rgba(0, 0, 0, 0.4);
+  --ad-primary: #171717;
+  --ad-primary-text: #ffffff;
+  --ad-focus-ring: rgba(0, 0, 0, 0.08);
+  --ad-range-accent: #333333;
+  --ad-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+  --ad-shadow-dialog: 0 16px 48px rgba(0, 0, 0, 0.18);
+  --ad-shadow-menu: 0 12px 32px rgba(0, 0, 0, 0.16);
 }
 
 @media (prefers-reduced-motion: reduce) {

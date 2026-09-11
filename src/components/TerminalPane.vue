@@ -7,8 +7,11 @@ import { nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import * as api from '../lib/api'
 import { isLayoutBusy, paneAnimating, paneDragging, windowResizing } from '../lib/layout'
 import { isWindows } from '../lib/platform'
-import { markPtyExit, selectedProject, store } from '../lib/store'
+import { isSignificantPtyChunk } from '../lib/livePulse'
+import { markPtyExit, notePtyData, selectedProject, store } from '../lib/store'
+import { codeFontStack } from '../lib/appearance'
 import { canMeasure, createFitScheduler } from '../lib/termFit'
+import ToolMark from './ToolMark.vue'
 import { TOOLS, type ToolId } from '../lib/types'
 
 type Host = {
@@ -59,16 +62,35 @@ const emit = defineEmits<{
   start: [toolId?: ToolId]
 }>()
 
+function cssVar(name: string, fallback: string) {
+  const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim()
+  return value || fallback
+}
+
 function theme() {
+  const background = cssVar('--ad-editor', '#0d0d0d')
+  const foreground = cssVar('--ad-text', '#ececec')
   return {
-    background: '#0d0d0d',
-    foreground: '#ececec',
-    cursor: '#ececec',
-    cursorAccent: '#0d0d0d',
+    background,
+    foreground,
+    cursor: foreground,
+    cursorAccent: background,
     selectionBackground: '#ffffff22',
-    black: '#0d0d0d',
-    brightBlack: '#8a8a8a'
+    black: background,
+    brightBlack: cssVar('--ad-muted', '#8a8a8a')
   }
+}
+
+function termFontFamily() {
+  return cssVar('--ad-mono', codeFontStack(store.settings.codeFontFamily))
+}
+
+function applyTermChrome() {
+  hosts.forEach((host) => {
+    host.term.options.fontFamily = termFontFamily()
+    host.term.options.theme = theme()
+  })
+  if (store.activePtyId) show(store.activePtyId)
 }
 
 function ensureHost(ptyId: string) {
@@ -79,7 +101,7 @@ function ensureHost(ptyId: string) {
   const mount = document.getElementById('term-mount')
   mount?.appendChild(el)
   const term = new Terminal({
-    fontFamily: 'SF Mono, Menlo, Monaco, Cascadia Mono, Cascadia Code, Consolas, "Microsoft YaHei Mono", monospace',
+    fontFamily: termFontFamily(),
     fontSize: props.fontSize,
     theme: theme(),
     cursorBlink: true,
@@ -169,6 +191,18 @@ watch(
   }
 )
 
+watch(
+  () => [
+    store.settings.codeFontFamily,
+    store.settings.uiTheme,
+    store.settings.uiBackground,
+    store.settings.uiForeground,
+    store.settings.uiAccent,
+    store.settings.uiContrast
+  ],
+  () => applyTermChrome()
+)
+
 watch([paneAnimating, paneDragging, windowResizing], (now) => {
   fitScheduler.onBusyChange(now[0] || now[1] || now[2])
 })
@@ -178,6 +212,7 @@ onMounted(async () => {
     unlistenData = await listen<{ ptyId: string; data: string }>('pty-data', (event) => {
       const host = ensureHost(event.payload.ptyId)
       host.term.write(event.payload.data)
+      if (isSignificantPtyChunk(event.payload.data)) notePtyData(event.payload.ptyId)
     })
     unlistenExit = await listen<{ ptyId: string }>('pty-exit', (event) => {
       disposeHost(event.payload.ptyId)
@@ -191,9 +226,11 @@ onMounted(async () => {
     })
     observer.observe(target)
   }
+  window.addEventListener('ad-appearance', applyTermChrome)
 })
 
 onUnmounted(() => {
+  window.removeEventListener('ad-appearance', applyTermChrome)
   unlistenData?.()
   unlistenExit?.()
   observer?.disconnect()
@@ -231,7 +268,9 @@ defineExpose({ ensureHost, show, dispose: disposeHost, fitActive })
             class="tile"
             @click="emit('start', tool.id)"
           >
-            <span class="tile-dot" :style="{ background: tool.tint }" aria-hidden="true" />
+            <span class="tile-mark" aria-hidden="true">
+              <ToolMark :id="tool.id" />
+            </span>
             <span class="tile-label">{{ tool.label }}</span>
             <span class="tile-hint">{{ tool.hint }}</span>
           </button>
@@ -324,10 +363,10 @@ defineExpose({ ensureHost, show, dispose: disposeHost, fitActive })
   background: var(--ad-selected);
 }
 
-.tile-dot {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
+.tile-mark {
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
 }
 
 .tile-label {

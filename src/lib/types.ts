@@ -28,6 +28,16 @@ export interface AppSettings {
   kimiPath: string
   powershellPath: string
   terminalFontSize: number
+  uiFontSize: number
+  uiTheme: 'system' | 'light' | 'dark'
+  uiAccent: string
+  uiBackground: string
+  uiForeground: string
+  uiFontFamily: string
+  contentFontFamily: string
+  codeFontFamily: string
+  uiContrast: number
+  translucentSidebar: boolean
   uiOpacity: number
   sessionToolFilter: SessionToolFilter
   cursorApiKey: string
@@ -170,6 +180,37 @@ export interface GrokUsage {
   onDemandUsed: number | null
   onDemandCap: number | null
   grokBuildUsedPercent: number | null
+  usedCredits: number | null
+  creditLimit: number | null
+  fetchedAt: string
+  message: string | null
+}
+
+export interface GrokSpendPoint {
+  ts: number
+  label: string
+  inputTokens: number
+  outputTokens: number
+  cacheReadTokens: number
+  cacheCreationTokens: number
+  costUsd: number
+}
+
+export interface GrokSpend {
+  ok: boolean
+  totalTokens: number
+  inputTokens: number
+  outputTokens: number
+  cacheReadTokens: number
+  cacheCreationTokens: number
+  cacheHitPercent: number
+  turnCount: number
+  costUsd: number
+  granularity: 'hour' | 'day' | string
+  rangeStart: number
+  rangeEnd: number
+  points: GrokSpendPoint[]
+  scannedFiles: number
   fetchedAt: string
   message: string | null
 }
