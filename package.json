@@ -10,9 +10,11 @@
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
+    "pack:exe": "tauri build --bundles nsis && node scripts/collect-win-exe.mjs",
     "icon:gen": "python scripts/generate_icon.py",
     "test:fit": "node --experimental-strip-types src/lib/termFit.test.ts",
     "test:bridge": "node --experimental-strip-types src/lib/reviewVerdict.test.ts",
+    "test:usage": "node --experimental-strip-types src/lib/grokUsage.test.ts",
     "spike:app-server": "node scripts/spike_app_server.mjs"
   },
   "dependencies": {

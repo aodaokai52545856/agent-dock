@@ -28,6 +28,7 @@ import {
   dropProject,
   markPtyExit,
   markWindowBlurred,
+  noteGrokAccountChange,
   refreshAfterWindowFocus,
   refreshSessions,
   rememberOpened,
@@ -357,6 +358,7 @@ async function onVersionsChanged() {
 }
 
 async function onGrokSwitched() {
+  noteGrokAccountChange()
   const grokLive = store.live.filter((item) => item.toolId === 'grokbuild')
   for (const item of grokLive) {
     await api.ptyKill(item.ptyId)

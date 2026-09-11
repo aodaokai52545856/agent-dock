@@ -7,6 +7,7 @@ import type {
   CursorDevResult,
   GitSnapshot,
   GrokAccountList,
+  GrokUsage,
   LivePtyInfo,
   ProjectDraft,
   PtyOpened,
@@ -164,6 +165,30 @@ export async function deleteGrokAccount(accountId: string): Promise<GrokAccountL
 export async function loginGrokAccount(): Promise<GrokAccountList> {
   if (!isTauri) return emptyAccounts()
   return invoke('login_grok_account')
+}
+
+const previewUsage = (): GrokUsage => {
+  const resets = new Date()
+  resets.setDate(resets.getDate() + 4)
+  resets.setHours(9, 53, 0, 0)
+  return {
+    ok: true,
+    usedPercent: 42,
+    remainingPercent: 58,
+    resetsAt: resets.toISOString(),
+    periodLabel: '本周',
+    prepaidBalance: 0,
+    onDemandUsed: 0,
+    onDemandCap: 0,
+    grokBuildUsedPercent: 42,
+    fetchedAt: new Date().toISOString(),
+    message: null
+  }
+}
+
+export async function grokUsage(projectId?: string | null): Promise<GrokUsage> {
+  if (!isTauri) return previewUsage()
+  return invoke('grok_usage', { projectId: projectId || null })
 }
 
 export async function codexProbe(projectId: string): Promise<CodexProbe> {

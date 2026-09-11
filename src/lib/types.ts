@@ -127,6 +127,20 @@ export interface GrokAccountList {
   accounts: GrokAccount[]
 }
 
+export interface GrokUsage {
+  ok: boolean
+  usedPercent: number | null
+  remainingPercent: number | null
+  resetsAt: string | null
+  periodLabel: string | null
+  prepaidBalance: number | null
+  onDemandUsed: number | null
+  onDemandCap: number | null
+  grokBuildUsedPercent: number | null
+  fetchedAt: string
+  message: string | null
+}
+
 export const TOOLS: { id: ToolId; label: string; hint: string; tint: string }[] = [
   { id: 'opencode', label: 'OpenCode', hint: '打开编码会话', tint: 'var(--ad-opencode)' },
   { id: 'grokbuild', label: 'Grok', hint: '启动 Grok', tint: 'var(--ad-grok)' },

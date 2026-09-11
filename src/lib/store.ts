@@ -76,6 +76,7 @@ export const store = reactive({
   activePtyId: '' as string,
   toast: '' as string,
   toastTimer: 0,
+  grokAuthRev: 0,
   appMode: 'console' as AppMode,
   pipelines: {} as Record<string, BridgePipeline>,
   codexThreads: [] as CodexThread[],
@@ -151,6 +152,10 @@ export function applyState(state: AppState) {
   if (!store.selectedProjectId || !store.projects.some((item) => item.id === store.selectedProjectId)) {
     store.selectedProjectId = store.projects[0]?.id ?? ''
   }
+}
+
+export function noteGrokAccountChange() {
+  store.grokAuthRev += 1
 }
 
 export function showToast(message: string) {

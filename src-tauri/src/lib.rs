@@ -1,6 +1,7 @@
 mod bridge;
 mod cursor_dev;
 mod grok_accounts;
+mod grok_usage;
 mod path_norm;
 mod platform;
 mod proxy;
@@ -20,6 +21,7 @@ use std::sync::Arc;
 use tauri::webview::PageLoadEvent;
 use tauri::{AppHandle, Manager, State};
 use grok_accounts::GrokAccountList;
+use grok_usage::GrokUsage;
 use tools::update::{ToolVersionInfo, UpgradeResult};
 use tools::{BinaryProbe, SessionRow, ToolId};
 use uuid::Uuid;
@@ -207,6 +209,13 @@ fn switch_grok_account(app: AppHandle, account_id: String) -> Result<GrokAccount
 #[tauri::command]
 fn delete_grok_account(app: AppHandle, account_id: String) -> Result<GrokAccountList, String> {
     grok_accounts::delete_account(&app, &account_id)
+}
+
+#[tauri::command]
+async fn grok_usage(app: AppHandle, project_id: Option<String>) -> Result<GrokUsage, String> {
+    tauri::async_runtime::spawn_blocking(move || crate::grok_usage::fetch(&app, project_id.as_deref()))
+        .await
+        .map_err(|err| format!("读取 Grok 用量失败：{err}"))
 }
 
 #[tauri::command]
@@ -512,6 +521,7 @@ pub fn run() {
             list_tool_versions,
             upgrade_tool,
             list_grok_accounts,
+            grok_usage,
             save_grok_account,
             switch_grok_account,
             delete_grok_account,

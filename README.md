@@ -24,11 +24,22 @@ npm run tauri:dev
 
 ## 打包
 
+开发热更新固定走 `http://localhost:1421`，避开常见的 1422 / 1433。打好的 exe 把界面打进二进制，不再监听端口。
+
+```bash
+npm run pack:exe
+```
+
+Windows 产物在 `release/`：
+
+- `AgentDock.exe` — 可直接双击
+- `AgentDock-Setup.exe` — 当前用户安装包，不需要管理员
+
 ```bash
 npm run tauri:build
 ```
 
-Windows 产出 NSIS 安装包；macOS 产出 `.app` 与 `.dmg`。
+仍可打全平台包：Windows NSIS、macOS `.app` / `.dmg`。
 
 ## 代理
 
