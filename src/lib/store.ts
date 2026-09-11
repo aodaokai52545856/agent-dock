@@ -18,7 +18,7 @@ import type {
   ToolProbeMap
 } from './types'
 
-export const UI_OPACITY_MIN = 20
+export const UI_OPACITY_MIN = 0
 export const UI_OPACITY_MAX = 80
 export const UI_OPACITY_DEFAULT = 40
 
