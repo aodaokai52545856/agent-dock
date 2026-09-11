@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import { pathTail, relativeTime } from '../lib/format'
 import { endPaneAnim, layout, paneDragging, sidebarPaneWidth, toggleSidebar } from '../lib/layout'
 import { refreshCodexThreads, toggleBridgeThread } from '../lib/pipeline'
@@ -30,6 +31,24 @@ function onSelectProject(id: string) {
   emit('select', id)
   ensurePipeline(id)
 }
+
+const gate = computed(() => currentPipeline.value?.gate ?? 'idle')
+const slice = computed(() => currentPipeline.value?.slice ?? 1)
+const retryCount = computed(() => currentPipeline.value?.retryCount ?? 0)
+const maxRetries = computed(() => currentPipeline.value?.maxRetries ?? 0)
+
+/** Thin progress: retry ratio when failing/retrying; gate-based otherwise. */
+const gateProgress = computed(() => {
+  const g = gate.value
+  if (g === 'passed') return 100
+  if (g === 'failed') {
+    const max = Math.max(1, maxRetries.value)
+    return Math.min(100, Math.round((retryCount.value / max) * 100))
+  }
+  if (g === 'reviewing' || g === 'developing') return 55
+  if (g === 'idle') return 0
+  return 25
+})
 </script>
 
 <template>
@@ -82,13 +101,20 @@ function onSelectProject(id: string) {
         <p v-else class="muted pad">还没有项目</p>
       </div>
 
-      <div class="block gate">
-        <p class="kicker">闸门</p>
-        <p class="gate-line">
-          <span class="gate-dot" :data-gate="currentPipeline?.gate ?? 'idle'" />
-          {{ GATE_LABEL[currentPipeline?.gate ?? 'idle'] }}
-          <span class="faint">第 {{ currentPipeline?.slice ?? 1 }} 片</span>
-        </p>
+      <div class="block gate-block">
+        <div class="gate-card" :data-gate="gate">
+          <div class="gate-card-top">
+            <span class="gate-dot" :data-gate="gate" />
+            <span class="gate-label">{{ GATE_LABEL[gate] }}</span>
+            <span class="gate-slice">第 {{ slice }} 片</span>
+          </div>
+          <p v-if="retryCount" class="gate-retry">
+            已返工 {{ retryCount }} / {{ maxRetries }} 次
+          </p>
+          <div class="gate-bar" role="progressbar" :aria-valuenow="gateProgress" aria-valuemin="0" aria-valuemax="100">
+            <span class="gate-bar-fill" :style="{ width: gateProgress + '%' }" />
+          </div>
+        </div>
       </div>
 
       <div class="block block--threads">
@@ -200,12 +226,8 @@ function onSelectProject(id: string) {
   border-bottom: none;
 }
 
-.block-head,
-.gate {
-  padding: 0 12px;
-}
-
 .block-head {
+  padding: 0 12px;
   height: 32px;
 }
 
@@ -220,6 +242,7 @@ function onSelectProject(id: string) {
   padding: 0 4px;
   height: 28px;
   font-size: 12px;
+  line-height: 20px;
   color: var(--ad-muted);
 }
 
@@ -244,8 +267,7 @@ function onSelectProject(id: string) {
 }
 
 .project:hover,
-.project:focus-within,
-.project--active {
+.project:focus-within {
   background: var(--ad-hover);
 }
 
@@ -305,7 +327,6 @@ function onSelectProject(id: string) {
 .muted,
 .hint,
 .thread-preview,
-.faint,
 .thread-meta,
 .collapsed-label {
   font-size: 12px;
@@ -351,12 +372,22 @@ function onSelectProject(id: string) {
   margin: 0 12px 8px;
 }
 
-.gate-line {
+.gate-block {
+  padding: 8px 12px 10px;
+}
+
+.gate-card {
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--ad-border);
+  background: var(--ad-harbor);
+}
+
+.gate-card-top {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin: 0 0 10px;
-  color: var(--ad-text);
+  min-width: 0;
 }
 
 .gate-dot {
@@ -364,6 +395,7 @@ function onSelectProject(id: string) {
   height: 8px;
   border-radius: 50%;
   background: var(--ad-faint);
+  flex-shrink: 0;
 }
 
 .gate-dot[data-gate='passed'] {
@@ -376,6 +408,62 @@ function onSelectProject(id: string) {
 
 .gate-dot[data-gate='reviewing'],
 .gate-dot[data-gate='developing'] {
+  background: var(--ad-warning);
+}
+
+.gate-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ad-text);
+  font-size: 13px;
+  line-height: 20px;
+  font-weight: 560;
+}
+
+.gate-slice {
+  flex-shrink: 0;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--ad-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.gate-retry {
+  margin: 6px 0 0;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--ad-muted);
+}
+
+.gate-bar {
+  margin-top: 8px;
+  height: 3px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+}
+
+.gate-bar-fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--ad-muted);
+  transition: width var(--ad-transition);
+}
+
+.gate-card[data-gate='passed'] .gate-bar-fill {
+  background: var(--ad-success);
+}
+
+.gate-card[data-gate='failed'] .gate-bar-fill {
+  background: var(--ad-error);
+}
+
+.gate-card[data-gate='reviewing'] .gate-bar-fill,
+.gate-card[data-gate='developing'] .gate-bar-fill {
   background: var(--ad-warning);
 }
 
@@ -433,5 +521,8 @@ function onSelectProject(id: string) {
 
 .collapsed-label {
   writing-mode: vertical-rl;
+  font-size: 12px;
+  line-height: 20px;
+  letter-spacing: 2px;
 }
 </style>
