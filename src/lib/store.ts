@@ -20,7 +20,7 @@ import type {
 
 export const UI_OPACITY_MIN = 0
 export const UI_OPACITY_MAX = 80
-export const UI_OPACITY_DEFAULT = 40
+export const UI_OPACITY_DEFAULT = 10
 
 const defaultSettings = (): AppSettings => ({
   defaultProxyUrl: 'http://127.0.0.1:7890',

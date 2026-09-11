@@ -37,7 +37,7 @@ pub struct AppSettings {
 }
 
 fn default_ui_opacity() -> u32 {
-    40
+    10
 }
 
 fn default_session_tool_filter() -> String {
@@ -112,7 +112,7 @@ pub fn load_state(app: &AppHandle) -> Result<AppState, String> {
     if state.settings.terminal_font_size < 10 || state.settings.terminal_font_size > 22 {
         state.settings.terminal_font_size = 13;
     }
-    if state.settings.ui_opacity < 20 || state.settings.ui_opacity > 80 {
+    if state.settings.ui_opacity > 80 {
         state.settings.ui_opacity = default_ui_opacity();
     }
     state.settings.session_tool_filter = normalize_session_tool_filter(&state.settings.session_tool_filter);

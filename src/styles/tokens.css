@@ -1,5 +1,5 @@
 :root {
-  --ad-ui-opacity: 40;
+  --ad-ui-opacity: 10;
   --ad-fill: calc(var(--ad-ui-opacity) / 100);
   --ad-veil: calc(0.86 - var(--ad-fill) * 0.7);
 
