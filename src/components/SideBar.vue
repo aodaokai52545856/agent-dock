@@ -18,6 +18,7 @@ const emit = defineEmits<{
   rename: [id: string]
   close: [payload: { sessionId: string; toolId: ToolId }]
   delete: [payload: { sessionId: string; toolId: ToolId }]
+  cite: [payload: { sessionId: string; toolId: ToolId }]
 }>()
 
 defineProps<{
@@ -28,7 +29,7 @@ const renaming = defineModel<string>('renaming', { default: '' })
 const draft = defineModel<string>('draft', { default: '' })
 const menu = ref<{ x: number; y: number; sessionId: string; toolId: ToolId; focus: number } | null>(null)
 const MENU_WIDTH = 228
-const MENU_HEIGHT = 140
+const MENU_HEIGHT = 188
 const filterOpen = ref(false)
 const filterFocus = ref(0)
 
@@ -114,10 +115,21 @@ function menuLive() {
   return menu.value ? isLive(menu.value.sessionId, menu.value.toolId) : false
 }
 
+function menuCanCite() {
+  return menu.value?.toolId === 'grokbuild' || menu.value?.toolId === 'kimi'
+}
+
 function activateMenu(index: number) {
   if (index === 0) renameSession()
-  if (index === 1 && menuLive()) closeSession()
-  if (index === 2) deleteSession()
+  if (index === 1 && menuCanCite()) citeSession()
+  if (index === 2 && menuLive()) closeSession()
+  if (index === 3) deleteSession()
+}
+
+function citeSession() {
+  const current = menu.value
+  closeMenu()
+  if (current) emit('cite', { sessionId: current.sessionId, toolId: current.toolId })
 }
 
 function closeSession() {
@@ -171,7 +183,7 @@ function onKey(event: KeyboardEvent) {
   }
   if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
     event.preventDefault()
-    const next = event.key === 'ArrowDown' ? (menu.value.focus + 1) % 3 : (menu.value.focus + 2) % 3
+    const next = event.key === 'ArrowDown' ? (menu.value.focus + 1) % 4 : (menu.value.focus + 3) % 4
     menu.value = { ...menu.value, focus: next }
     return
   }
@@ -405,8 +417,20 @@ onUnmounted(() => {
           role="menuitem"
           class="ad-menu-item"
           :class="{ 'is-focus': menu.focus === 1 }"
-          :disabled="!menuLive()"
+          :disabled="!menuCanCite()"
           @mouseenter="menu.focus = 1"
+          @click="citeSession"
+        >
+          <span>引用片段</span>
+        </button>
+        <div class="ad-menu-sep" role="separator" />
+        <button
+          type="button"
+          role="menuitem"
+          class="ad-menu-item"
+          :class="{ 'is-focus': menu.focus === 2 }"
+          :disabled="!menuLive()"
+          @mouseenter="menu.focus = 2"
           @click="closeSession"
         >
           <span>关闭会话</span>
@@ -416,8 +440,8 @@ onUnmounted(() => {
           type="button"
           role="menuitem"
           class="ad-menu-item ad-menu-item--danger"
-          :class="{ 'is-focus': menu.focus === 2 }"
-          @mouseenter="menu.focus = 2"
+          :class="{ 'is-focus': menu.focus === 3 }"
+          @mouseenter="menu.focus = 3"
           @click="deleteSession"
         >
           <span>删除会话</span>

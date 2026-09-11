@@ -15,6 +15,7 @@
     "test:fit": "node --experimental-strip-types src/lib/termFit.test.ts",
     "test:bridge": "node --experimental-strip-types src/lib/reviewVerdict.test.ts",
     "test:usage": "node --experimental-strip-types src/lib/grokUsage.test.ts",
+    "test:cite": "node --experimental-strip-types src/lib/sessionCite.test.ts && node --experimental-strip-types src/lib/markdown.test.ts",
     "spike:app-server": "node scripts/spike_app_server.mjs"
   },
   "dependencies": {
@@ -23,6 +24,7 @@
     "@tauri-apps/plugin-dialog": "^2.2.0",
     "@xterm/addon-fit": "^0.10.0",
     "@xterm/xterm": "^5.5.0",
+    "marked": "^15.0.12",
     "vue": "^3.5.13"
   },
   "devDependencies": {

@@ -74,6 +74,10 @@ pub fn delete_session(cwd: &str, session_id: &str) -> Result<(), String> {
     Ok(())
 }
 
+pub fn find_session_dir(cwd: &str, session_id: &str) -> Option<PathBuf> {
+    find_summary(cwd, session_id).and_then(|path| path.parent().map(Path::to_path_buf))
+}
+
 fn find_summary(cwd: &str, session_id: &str) -> Option<PathBuf> {
     let root = grok_home().join("sessions");
     let mut found = None;

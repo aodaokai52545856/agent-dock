@@ -5,10 +5,14 @@ const STORAGE_KEY = 'agent-dock-layout'
 export const COLLAPSED_WIDTH = 40
 export const SIDEBAR_MIN = 240
 export const SIDEBAR_MAX = 420
+export const DOCRAIL_MIN = 240
+export const DOCRAIL_MAX = 320
 
 export type LayoutState = {
   sidebarWidth: number
   sidebarCollapsed: boolean
+  docRailWidth: number
+  docRailCollapsed: boolean
 }
 
 function clamp(n: number, min: number, max: number) {
@@ -28,7 +32,9 @@ const stored = readStored()
 
 export const layout = reactive<LayoutState>({
   sidebarWidth: clamp(stored.sidebarWidth ?? stored.sessionWidth ?? 280, SIDEBAR_MIN, SIDEBAR_MAX),
-  sidebarCollapsed: Boolean(stored.sidebarCollapsed ?? stored.projectCollapsed)
+  sidebarCollapsed: Boolean(stored.sidebarCollapsed ?? stored.projectCollapsed),
+  docRailWidth: clamp(stored.docRailWidth ?? 260, DOCRAIL_MIN, DOCRAIL_MAX),
+  docRailCollapsed: Boolean(stored.docRailCollapsed)
 })
 
 export const paneDragging = ref(false)
@@ -157,4 +163,41 @@ export function resizeSidebar(next: number) {
     return
   }
   sidebarRaf = requestAnimationFrame(run)
+}
+
+export function docRailPaneWidth() {
+  return layout.docRailCollapsed ? COLLAPSED_WIDTH : layout.docRailWidth
+}
+
+export function toggleDocRail() {
+  if (!paneDragging.value) beginPaneAnim()
+  layout.docRailCollapsed = !layout.docRailCollapsed
+}
+
+let docRailRaf = 0
+let docRailPending: number | null = null
+
+function applyDocRailSize(next: number) {
+  if (next < DOCRAIL_MIN - 24) {
+    layout.docRailCollapsed = true
+    return
+  }
+  layout.docRailCollapsed = false
+  layout.docRailWidth = clamp(next, DOCRAIL_MIN, DOCRAIL_MAX)
+}
+
+export function resizeDocRail(next: number) {
+  docRailPending = next
+  if (docRailRaf) return
+  const run = () => {
+    docRailRaf = 0
+    if (docRailPending == null) return
+    applyDocRailSize(docRailPending)
+    docRailPending = null
+  }
+  if (typeof requestAnimationFrame === 'undefined') {
+    run()
+    return
+  }
+  docRailRaf = requestAnimationFrame(run)
 }

@@ -233,6 +233,22 @@ pub fn matches_cwd(session_cwd: &str, project_cwd: &str) -> bool {
     normalize_path(session_cwd) == normalize_path(project_cwd)
 }
 
+pub fn grok_home() -> PathBuf {
+    grokbuild::grok_home()
+}
+
+pub fn kimi_home() -> PathBuf {
+    kimi::kimi_home()
+}
+
+pub fn find_grok_session_dir(cwd: &str, session_id: &str) -> Option<PathBuf> {
+    grokbuild::find_session_dir(cwd, session_id)
+}
+
+pub fn find_kimi_session_dir(session_id: &str) -> Option<PathBuf> {
+    kimi::find_session_dir(session_id)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

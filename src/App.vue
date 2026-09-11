@@ -1,7 +1,10 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import CiteTurnDialog from './components/CiteTurnDialog.vue'
 import ConfirmDialog from './components/ConfirmDialog.vue'
+import DocRail from './components/DocRail.vue'
 import LaunchStrip from './components/LaunchStrip.vue'
+import MarkdownPreviewDialog from './components/MarkdownPreviewDialog.vue'
 import PaneGutter from './components/PaneGutter.vue'
 import ProjectDialog from './components/ProjectDialog.vue'
 import NewSessionDialog from './components/NewSessionDialog.vue'
@@ -19,13 +22,16 @@ import {
   beginPaneDrag,
   endPaneDrag,
   layout,
+  resizeDocRail,
   resizeSidebar,
+  toggleDocRail,
   toggleSidebar
 } from './lib/layout'
 import {
   boot,
   deleteCurrentSession,
   dropProject,
+  focusSession,
   markPtyExit,
   markWindowBlurred,
   noteGrokAccountChange,
@@ -41,7 +47,7 @@ import {
   store
 } from './lib/store'
 import { refreshCodexThreads } from './lib/pipeline'
-import type { ProjectDraft, ToolId } from './lib/types'
+import type { ProjectDraft, SessionDoc, ToolId } from './lib/types'
 
 const projectOpen = ref(false)
 const editing = ref(false)
@@ -64,6 +70,10 @@ const paneLoading = ref(false)
 const paneLoadingText = ref('正在打开会话')
 const newSessionOpen = ref(false)
 const reopenNewSession = ref(false)
+const previewDoc = ref<SessionDoc | null>(null)
+const previewOpen = ref(false)
+const citeOpen = ref(false)
+const citeSession = ref<{ sessionId: string; toolId: ToolId; title: string } | null>(null)
 
 const removingProject = computed(() => store.projects.find((item) => item.id === removingId.value))
 
@@ -138,6 +148,26 @@ function onSidebarDrag(clientX: number) {
   resizeSidebar(clientX - left)
 }
 
+function onDocRailDrag(clientX: number) {
+  const right = consoleWs.value?.getBoundingClientRect().right ?? 0
+  resizeDocRail(right - clientX)
+}
+
+function openDocPreview(doc: SessionDoc) {
+  previewDoc.value = doc
+  previewOpen.value = true
+}
+
+function openCiteTurns(payload: { sessionId: string; toolId: ToolId; title?: string }) {
+  const session = store.sessions.find((item) => item.id === payload.sessionId && item.toolId === payload.toolId)
+  citeSession.value = {
+    sessionId: payload.sessionId,
+    toolId: payload.toolId,
+    title: payload.title || session?.title || payload.sessionId
+  }
+  citeOpen.value = true
+}
+
 watch(
   () => store.appMode,
   async (mode) => {
@@ -145,6 +175,16 @@ watch(
       void refreshCodexThreads()
       return
     }
+    await nextTick()
+    await waitPaint()
+    termRef.value?.fitActive(true)
+  }
+)
+
+watch(
+  () => layout.docRailCollapsed,
+  async () => {
+    if (store.appMode !== 'console') return
     await nextTick()
     await waitPaint()
     termRef.value?.fitActive(true)
@@ -277,6 +317,11 @@ async function openSession(sessionId?: string, toolId?: ToolId) {
       try {
         store.activePtyId = existing.ptyId
         store.selectedTool = tool
+        focusSession({
+          toolId: tool,
+          sessionId,
+          title: existing.title
+        })
         await finishPaneReady()
       } finally {
         paneLoading.value = false
@@ -297,6 +342,14 @@ async function openSession(sessionId?: string, toolId?: ToolId) {
       rows: 32
     })
     store.selectedTool = tool
+    const focusedId = opened.sessionId ?? sessionId ?? ''
+    if (focusedId) {
+      focusSession({
+        toolId: tool,
+        sessionId: focusedId,
+        title: opened.title
+      })
+    }
     rememberOpened({
       ptyId: opened.ptyId,
       key: opened.key,
@@ -421,6 +474,7 @@ const confirmCopy = () => {
           @rename="commitRename"
           @close="(payload) => askCloseSession(payload.sessionId, payload.toolId)"
           @delete="(payload) => askDeleteSession(payload.sessionId, payload.toolId)"
+          @cite="openCiteTurns"
         />
         <PaneGutter
           label="调整工作区宽度"
@@ -439,6 +493,18 @@ const confirmCopy = () => {
             @start="onEmptyStart"
           />
         </div>
+        <PaneGutter
+          label="调整文档栏宽度"
+          @start="beginPaneDrag"
+          @drag="onDocRailDrag"
+          @end="endPaneDrag"
+          @toggle="toggleDocRail"
+        />
+        <DocRail
+          :collapsed="layout.docRailCollapsed"
+          @open="openDocPreview"
+          @cite="openCiteTurns"
+        />
       </div>
       <div v-show="store.appMode === 'bridge'" ref="bridgeWs" class="workspace">
         <BridgeSideBar
@@ -493,6 +559,22 @@ const confirmCopy = () => {
       :settings="store.settings"
       @close="settingsOpen = false"
       @save="onSaveSettings"
+    />
+    <MarkdownPreviewDialog
+      :open="previewOpen"
+      :project-id="store.selectedProjectId"
+      :doc="previewDoc"
+      :tool-id="store.focusedSession?.toolId ?? store.selectedTool"
+      :session-title="store.focusedSession?.title ?? ''"
+      @close="previewOpen = false"
+    />
+    <CiteTurnDialog
+      :open="citeOpen"
+      :project-id="store.selectedProjectId"
+      :tool-id="citeSession?.toolId ?? 'grokbuild'"
+      :session-id="citeSession?.sessionId ?? ''"
+      :session-title="citeSession?.title ?? ''"
+      @close="citeOpen = false"
     />
     <ConfirmDialog
       :open="confirmOpen"

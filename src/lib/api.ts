@@ -14,7 +14,10 @@ import type {
   RenameKind,
   ReviewStartResult,
   ReviewTargetKind,
+  SessionDoc,
+  SessionDocBody,
   SessionListResult,
+  SessionTurn,
   ToolId,
   ToolProbeMap,
   ToolVersionInfo,
@@ -58,6 +61,99 @@ export async function probeTools(): Promise<ToolProbeMap> {
 
 export async function listSessions(projectId: string, toolId: ToolId): Promise<SessionListResult> {
   return invoke('list_sessions', { projectId, toolId })
+}
+
+function previewDocs(toolId: ToolId): SessionDoc[] {
+  if (toolId === 'opencode') return []
+  const now = Date.now()
+  if (toolId === 'kimi') {
+    return [
+      {
+        kind: 'plan',
+        title: '写状态栏文案',
+        path: 'D:\\preview\\kimi\\plans\\status-bar.md',
+        relPath: null,
+        updatedAt: now - 180000,
+        source: 'kimi'
+      }
+    ]
+  }
+  return [
+    {
+      kind: 'plan',
+      title: 'Plan',
+      path: 'D:\\preview\\grok\\plan.md',
+      relPath: null,
+      updatedAt: now - 60000,
+      source: 'grokbuild'
+    },
+    {
+      kind: 'plan',
+      title: '2026-09-11-cite-rail',
+      path: 'D:\\idea_jidian_projects\\aitools\\docs\\superpowers\\plans\\2026-09-11-cite-rail.md',
+      relPath: 'docs/superpowers/plans/2026-09-11-cite-rail.md',
+      updatedAt: now - 120000,
+      source: 'grokbuild'
+    }
+  ]
+}
+
+function previewDocBody(path: string): SessionDocBody {
+  if (path.endsWith('cite-rail.md')) {
+    return {
+      path,
+      title: '2026-09-11-cite-rail',
+      relPath: 'docs/superpowers/plans/2026-09-11-cite-rail.md',
+      text: '# 跨 CLI 引用\n\n- 右侧列出本 session 写出的 Markdown\n- 弹窗预览后写入目标终端提示行\n'
+    }
+  }
+  if (path.includes('kimi')) {
+    return {
+      path,
+      title: '写状态栏文案',
+      relPath: null,
+      text: '# 状态栏\n\n用量一行：`Grok 剩 58% · 9/15 09:53 重置`。\n'
+    }
+  }
+  return {
+    path,
+    title: 'Plan',
+    relPath: null,
+    text: '# 修窗口圆角\n\n1. 先改 token\n2. 再核对毛玻璃\n'
+  }
+}
+
+function previewTurns(toolId: ToolId): SessionTurn[] {
+  if (toolId === 'opencode') return []
+  const user = toolId === 'kimi' ? '把状态栏文案写短一点' : '修窗口圆角和毛玻璃'
+  const assistant = toolId === 'kimi' ? '用量一行放在状态栏右侧，失败时保留上次结果。' : '已经把圆角和透明度改到现有 token。'
+  return [
+    { id: 't-0', role: 'user', excerpt: user, text: user },
+    { id: 't-1', role: 'assistant', excerpt: assistant, text: assistant }
+  ]
+}
+
+export async function listSessionDocs(
+  projectId: string,
+  toolId: ToolId,
+  sessionId: string
+): Promise<SessionDoc[]> {
+  if (!isTauri) return previewDocs(toolId)
+  return invoke('list_session_docs', { projectId, toolId, sessionId })
+}
+
+export async function readSessionDoc(projectId: string, path: string): Promise<SessionDocBody> {
+  if (!isTauri) return previewDocBody(path)
+  return invoke('read_session_doc', { projectId, path })
+}
+
+export async function listSessionTurns(
+  projectId: string,
+  toolId: ToolId,
+  sessionId: string
+): Promise<SessionTurn[]> {
+  if (!isTauri) return previewTurns(toolId)
+  return invoke('list_session_turns', { projectId, toolId, sessionId })
 }
 
 export async function renameSession(

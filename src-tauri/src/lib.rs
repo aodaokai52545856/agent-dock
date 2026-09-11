@@ -6,6 +6,7 @@ mod path_norm;
 mod platform;
 mod proxy;
 mod pty;
+mod session_cite;
 mod state;
 mod tools;
 mod window_chrome;
@@ -22,6 +23,7 @@ use tauri::webview::PageLoadEvent;
 use tauri::{AppHandle, Manager, State};
 use grok_accounts::GrokAccountList;
 use grok_usage::GrokUsage;
+use session_cite::{SessionDoc, SessionDocBody, SessionTurn};
 use tools::update::{ToolVersionInfo, UpgradeResult};
 use tools::{BinaryProbe, SessionRow, ToolId};
 use uuid::Uuid;
@@ -216,6 +218,41 @@ async fn grok_usage(app: AppHandle, project_id: Option<String>) -> Result<GrokUs
     tauri::async_runtime::spawn_blocking(move || crate::grok_usage::fetch(&app, project_id.as_deref()))
         .await
         .map_err(|err| format!("读取 Grok 用量失败：{err}"))
+}
+
+#[tauri::command]
+async fn list_session_docs(
+    app: AppHandle,
+    project_id: String,
+    tool_id: ToolId,
+    session_id: String,
+) -> Result<Vec<SessionDoc>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        session_cite::list_session_docs(&app, &project_id, tool_id, &session_id)
+    })
+    .await
+    .map_err(|err| format!("列出会话文档失败：{err}"))?
+}
+
+#[tauri::command]
+async fn read_session_doc(app: AppHandle, project_id: String, path: String) -> Result<SessionDocBody, String> {
+    tauri::async_runtime::spawn_blocking(move || session_cite::read_session_doc(&app, &project_id, &path))
+        .await
+        .map_err(|err| format!("读取文档失败：{err}"))?
+}
+
+#[tauri::command]
+async fn list_session_turns(
+    app: AppHandle,
+    project_id: String,
+    tool_id: ToolId,
+    session_id: String,
+) -> Result<Vec<SessionTurn>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        session_cite::list_session_turns(&app, &project_id, tool_id, &session_id)
+    })
+    .await
+    .map_err(|err| format!("读取会话片段失败：{err}"))?
 }
 
 #[tauri::command]
@@ -527,6 +564,9 @@ pub fn run() {
             delete_grok_account,
             login_grok_account,
             list_sessions,
+            list_session_docs,
+            read_session_doc,
+            list_session_turns,
             rename_session,
             delete_session,
             pty_open,

@@ -58,6 +58,37 @@ export interface SessionListResult {
   message?: string | null
 }
 
+export type SessionDocKind = 'plan' | 'spec' | 'doc'
+
+export interface SessionDoc {
+  kind: SessionDocKind | string
+  title: string
+  path: string
+  relPath?: string | null
+  updatedAt: number
+  source: string
+}
+
+export interface SessionDocBody {
+  path: string
+  title: string
+  text: string
+  relPath?: string | null
+}
+
+export interface SessionTurn {
+  id: string
+  role: 'user' | 'assistant' | string
+  excerpt: string
+  text: string
+}
+
+export interface FocusedSession {
+  toolId: ToolId
+  sessionId: string
+  title: string
+}
+
 export interface BinaryProbe {
   found: boolean
   path?: string | null

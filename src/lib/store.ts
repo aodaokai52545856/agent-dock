@@ -9,6 +9,7 @@ import type {
   BridgePipeline,
   CodexProbe,
   CodexThread,
+  FocusedSession,
   LivePtyInfo,
   Project,
   ProjectDraft,
@@ -74,6 +75,7 @@ export const store = reactive({
   probes: null as ToolProbeMap | null,
   live: [] as LivePtyInfo[],
   activePtyId: '' as string,
+  focusedSession: null as FocusedSession | null,
   toast: '' as string,
   toastTimer: 0,
   grokAuthRev: 0,
@@ -225,6 +227,11 @@ export async function boot() {
       }
     ]
     store.sessionStatus = 'ready'
+    store.focusedSession = {
+      toolId: 'grokbuild',
+      sessionId: 's1',
+      title: '修窗口圆角和毛玻璃'
+    }
     store.sessionToolFilter = parseSessionToolFilter(localStorage.getItem(FILTER_STORAGE_KEY))
     store.settings.sessionToolFilter = store.sessionToolFilter
     applyUiOpacity(store.settings.uiOpacity)
@@ -353,8 +360,13 @@ function applyToolScan(toolId: ToolId, result: Awaited<ReturnType<typeof api.lis
   store.sessions = store.sessions.filter((item) => item.toolId !== toolId)
 }
 
+export function focusSession(session: FocusedSession | null) {
+  store.focusedSession = session
+}
+
 export async function selectProject(id: string) {
   store.selectedProjectId = id
+  store.focusedSession = null
   ensurePipeline(id)
   await refreshSessions()
 }
@@ -418,6 +430,9 @@ export async function renameCurrentSession(session: SessionRow, title: string) {
 export async function deleteCurrentSession(session: SessionRow) {
   if (!store.selectedProjectId) return
   await api.deleteSession(store.selectedProjectId, session.toolId, session.id)
+  if (store.focusedSession?.sessionId === session.id && store.focusedSession.toolId === session.toolId) {
+    store.focusedSession = null
+  }
   await refreshSessions()
   showToast('已删除会话')
 }

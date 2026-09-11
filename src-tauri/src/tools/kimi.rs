@@ -113,7 +113,7 @@ pub fn delete_session(session_id: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn find_state(session_id: &str) -> Option<PathBuf> {
+pub fn find_session_dir(session_id: &str) -> Option<PathBuf> {
     let index = kimi_home().join("session_index.jsonl");
     let text = fs::read_to_string(index).ok()?;
     for line in text.lines() {
@@ -127,13 +127,17 @@ fn find_state(session_id: &str) -> Option<PathBuf> {
             continue;
         }
         if let Some(dir) = first_string(&value, &["sessionDir", "session_dir"]) {
-            let path = PathBuf::from(dir).join("state.json");
-            if path.is_file() {
-                return Some(path);
-            }
+            return Some(PathBuf::from(dir));
         }
+        return Some(kimi_home().join("sessions").join(id));
     }
     None
+}
+
+fn find_state(session_id: &str) -> Option<PathBuf> {
+    let dir = find_session_dir(session_id)?;
+    let path = dir.join("state.json");
+    path.is_file().then_some(path)
 }
 
 fn read_state(session_dir: &Path, id: &str, work_dir: &str, project_cwd: &str) -> Option<SessionRow> {
