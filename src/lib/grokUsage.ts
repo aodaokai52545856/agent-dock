@@ -72,3 +72,5 @@ export function formatUsageTooltip(usage: GrokUsage) {
   if (usage.message) lines.push(usage.message)
   return lines.join('\n')
 }
+
+

@@ -23,6 +23,8 @@ const sample = (over: Partial<GrokUsage> = {}): GrokUsage => ({
   onDemandUsed: 0,
   onDemandCap: 0,
   grokBuildUsedPercent: 80,
+  usedCredits: null,
+  creditLimit: null,
   fetchedAt: '2026-09-11T06:00:00.000Z',
   message: null,
   ...over
@@ -64,3 +66,4 @@ test('failed usage stays explicit', () => {
   assert.equal(formatUsageLine(sample({ ok: false, message: '请重新登录' })), 'Grok 用量失败')
   assert.equal(formatUsageTooltip(sample({ ok: false, message: '请重新登录' })), '请重新登录')
 })
+

@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core'
+import { previewSpend } from './grokSpend'
 import type {
   AppSettings,
   AppState,
@@ -7,6 +8,7 @@ import type {
   CursorDevResult,
   GitSnapshot,
   GrokAccountList,
+  GrokSpend,
   GrokUsage,
   LivePtyInfo,
   ProjectDraft,
@@ -300,6 +302,8 @@ const previewUsage = (): GrokUsage => {
     onDemandUsed: 0,
     onDemandCap: 0,
     grokBuildUsedPercent: 42,
+    usedCredits: 4277,
+    creditLimit: 60000,
     fetchedAt: new Date().toISOString(),
     message: null
   }
@@ -308,6 +312,11 @@ const previewUsage = (): GrokUsage => {
 export async function grokUsage(projectId?: string | null): Promise<GrokUsage> {
   if (!isTauri) return previewUsage()
   return invoke('grok_usage', { projectId: projectId || null })
+}
+
+export async function grokSpend(start?: number | null, end?: number | null): Promise<GrokSpend> {
+  if (!isTauri) return previewSpend(start ?? undefined, end ?? undefined)
+  return invoke('grok_spend', { start: start ?? null, end: end ?? null })
 }
 
 export async function codexProbe(projectId: string): Promise<CodexProbe> {

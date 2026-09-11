@@ -8,10 +8,12 @@ import {
   shouldShowGrokUsage,
   usageTone
 } from '../lib/grokUsage'
+import SpendPanel from './SpendPanel.vue'
+import { SPEND_PANEL_WIDTH, formatSpendLine, resolveSpendRange, type SpendPreset } from '../lib/grokSpend'
 import { groupLiveByProject, toolTint } from '../lib/livePty'
 import { currentPipeline, jumpToLive, selectedProject, store } from '../lib/store'
 import { GATE_LABEL, toolLabel } from '../lib/types'
-import type { GrokUsage } from '../lib/types'
+import type { GrokSpend, GrokUsage } from '../lib/types'
 
 defineProps<{
   docsOpen?: boolean
@@ -25,8 +27,11 @@ defineEmits<{
 
 const usage = ref<GrokUsage | null>(null)
 const usageLoading = ref(false)
+const spend = ref<GrokSpend | null>(null)
+const spendLoading = ref(false)
 let usageTimer = 0
 let usageSeq = 0
+let spendSeq = 0
 
 const showGrokUsage = computed(() =>
   shouldShowGrokUsage(store.sessionToolFilter, store.selectedTool, store.appMode)
@@ -43,10 +48,19 @@ const usageTitle = computed(() => {
 })
 
 const usageClass = computed(() => usageTone(usage.value?.ok ? usage.value.remainingPercent : null))
+const spendText = computed(() => formatSpendLine(spend.value, spendLoading.value))
+const initialRange = resolveSpendRange('today')
+const spendPreset = ref<SpendPreset>('today')
+const spendStart = ref(initialRange.start)
+const spendEnd = ref(initialRange.end)
+const spendFollowEnd = ref(true)
 
 const liveOpen = ref(false)
 const liveBtn = ref<HTMLElement | null>(null)
 const liveMenuStyle = ref<Record<string, string>>({})
+const spendOpen = ref(false)
+const spendBtn = ref<HTMLElement | null>(null)
+const spendMenuStyle = ref<Record<string, string>>({})
 const liveCount = computed(() => store.live.filter((item) => item.alive !== false).length)
 const liveGroups = computed(() => groupLiveByProject(store.live, store.projects))
 const liveLabel = computed(() => {
@@ -57,13 +71,11 @@ const liveLabel = computed(() => {
   return `${n} 个终端`
 })
 
-function placeLiveMenu() {
-  const el = liveBtn.value
-  if (!el) return
+function placeMenu(el: HTMLElement | null, width: number): Record<string, string> {
+  if (!el) return {}
   const rect = el.getBoundingClientRect()
-  const width = 300
   const left = Math.min(Math.max(8, rect.left), window.innerWidth - width - 8)
-  liveMenuStyle.value = {
+  return {
     position: 'fixed',
     left: `${left}px`,
     bottom: `${Math.max(8, window.innerHeight - rect.top + 6)}px`,
@@ -72,14 +84,57 @@ function placeLiveMenu() {
   }
 }
 
+function placeLiveMenu() {
+  liveMenuStyle.value = placeMenu(liveBtn.value, 300)
+}
+
 function closeLiveMenu() {
   liveOpen.value = false
 }
 
+function closeSpendMenu() {
+  spendOpen.value = false
+}
+
+function placeSpendMenu() {
+  const width = Math.min(SPEND_PANEL_WIDTH, window.innerWidth - 16)
+  const left = Math.max(8, Math.round((window.innerWidth - width) / 2))
+  spendMenuStyle.value = {
+    position: 'fixed',
+    left: `${left}px`,
+    bottom: '36px',
+    width: `${width}px`,
+    zIndex: '50'
+  }
+}
+
+function onResize() {
+  closeLiveMenu()
+  if (spendOpen.value) placeSpendMenu()
+}
+
 function toggleLiveMenu() {
   if (!liveCount.value) return
+  closeSpendMenu()
   liveOpen.value = !liveOpen.value
   if (liveOpen.value) placeLiveMenu()
+}
+
+function toggleSpendMenu() {
+  closeLiveMenu()
+  spendOpen.value = !spendOpen.value
+  if (spendOpen.value) {
+    placeSpendMenu()
+    void loadSpend()
+  }
+}
+
+function onSpendRange(next: { preset: SpendPreset; start: number; end: number; followEnd: boolean }) {
+  spendPreset.value = next.preset
+  spendStart.value = next.start
+  spendEnd.value = next.end
+  spendFollowEnd.value = next.followEnd
+  void loadSpend()
 }
 
 async function onJump(ptyId: string) {
@@ -89,10 +144,14 @@ async function onJump(ptyId: string) {
 
 function onDocClick() {
   closeLiveMenu()
+  closeSpendMenu()
 }
 
 function onKey(event: KeyboardEvent) {
-  if (event.key === 'Escape') closeLiveMenu()
+  if (event.key === 'Escape') {
+    closeLiveMenu()
+    closeSpendMenu()
+  }
 }
 
 async function loadUsage() {
@@ -117,12 +176,50 @@ async function loadUsage() {
         onDemandUsed: null,
         onDemandCap: null,
         grokBuildUsedPercent: null,
+        usedCredits: null,
+        creditLimit: null,
         fetchedAt: new Date().toISOString(),
         message: err instanceof Error ? err.message : '读取 Grok 用量失败，点击重试'
       }
     }
   } finally {
     if (seq === usageSeq) usageLoading.value = false
+  }
+}
+
+async function loadSpend(force = false) {
+  if (!showGrokUsage.value) return
+  const seq = ++spendSeq
+  if (spendFollowEnd.value) spendEnd.value = Math.floor(Date.now() / 1000)
+  if (!spend.value || force) spendLoading.value = true
+  try {
+    const next = await api.grokSpend(spendStart.value, spendEnd.value)
+    if (seq !== spendSeq) return
+    if (next.ok || !spend.value) spend.value = next
+  } catch (err) {
+    if (seq !== spendSeq) return
+    if (!spend.value) {
+      spend.value = {
+        ok: false,
+        totalTokens: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheCreationTokens: 0,
+        cacheHitPercent: 0,
+        turnCount: 0,
+        costUsd: 0,
+        granularity: 'hour',
+        rangeStart: spendStart.value,
+        rangeEnd: spendEnd.value,
+        points: [],
+        scannedFiles: 0,
+        fetchedAt: new Date().toISOString(),
+        message: err instanceof Error ? err.message : '读取 token 消耗失败'
+      }
+    }
+  } finally {
+    if (seq === spendSeq) spendLoading.value = false
   }
 }
 
@@ -141,11 +238,17 @@ watch(
     if (!show) {
       usage.value = null
       usageLoading.value = false
+      spend.value = null
+      spendLoading.value = false
+      spendSeq += 1
+      closeSpendMenu()
       return
     }
     void loadUsage()
+    void loadSpend()
     usageTimer = window.setInterval(() => {
       void loadUsage()
+      void loadSpend()
     }, GROK_USAGE_INTERVAL_MS)
   },
   { immediate: true }
@@ -154,15 +257,16 @@ watch(
 onMounted(() => {
   window.addEventListener('click', onDocClick)
   window.addEventListener('keydown', onKey)
-  window.addEventListener('resize', closeLiveMenu)
+  window.addEventListener('resize', onResize)
 })
 
 onUnmounted(() => {
   usageSeq += 1
+  spendSeq += 1
   stopUsageTimer()
   window.removeEventListener('click', onDocClick)
   window.removeEventListener('keydown', onKey)
-  window.removeEventListener('resize', closeLiveMenu)
+  window.removeEventListener('resize', onResize)
 })
 
 watch(liveCount, (n) => {
@@ -233,6 +337,37 @@ watch(liveCount, (n) => {
     >
       {{ usageText }}
     </button>
+    <div v-if="showGrokUsage" class="live-wrap">
+      <button
+        ref="spendBtn"
+        type="button"
+        class="link live-btn"
+        :class="{ 'is-open': spendOpen }"
+        :aria-expanded="spendOpen"
+        aria-haspopup="dialog"
+        title="查看本机 Grok token 消耗"
+        @click.stop="toggleSpendMenu"
+      >
+        {{ spendText }}
+        <span class="live-caret" aria-hidden="true">{{ spendOpen ? '▴' : '▾' }}</span>
+      </button>
+      <Teleport to="body">
+        <SpendPanel
+          v-if="spendOpen"
+          class="ad-menu spend-panel"
+          :style="spendMenuStyle"
+          :spend="spend"
+          :loading="spendLoading"
+          :preset="spendPreset"
+          :start="spendStart"
+          :end="spendEnd"
+          :follow-end="spendFollowEnd"
+          @click.stop
+          @apply-range="onSpendRange"
+          @refresh="loadSpend(true)"
+        />
+      </Teleport>
+    </div>
     <span class="spacer" />
     <button
       v-if="store.appMode === 'console'"
@@ -373,5 +508,10 @@ watch(liveCount, (n) => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.spend-panel {
+  max-height: min(92vh, 760px);
+  overflow: auto;
 }
 </style>

@@ -23,6 +23,8 @@ pub struct GrokUsage {
     pub on_demand_used: Option<f64>,
     pub on_demand_cap: Option<f64>,
     pub grok_build_used_percent: Option<f64>,
+    pub used_credits: Option<f64>,
+    pub credit_limit: Option<f64>,
     pub fetched_at: String,
     pub message: Option<String>,
 }
@@ -39,6 +41,8 @@ impl GrokUsage {
             on_demand_used: None,
             on_demand_cap: None,
             grok_build_used_percent: None,
+            used_credits: None,
+            credit_limit: None,
             fetched_at: Utc::now().to_rfc3339(),
             message: Some(message.into()),
         }
@@ -227,6 +231,8 @@ fn parse_billing(body: &str) -> Result<GrokUsage, String> {
         on_demand_used: money_field(config, "onDemandUsed"),
         on_demand_cap: money_field(config, "onDemandCap"),
         grok_build_used_percent: product_used(config, "GrokBuild"),
+        used_credits: money_field(config, "used"),
+        credit_limit: money_field(config, "monthlyLimit"),
         fetched_at: Utc::now().to_rfc3339(),
         message: None,
     })
@@ -317,7 +323,23 @@ mod tests {
         assert_eq!(usage.period_label.as_deref(), Some("本周"));
         assert_eq!(usage.prepaid_balance, Some(12.5));
         assert_eq!(usage.grok_build_used_percent, Some(80.0));
+        assert_eq!(usage.used_credits, None);
+        assert_eq!(usage.credit_limit, None);
         assert_eq!(usage.resets_at.as_deref(), Some("2026-08-15T01:53:09.930537+00:00"));
+    }
+
+    #[test]
+    fn parse_optional_credit_counts() {
+        let body = r#"{
+            "config":{
+                "creditUsagePercent":7.1,
+                "used":{"val":4277},
+                "monthlyLimit":{"val":60000}
+            }
+        }"#;
+        let usage = parse_billing(body).unwrap();
+        assert_eq!(usage.used_credits, Some(4277.0));
+        assert_eq!(usage.credit_limit, Some(60000.0));
     }
 
     #[test]
