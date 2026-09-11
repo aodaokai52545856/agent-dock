@@ -1,0 +1,28 @@
+[package]
+name = "agent-dock"
+version = "0.1.0"
+description = "Launch and resume local AI CLI agents"
+authors = ["aitools"]
+edition = "2021"
+
+[lib]
+name = "agent_dock_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+dirs = "6"
+portable-pty = "0.8"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri = { version = "2", features = ["image-png"] }
+window-vibrancy = "0.6"
+tauri-plugin-dialog = "2"
+uuid = { version = "1", features = ["v4"] }
+which = "7"
+
+[dev-dependencies]
+tempfile = "3"

@@ -1,0 +1,63 @@
+:root {
+  --ad-ui-opacity: 40;
+  --ad-fill: calc(var(--ad-ui-opacity) / 100);
+  --ad-veil: calc(0.86 - var(--ad-fill) * 0.7);
+
+  --ad-ink: #0d0d0d;
+  --ad-editor: #0d0d0d;
+  --ad-sidebar: rgb(13 13 13 / var(--ad-veil));
+  --ad-harbor: #141414;
+  --ad-bg: #0d0d0d;
+  --ad-raised: #1c1c1c;
+  --ad-hover: #212121;
+  --ad-selected: #2a2a2a;
+  --ad-panel: var(--ad-raised);
+  --ad-elevated: var(--ad-raised);
+  --ad-text: #ececec;
+  --ad-muted: #8a8a8a;
+  --ad-faint: #5c5c5c;
+  --ad-border: rgba(255, 255, 255, 0.06);
+  --ad-accent: #ececec;
+  --ad-accent-hover: #ffffff;
+  --ad-accent-active: #d4d4d4;
+  --ad-filament: #ececec;
+  --ad-success: #3d9a6a;
+  --ad-warning: #c9a227;
+  --ad-error: #e24b4a;
+  --ad-opencode: #6ee7b7;
+  --ad-grok: #a78bfa;
+  --ad-kimi: #fb923c;
+
+  --ad-glass: var(--ad-hover);
+  --ad-glass-strong: var(--ad-raised);
+  --ad-glass-soft: rgba(255, 255, 255, 0.04);
+  --ad-glass-border: var(--ad-border);
+  --ad-glass-sheen: transparent;
+  --ad-mask: rgba(0, 0, 0, 0.56);
+  --ad-blur: 0px;
+  --ad-blur-strong: 0px;
+
+  --ad-display: "Segoe UI Variable Display", "Segoe UI", "Microsoft YaHei UI", "PingFang SC", sans-serif;
+  --ad-sans: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", "PingFang SC", "Hiragino Sans GB", -apple-system, BlinkMacSystemFont, sans-serif;
+  --ad-mono: "Cascadia Mono", "Cascadia Code", "SF Mono", Menlo, Monaco, Consolas, monospace;
+
+  --ad-radius-control: 8px;
+  --ad-radius-card: 12px;
+  --ad-radius-dialog: 16px;
+  --ad-radius-window: 10px;
+  --ad-radius-pill: 999px;
+  --ad-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  --ad-shadow-dialog: 0 16px 48px rgba(0, 0, 0, 0.5);
+  --ad-shadow-menu: 0 12px 32px rgba(0, 0, 0, 0.48);
+  --ad-transition: 160ms ease;
+  --ad-pane-move: 220ms cubic-bezier(0.22, 1, 0.36, 1);
+  --ad-pane-fade: 160ms ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --ad-transition: 0ms;
+    --ad-pane-move: 0ms;
+    --ad-pane-fade: 0ms;
+  }
+}
