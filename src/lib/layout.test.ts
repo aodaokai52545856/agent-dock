@@ -4,14 +4,19 @@ import {
   DOCRAIL_MIN,
   LAYOUT_VERSION,
   SIDEBAR_MIN,
+  beginWindowMove,
   docRailPaneWidth,
+  endWindowMove,
+  isLayoutBusy,
   layout,
   migrateStoredLayout,
   resizeDocRail,
   resizeSidebar,
   sidebarPaneWidth,
+  clampOverlayBox,
   toggleDocRail,
-  toggleProjects
+  toggleProjects,
+  windowMoving
 } from './layout.ts'
 
 function test(name: string, fn: () => void) {
@@ -27,6 +32,19 @@ function restore() {
 
 test('fresh layout keeps the console full width by collapsing the doc rail', () => {
   assert.equal(snapshot.docRailCollapsed, true)
+})
+
+test('window move is layout-busy until it is released', () => {
+  try {
+    assert.equal(windowMoving.value, false)
+    beginWindowMove()
+    assert.equal(windowMoving.value, true)
+    assert.equal(isLayoutBusy(), true)
+    endWindowMove()
+    assert.equal(windowMoving.value, false)
+  } finally {
+    endWindowMove()
+  }
 })
 
 test('collapsed doc rail takes no layout width so the PTY is not squeezed', () => {
@@ -48,6 +66,24 @@ test('expanded doc rail reports its own width, not the sidebar collapsed strip',
   } finally {
     restore()
   }
+})
+
+test('session menu stays inside the sidebar so a child webview cannot cover it', () => {
+  const box = clampOverlayBox(
+    { x: 250, y: 400, width: 228, height: 226 },
+    { windowWidth: 1280, windowHeight: 840, containRight: 280 }
+  )
+  assert.equal(box.x + 228, 280)
+  assert.ok(box.x < 250)
+  assert.equal(box.y, 400)
+})
+
+test('session menu does not overflow the window bottom', () => {
+  const box = clampOverlayBox(
+    { x: 40, y: 800, width: 228, height: 226 },
+    { windowWidth: 1280, windowHeight: 840 }
+  )
+  assert.equal(box.y + 226, 832)
 })
 
 test('workspace width is only the dragged size, never a collapsed strip', () => {

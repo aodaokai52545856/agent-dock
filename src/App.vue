@@ -12,10 +12,14 @@ import SettingsDrawer from './components/SettingsDrawer.vue'
 import BridgePane from './components/BridgePane.vue'
 import BridgeSideBar from './components/BridgeSideBar.vue'
 import SideBar from './components/SideBar.vue'
+import CcswitchDialog from './components/CcswitchDialog.vue'
 import VersionDrawer from './components/VersionDrawer.vue'
+import DeepseekKeyDialog from './components/DeepseekKeyDialog.vue'
 import GrokAccountDialog from './components/GrokAccountDialog.vue'
 import StatusBar from './components/StatusBar.vue'
+import WindowResizeFrame from './components/WindowResizeFrame.vue'
 import TitleBar from './components/TitleBar.vue'
+import DshWebPane from './components/DshWebPane.vue'
 import TerminalPane from './components/TerminalPane.vue'
 import * as api from './lib/api'
 import {
@@ -28,8 +32,9 @@ import {
   resizeSidebar,
   toggleDocRail
 } from './lib/layout'
-import { liveOfProject } from './lib/livePty'
+import { isDshWeb, liveOfProject } from './lib/livePty'
 import {
+  activeLive,
   boot,
   deleteCurrentSession,
   dropProject,
@@ -46,6 +51,7 @@ import {
   saveProject,
   selectProject,
   selectedProject,
+  setSessionToolFilter,
   showToast,
   store,
   watchPendingSession
@@ -58,7 +64,10 @@ const projectOpen = ref(false)
 const editing = ref(false)
 const settingsOpen = ref(false)
 const versionOpen = ref(false)
+const ccswitchOpen = ref(false)
 const accountOpen = ref(false)
+const deepseekOpen = ref(false)
+const ccswitchBusy = ref(false)
 const confirmOpen = ref(false)
 const confirmMode = ref<'remove' | 'close' | 'delete' | 'close-all'>('remove')
 const closingProjectId = ref('')
@@ -67,6 +76,11 @@ const closingPtyId = ref('')
 const deletingSession = ref<{ sessionId: string; toolId: ToolId; title: string } | null>(null)
 const renamingId = ref('')
 const renameDraft = ref('')
+
+watch(renamingId, (id, prev) => {
+  store.renamingSessionId = id
+  if (prev && !id) void refreshSessions({ silent: true })
+})
 const projectDialog = ref<{ stopSave: () => void } | null>(null)
 const settingsDialog = ref<{ stopSave: () => void } | null>(null)
 const termRef = ref<{ dispose: (id: string) => void; fitActive: (force?: boolean) => void } | null>(null)
@@ -303,13 +317,17 @@ async function onConfirm() {
 function startRename(payload: { sessionId: string; toolId: ToolId }) {
   const session = store.sessions.find((item) => item.id === payload.sessionId && item.toolId === payload.toolId)
   renamingId.value = payload.sessionId
+  store.renamingSessionId = payload.sessionId
   renameDraft.value = session?.title ?? ''
 }
 
-async function commitRename(id: string) {
-  const session = store.sessions.find((item) => item.id === id)
+async function commitRename(payload: { sessionId: string; toolId: ToolId }) {
+  const session = store.sessions.find(
+    (item) => item.id === payload.sessionId && item.toolId === payload.toolId
+  )
   const title = renameDraft.value.trim()
   renamingId.value = ''
+  store.renamingSessionId = ''
   if (!session || !title || title === session.title) return
   try {
     await renameCurrentSession(session, title)
@@ -337,6 +355,9 @@ async function openSession(sessionId?: string, toolId?: ToolId) {
     return
   }
   const tool = toolId ?? store.selectedTool
+  if (store.sessionToolFilter !== tool) {
+    await setSessionToolFilter(tool)
+  }
   const session = sessionId ? store.sessions.find((item) => item.id === sessionId && item.toolId === tool) : undefined
   const target = resolveOpenTarget(store.live, {
     projectId: project.id,
@@ -361,7 +382,7 @@ async function openSession(sessionId?: string, toolId?: ToolId) {
     }
     return
   }
-  paneLoadingText.value = '正在打开会话'
+  paneLoadingText.value = tool === 'dsh' ? '正在打开 DeepSeek Web' : '正在打开会话'
   paneLoading.value = true
   try {
     const opened = await api.ptyOpen({
@@ -381,7 +402,9 @@ async function openSession(sessionId?: string, toolId?: ToolId) {
       sessionId: opened.sessionId ?? target.sessionId,
       title: opened.title,
       alive: true,
-      openedAt: opened.openedAt ?? Date.now()
+      openedAt: opened.openedAt ?? Date.now(),
+      kind: opened.kind ?? (tool === 'dsh' ? 'web' : 'pty'),
+      url: opened.url ?? null
     })
     if (!target.sessionId) watchPendingSession(opened.ptyId)
     await finishPaneReady()
@@ -390,6 +413,12 @@ async function openSession(sessionId?: string, toolId?: ToolId) {
   } finally {
     paneLoading.value = false
   }
+}
+
+function onAppContextMenu(event: MouseEvent) {
+  const el = event.target as HTMLElement | null
+  if (el?.closest('input, textarea, [contenteditable="true"]')) return
+  event.preventDefault()
 }
 
 async function onEmptyStart(toolId?: ToolId) {
@@ -427,6 +456,35 @@ async function onSaveSettings(settings: typeof store.settings) {
   } finally {
     settingsDialog.value?.stopSave()
   }
+}
+
+async function onCcswitchOpen() {
+  if (ccswitchBusy.value) return
+  ccswitchBusy.value = true
+  try {
+    if (!api.isTauri) {
+      showToast('请在桌面端打开 CC Switch')
+      ccswitchOpen.value = true
+      return
+    }
+    const probe = await api.probeCcswitch()
+    if (probe.found && probe.path) {
+      await api.launchCcswitch(probe.path)
+      showToast('已打开 CC Switch')
+      return
+    }
+    showToast('未找到 CC Switch，请先安装或选择程序')
+    ccswitchOpen.value = true
+  } catch (err) {
+    showToast(err instanceof Error ? err.message : String(err))
+    ccswitchOpen.value = true
+  } finally {
+    ccswitchBusy.value = false
+  }
+}
+
+function onCcswitchInstall() {
+  ccswitchOpen.value = true
 }
 
 async function onVersionsChanged() {
@@ -478,6 +536,14 @@ const confirmCopy = () => {
       action: '全部关闭'
     }
   }
+  const closing = store.live.find((item) => item.ptyId === closingPtyId.value)
+  if (isDshWeb(closing)) {
+    return {
+      title: '关闭会话',
+      body: '关闭后 DeepSeek Web 会结束。对话还在磁盘上，可以再点会话打开。',
+      action: '关闭'
+    }
+  }
   return {
     title: '关闭会话',
     body: '关闭后这个终端会结束。对话还在磁盘上，可以再点会话打开。',
@@ -487,8 +553,16 @@ const confirmCopy = () => {
 </script>
 
 <template>
-  <div class="app">
-    <TitleBar @settings="versionOpen = true" @accounts="accountOpen = true" />
+  <div class="app" @contextmenu="onAppContextMenu">
+    <WindowResizeFrame />
+    <TitleBar
+      @settings="settingsOpen = true"
+      @versions="versionOpen = true"
+      @accounts="accountOpen = true"
+      @deepseek="deepseekOpen = true"
+      @ccswitch-open="onCcswitchOpen"
+      @ccswitch-install="onCcswitchInstall"
+    />
     <div class="workspaces">
       <div v-show="store.appMode === 'console'" ref="consoleWs" class="workspace">
         <SideBar
@@ -502,7 +576,7 @@ const confirmCopy = () => {
           @create="newSessionOpen = true"
           @open="(payload) => openSession(payload.sessionId, payload.toolId)"
           @retry="refreshSessions"
-          @settings="versionOpen = true"
+          @settings="settingsOpen = true"
           @start-rename="startRename"
           @rename="commitRename"
           @close="(payload) => askCloseSession(payload.sessionId, payload.toolId)"
@@ -521,12 +595,12 @@ const confirmCopy = () => {
           <LaunchStrip
             :loading="paneLoading"
             :loading-text="paneLoadingText"
-            :docs-open="!layout.docRailCollapsed"
             @close="askClose"
-            @toggle-docs="toggleDocRail"
           />
           <div class="term-stack">
+            <DshWebPane v-if="isDshWeb(activeLive)" :url="activeLive?.url || ''" />
             <TerminalPane
+              v-else
               ref="termRef"
               :loading="paneLoading"
               :loading-text="paneLoadingText"
@@ -600,11 +674,17 @@ const confirmCopy = () => {
       @close="versionOpen = false"
       @changed="onVersionsChanged"
     />
+    <CcswitchDialog
+      :open="ccswitchOpen"
+      @close="ccswitchOpen = false"
+      @launched="showToast('已打开 CC Switch')"
+    />
     <GrokAccountDialog
       :open="accountOpen"
       @close="accountOpen = false"
       @switched="onGrokSwitched"
     />
+    <DeepseekKeyDialog :open="deepseekOpen" @close="deepseekOpen = false" />
     <SettingsDrawer
       ref="settingsDialog"
       :open="settingsOpen"

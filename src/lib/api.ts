@@ -3,8 +3,13 @@ import { previewSpend } from './grokSpend'
 import type {
   AppSettings,
   AppState,
+  CcswitchInstallResult,
+  CcswitchLatest,
+  CcswitchProbe,
   CodexProbe,
   CodexThreadList,
+  DshKeyBundle,
+  DshKeyStatus,
   CursorDevResult,
   GitSnapshot,
   GrokAccountList,
@@ -52,9 +57,51 @@ export async function folderLabel(path: string): Promise<string> {
   return invoke('folder_label', { path })
 }
 
+export async function clipboardWrite(text: string): Promise<void> {
+  if (!text) return
+  if (isTauri) {
+    try {
+      await invoke('clipboard_write', { text })
+      return
+    } catch {
+      /* fall through to the web clipboard */
+    }
+  }
+  if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text)
+    } catch {
+      /* copy is best-effort */
+    }
+  }
+}
+
+export async function clipboardRead(): Promise<string> {
+  if (isTauri) {
+    try {
+      return await invoke('clipboard_read')
+    } catch {
+      /* fall through to the web clipboard */
+    }
+  }
+  if (typeof navigator !== 'undefined' && navigator.clipboard?.readText) {
+    try {
+      return await navigator.clipboard.readText()
+    } catch {
+      return ''
+    }
+  }
+  return ''
+}
+
 export async function revealMainWindow(): Promise<void> {
   if (!isTauri) return
   await invoke('reveal_main_window')
+}
+
+export async function setWindowFrost(frost: number): Promise<void> {
+  if (!isTauri) return
+  await invoke('set_window_frost', { frost })
 }
 
 export async function probeTools(): Promise<ToolProbeMap> {
@@ -197,6 +244,42 @@ export async function ptyKill(ptyId: string): Promise<void> {
   return invoke('pty_kill', { ptyId })
 }
 
+export type DshEmbedBounds = {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+export async function dshEmbedOpen(
+  url: string,
+  bounds: DshEmbedBounds,
+  themeScript?: string
+): Promise<void> {
+  if (!isTauri) return
+  return invoke('dsh_embed_open', { url, bounds, themeScript })
+}
+
+export async function dshEmbedSetBounds(bounds: DshEmbedBounds): Promise<void> {
+  if (!isTauri) return
+  return invoke('dsh_embed_set_bounds', { bounds })
+}
+
+export async function dshEmbedSetVisible(visible: boolean): Promise<void> {
+  if (!isTauri) return
+  return invoke('dsh_embed_set_visible', { visible })
+}
+
+export async function dshEmbedClose(): Promise<void> {
+  if (!isTauri) return
+  return invoke('dsh_embed_close')
+}
+
+export async function dshEmbedApplyTheme(script: string): Promise<void> {
+  if (!isTauri) return
+  return invoke('dsh_embed_apply_theme', { script })
+}
+
 export async function ptyBindSession(
   ptyId: string,
   sessionId: string,
@@ -238,22 +321,131 @@ function detectBrowserOs(): 'macos' | 'windows' | 'linux' {
   return 'linux'
 }
 
-export async function listToolVersions(): Promise<ToolVersionInfo[]> {
+export async function listToolVersions(proxyUrl?: string, toolId?: ToolId): Promise<ToolVersionInfo[]> {
   if (!isTauri) {
-    return [
-      { toolId: 'opencode', name: 'OpenCode', found: false, localVersion: '—', latestVersion: '—', compare: '无法对比' },
-      { toolId: 'grokbuild', name: 'Grok Build', found: false, localVersion: '—', latestVersion: '—', compare: '无法对比' },
-      { toolId: 'kimi', name: 'Kimi', found: false, localVersion: '—', latestVersion: '—', compare: '无法对比' }
+    const rows: ToolVersionInfo[] = [
+      { toolId: 'opencode', name: 'OpenCode', found: true, path: 'C:\\Users\\me\\AppData\\Roaming\\npm\\opencode.cmd', localVersion: '1.18.30', latestVersion: '1.18.30', compare: '已是最新' },
+      { toolId: 'grokbuild', name: 'Grok Build', found: true, path: 'C:\\Users\\me\\.grok\\bin\\grok.exe', localVersion: '1.0.25', latestVersion: '1.0.25', compare: '已是最新' },
+      { toolId: 'kimi', name: 'Kimi', found: true, path: 'C:\\Users\\me\\.kimi-code\\bin\\kimi.exe', localVersion: '0.34.0', latestVersion: '0.42.0', compare: '可更新' },
+      { toolId: 'claude', name: 'Claude Code', found: true, path: 'C:\\Users\\me\\.local\\bin\\claude.exe', localVersion: '2.1.269', latestVersion: '2.1.269', compare: '已是最新' },
+      { toolId: 'pi', name: 'Pi', found: false, localVersion: '未安装', latestVersion: '0.85.1', compare: '未安装' },
+      { toolId: 'dsh', name: 'DeepSeek Harness', found: false, localVersion: '未安装', latestVersion: '0.1.0', compare: '未安装' }
     ]
+    return toolId ? rows.filter((row) => row.toolId === toolId) : rows
   }
-  return invoke('list_tool_versions')
+  return invoke('list_tool_versions', { proxyUrl: proxyUrl ?? null, toolId: toolId ?? null })
 }
 
-export async function upgradeTool(toolId: ToolId): Promise<UpgradeResult> {
+export async function upgradeTool(toolId: ToolId, proxyUrl?: string): Promise<UpgradeResult> {
   if (!isTauri) {
     return { ok: false, log: '请在桌面端升级 CLI。', localVersion: '—' }
   }
-  return invoke('upgrade_tool', { toolId })
+  return invoke('upgrade_tool', { toolId, proxyUrl: proxyUrl ?? null })
+}
+
+export async function uninstallTool(toolId: ToolId): Promise<UpgradeResult> {
+  if (!isTauri) {
+    return { ok: false, log: '请在桌面端卸载 CLI。', localVersion: '—' }
+  }
+  return invoke('uninstall_tool', { toolId })
+}
+
+export async function probeCcswitch(): Promise<CcswitchProbe> {
+  if (!isTauri) {
+    return { found: false, path: null, downloadDir: '', installDir: '' }
+  }
+  return invoke('probe_ccswitch')
+}
+
+export async function ccswitchLatest(proxyUrl?: string): Promise<CcswitchLatest> {
+  if (!isTauri) {
+    return {
+      version: '3.20.3',
+      tag: 'v3.20.3',
+      assetName: 'CC-Switch-v3.20.3-Windows-Portable.zip',
+      size: 13_658_645,
+      url: 'https://github.com/farion1231/cc-switch/releases/latest',
+      homepage: 'https://ccswitch.io',
+      releasesUrl: 'https://github.com/farion1231/cc-switch/releases'
+    }
+  }
+  return invoke('ccswitch_latest', { proxyUrl: proxyUrl ?? null })
+}
+
+export async function installCcswitch(payload: {
+  downloadDir: string
+  installDir: string
+  proxyUrl?: string
+}): Promise<CcswitchInstallResult> {
+  if (!isTauri) {
+    return { ok: false, path: '', version: '', log: '请在桌面端下载安装 CC Switch。' }
+  }
+  return invoke('install_ccswitch', {
+    downloadDir: payload.downloadDir,
+    installDir: payload.installDir,
+    proxyUrl: payload.proxyUrl ?? null
+  })
+}
+
+export async function launchCcswitch(path?: string | null): Promise<void> {
+  if (!isTauri) return
+  return invoke('launch_ccswitch', { path: path ?? null })
+}
+
+export async function rememberCcswitchPath(path: string): Promise<AppState> {
+  return invoke('remember_ccswitch_path', { path })
+}
+
+const emptyDshBundle = (): DshKeyBundle => ({
+  status: {
+    configured: false,
+    writable: true,
+    source: 'none',
+    masked: '',
+    dshHome: '~/.dsh',
+    credentialsPath: '~/.dsh/.credentials.yaml',
+    envBlocks: false
+  },
+  keys: isTauri
+    ? []
+    : [
+        { id: 'preview-work', name: '工作号', masked: 'sk-ab…wxyz', updatedAt: '', active: true },
+        { id: 'preview-home', name: '个人号', masked: 'sk-cd…1234', updatedAt: '', active: false }
+      ]
+})
+
+export async function dshKeyStatus(projectPath?: string | null): Promise<DshKeyStatus> {
+  if (!isTauri) return emptyDshBundle().status
+  return invoke('dsh_key_status', { projectPath: projectPath ?? null })
+}
+
+export async function dshListKeys(projectPath?: string | null): Promise<DshKeyBundle> {
+  if (!isTauri) return emptyDshBundle()
+  return invoke('dsh_list_keys', { projectPath: projectPath ?? null })
+}
+
+export async function dshAddKey(name: string, key: string, projectPath?: string | null): Promise<DshKeyBundle> {
+  return invoke('dsh_add_key', { name, key, projectPath: projectPath ?? null })
+}
+
+export async function dshSwitchKey(id: string, projectPath?: string | null): Promise<DshKeyBundle> {
+  return invoke('dsh_switch_key', { id, projectPath: projectPath ?? null })
+}
+
+export async function dshDeleteKey(id: string, projectPath?: string | null): Promise<DshKeyBundle> {
+  return invoke('dsh_delete_key', { id, projectPath: projectPath ?? null })
+}
+
+export async function dshRenameKey(id: string, name: string, projectPath?: string | null): Promise<DshKeyBundle> {
+  return invoke('dsh_rename_key', { id, name, projectPath: projectPath ?? null })
+}
+
+export async function openExternal(url: string): Promise<void> {
+  if (!isTauri) {
+    window.open(url, '_blank', 'noopener')
+    return
+  }
+  return invoke('open_external', { url })
 }
 
 const emptyAccounts = (): GrokAccountList => ({

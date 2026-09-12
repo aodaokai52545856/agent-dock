@@ -5,6 +5,7 @@ import {
   forgetPty,
   groupLiveByProject,
   isCurrentSession,
+  isDshWeb,
   liveOfProject,
   pickPtyForProject,
   projectSwitchView
@@ -112,6 +113,20 @@ test('isCurrentSession follows the active PTY, not just a live background sessio
   )
 })
 
+test('isCurrentSession keeps a pending DeepSeek row selected while it is the active PTY', () => {
+  const pending = pty({ ptyId: 'n', projectId: 'aitools', title: '新会话', sessionId: null, toolId: 'dsh' })
+  const focused = focusedFromLive(pending)
+  assert.equal(focused?.sessionId, '__pending:n')
+  assert.equal(
+    isCurrentSession('__pending:n', 'dsh', {
+      activePtyId: pending.ptyId,
+      focused,
+      live: pending
+    }),
+    true
+  )
+})
+
 test('isCurrentSession falls back to focused row when no window is open', () => {
   assert.equal(
     isCurrentSession('s1', 'grokbuild', {
@@ -140,5 +155,22 @@ test('focusedFromLive uses a pending id until the disk session exists', () => {
   assert.deepEqual(
     focusedFromLive(pty({ ptyId: 'n', projectId: 'aitools', title: '新会话', sessionId: null })),
     { toolId: 'grokbuild', sessionId: '__pending:n', title: '新会话' }
+  )
+})
+
+test('isDshWeb detects embedded web sessions only', () => {
+  assert.equal(isDshWeb(null), false)
+  assert.equal(isDshWeb(live[0]!), false)
+  assert.equal(
+    isDshWeb(pty({ ptyId: 'w1', projectId: 'dock', title: 'DeepSeek Web', toolId: 'dsh' })),
+    true
+  )
+  assert.equal(
+    isDshWeb(pty({ ptyId: 'w2', projectId: 'dock', title: 'DeepSeek Web', toolId: 'dsh', kind: 'web', url: 'http://127.0.0.1:3080/' })),
+    true
+  )
+  assert.equal(
+    isDshWeb(pty({ ptyId: 't1', projectId: 'dock', title: '旧终端', toolId: 'dsh', kind: 'pty' })),
+    false
   )
 })

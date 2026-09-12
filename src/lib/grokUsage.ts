@@ -4,7 +4,9 @@ export const GROK_USAGE_INTERVAL_MS = 60_000
 
 export function shouldShowGrokUsage(filter: SessionToolFilter, selectedTool: ToolId, appMode = 'console') {
   if (appMode !== 'console') return false
-  if (filter === 'opencode' || filter === 'kimi') return false
+  if (filter === 'opencode' || filter === 'kimi' || filter === 'claude' || filter === 'pi' || filter === 'dsh') {
+    return false
+  }
   if (filter === 'grokbuild') return true
   return selectedTool === 'grokbuild'
 }

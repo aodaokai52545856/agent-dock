@@ -68,6 +68,7 @@ pub fn extra_bin_dirs() -> Vec<PathBuf> {
         {
             dirs.push(home.join("AppData").join("Roaming").join("npm"));
             dirs.push(home.join("AppData").join("Local").join("fnm"));
+            dirs.push(home.join("AppData").join("Local").join("pi-node").join("current"));
         }
     }
     #[cfg(unix)]
@@ -193,10 +194,111 @@ fn is_executable(path: &Path) -> bool {
             .map(|meta| meta.permissions().mode() & 0o111 != 0)
             .unwrap_or(false)
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
     {
-        true
+        matches!(
+            path.extension()
+                .and_then(|ext| ext.to_str())
+                .map(|ext| ext.to_ascii_lowercase())
+                .as_deref(),
+            Some("exe" | "cmd" | "bat" | "com")
+        )
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct NodeVersion {
+    pub major: u32,
+    pub minor: u32,
+    pub patch: u32,
+}
+
+impl std::fmt::Display for NodeVersion {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}.{}.{}", self.major, self.minor, self.patch)
+    }
+}
+
+pub fn parse_node_version(text: &str) -> Option<NodeVersion> {
+    let raw = text.trim().trim_start_matches('v');
+    let mut parts = raw.split(|c: char| !c.is_ascii_digit());
+    let major = parts.next()?.parse().ok()?;
+    let minor = parts.next().and_then(|item| item.parse().ok()).unwrap_or(0);
+    let patch = parts.next().and_then(|item| item.parse().ok()).unwrap_or(0);
+    Some(NodeVersion { major, minor, patch })
+}
+
+pub fn node_version(exe: &Path) -> Option<NodeVersion> {
+    let output = Command::new(exe).arg("-v").output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    parse_node_version(&text)
+}
+
+pub fn list_node_exes() -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
+    let mut push = |path: PathBuf| {
+        let key = crate::path_norm::normalize_path(&path.display().to_string());
+        if path.is_file() && seen.insert(key) {
+            out.push(path);
+        }
+    };
+    if let Ok(iter) = which::which_all("node") {
+        for path in iter {
+            push(path);
+        }
+    }
+    for dir in extra_bin_dirs() {
+        if !dir.is_dir() {
+            continue;
+        }
+        #[cfg(windows)]
+        push(dir.join("node.exe"));
+        #[cfg(not(windows))]
+        {
+            let candidate = dir.join("node");
+            if is_executable(&candidate) {
+                push(candidate);
+            }
+        }
+    }
+    out
+}
+
+pub fn resolve_node(min: NodeVersion) -> Result<(PathBuf, NodeVersion), String> {
+    let mut found = Vec::new();
+    for exe in list_node_exes() {
+        if let Some(version) = node_version(&exe) {
+            found.push((version, exe));
+        }
+    }
+    found.sort_by(|a, b| b.0.cmp(&a.0));
+    if let Some((version, exe)) = found.iter().find(|(version, _)| *version >= min) {
+        return Ok((exe.clone(), *version));
+    }
+    let summary = if found.is_empty() {
+        "没有找到 Node.js。".into()
+    } else {
+        found
+            .iter()
+            .map(|(version, exe)| format!("{version}（{}）", exe.display()))
+            .collect::<Vec<_>>()
+            .join("、")
+    };
+    Err(format!(
+        "DeepSeek Harness 需要 Node {min} 或更高。当前是 {summary}。低于这个版本时，在终端里执行 dsh web 会立刻回到提示符，浏览器访问 127.0.0.1:3080 也会被拒绝。请升级 Node，或把更新的 node.exe 放到 PATH 前面。"
+    ))
+}
+
+pub fn path_with_prepend(dir: &Path, path: &str) -> String {
+    let prefix = dir.display().to_string();
+    if path.is_empty() {
+        return prefix;
+    }
+    format!("{prefix}{}{path}", path_separator())
 }
 
 pub fn posix_single_quote(s: &str) -> String {
@@ -251,5 +353,80 @@ mod tests {
         assert!(is_windows_shell_name("powershell.exe"));
         assert!(is_windows_shell_name("C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"));
         assert!(!is_windows_shell_name("/bin/zsh"));
+    }
+
+    #[test]
+    fn parses_node_version_strings() {
+        assert_eq!(
+            parse_node_version("v22.14.0"),
+            Some(NodeVersion {
+                major: 22,
+                minor: 14,
+                patch: 0
+            })
+        );
+        assert_eq!(
+            parse_node_version("22.23.1\n"),
+            Some(NodeVersion {
+                major: 22,
+                minor: 23,
+                patch: 1
+            })
+        );
+        assert!(parse_node_version("nope").is_none());
+        assert!(
+            NodeVersion {
+                major: 22,
+                minor: 23,
+                patch: 1
+            } >= NodeVersion {
+                major: 22,
+                minor: 15,
+                patch: 0
+            }
+        );
+        assert!(
+            NodeVersion {
+                major: 22,
+                minor: 14,
+                patch: 0
+            } < NodeVersion {
+                major: 22,
+                minor: 15,
+                patch: 0
+            }
+        );
+    }
+
+    #[test]
+    fn prepends_node_dir_ahead_of_path() {
+        #[cfg(windows)]
+        {
+            let next = path_with_prepend(Path::new(r"C:\Users\me\pi-node\current"), r"D:\nodejs;C:\Windows");
+            assert!(next.starts_with(r"C:\Users\me\pi-node\current;"));
+        }
+        #[cfg(not(windows))]
+        {
+            let next = path_with_prepend(Path::new("/opt/node/bin"), "/usr/bin:/bin");
+            assert!(next.starts_with("/opt/node/bin:"));
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn extra_bin_lookup_skips_extensionless_unix_shim() {
+        let dir = tempfile::tempdir().unwrap();
+        let shim = dir.path().join("kimi");
+        std::fs::write(&shim, b"#!/usr/bin/env node\n").unwrap();
+        assert!(
+            !is_executable(&shim),
+            "Windows must not treat npm's extensionless unix shim as the CLI"
+        );
+        let cmd = dir.path().join("kimi.cmd");
+        std::fs::write(&cmd, b"@echo off\n").unwrap();
+        assert!(is_executable(&cmd));
+        let exe = dir.path().join("kimi.exe");
+        std::fs::write(&exe, b"MZ").unwrap();
+        assert!(is_executable(&exe));
     }
 }

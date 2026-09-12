@@ -58,19 +58,51 @@ export const layout = reactive<LayoutState>({
 export const paneDragging = ref(false)
 export const paneAnimating = ref(false)
 export const windowResizing = ref(false)
+export const windowMoving = ref(false)
 
 let animTimer = 0
 let windowResizeTimer = 0
+let windowMoveTimer = 0
 let persistTimer = 0
 let windowResizeBound = false
 
 export function isLayoutBusy() {
-  return paneAnimating.value || paneDragging.value || windowResizing.value
+  return paneAnimating.value || paneDragging.value || windowResizing.value || windowMoving.value
 }
 
 function setResizingClass(on: boolean) {
   if (typeof document === 'undefined') return
   document.documentElement.classList.toggle('ad-resizing', on)
+}
+
+function setMovingClass(on: boolean) {
+  if (typeof document === 'undefined') return
+  document.documentElement.classList.toggle('ad-moving', on)
+}
+
+export function beginWindowMove() {
+  if (windowMoving.value) return
+  windowMoving.value = true
+  setMovingClass(true)
+}
+
+export function endWindowMove() {
+  if (typeof window !== 'undefined') window.clearTimeout(windowMoveTimer)
+  windowMoveTimer = 0
+  if (!windowMoving.value) return
+  windowMoving.value = false
+  setMovingClass(false)
+}
+
+export function noteWindowMove() {
+  beginWindowMove()
+  if (typeof window === 'undefined') return
+  window.clearTimeout(windowMoveTimer)
+  windowMoveTimer = window.setTimeout(() => {
+    windowMoveTimer = 0
+    windowMoving.value = false
+    setMovingClass(false)
+  }, 160)
 }
 
 export function noteWindowResize() {
@@ -148,6 +180,20 @@ export function endPaneDrag() {
 
 export function sidebarPaneWidth() {
   return layout.sidebarWidth
+}
+
+export function clampOverlayBox(
+  box: { x: number; y: number; width: number; height: number },
+  bounds: { windowWidth: number; windowHeight: number; containRight?: number }
+) {
+  const pad = 8
+  const right = bounds.containRight ?? bounds.windowWidth - pad
+  const maxX = right - box.width
+  const maxY = bounds.windowHeight - pad - box.height
+  return {
+    x: Math.max(0, Math.min(Math.round(box.x), maxX)),
+    y: Math.max(pad, Math.min(Math.round(box.y), maxY))
+  }
 }
 
 export function toggleProjects() {

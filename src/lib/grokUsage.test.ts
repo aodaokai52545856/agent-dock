@@ -35,6 +35,9 @@ test('shows usage for grok filter or selected grok tool', () => {
   assert.equal(shouldShowGrokUsage('all', 'grokbuild'), true)
   assert.equal(shouldShowGrokUsage('all', 'opencode'), false)
   assert.equal(shouldShowGrokUsage('opencode', 'grokbuild'), false)
+  assert.equal(shouldShowGrokUsage('claude', 'grokbuild'), false)
+  assert.equal(shouldShowGrokUsage('pi', 'grokbuild'), false)
+  assert.equal(shouldShowGrokUsage('dsh', 'grokbuild'), false)
   assert.equal(shouldShowGrokUsage('all', 'grokbuild', 'bridge'), false)
 })
 

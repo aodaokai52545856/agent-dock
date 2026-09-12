@@ -3,14 +3,19 @@ import { FitAddon } from '@xterm/addon-fit'
 import { Terminal } from '@xterm/xterm'
 import '@xterm/xterm/css/xterm.css'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
-import { nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import * as api from '../lib/api'
-import { isLayoutBusy, paneAnimating, paneDragging, windowResizing } from '../lib/layout'
-import { isWindows } from '../lib/platform'
+import { clampOverlayBox, isLayoutBusy, paneAnimating, paneDragging, windowMoving, windowResizing } from '../lib/layout'
+import { isMac, isWindows } from '../lib/platform'
 import { isSignificantPtyChunk } from '../lib/livePulse'
 import { markPtyExit, notePtyData, selectedProject, store } from '../lib/store'
 import { codeFontStack } from '../lib/appearance'
 import { canMeasure, createFitScheduler } from '../lib/termFit'
+import { attachTermClipboard } from '../lib/termClipboard'
+import { termMenuItems, type TermMenuAction } from '../lib/termMenu'
+import { attachOscBackground } from '../lib/termGlass'
+import { attachSynchronizedOutput, createRefreshGate } from '../lib/termSync'
+import { glassRgba } from '../lib/uiGlass'
 import ToolMark from './ToolMark.vue'
 import { TOOLS, type ToolId } from '../lib/types'
 
@@ -19,6 +24,8 @@ type Host = {
   fit: FitAddon
   el: HTMLDivElement
   offData: { dispose: () => void }
+  offSurface: { dispose: () => void }
+  offClipboard: { dispose: () => void }
   lastCols: number
   lastRows: number
   lastW: number
@@ -30,6 +37,53 @@ let unlistenData: UnlistenFn | undefined
 let unlistenExit: UnlistenFn | undefined
 let observer: ResizeObserver | undefined
 const workspaceEl = ref<HTMLElement | null>(null)
+const menu = ref<{ x: number; y: number; hasSelection: boolean } | null>(null)
+const MENU_WIDTH = 200
+const MENU_HEIGHT = 118
+
+const menuItems = computed(() =>
+  termMenuItems({
+    hasSelection: Boolean(menu.value?.hasSelection),
+    mac: isMac
+  })
+)
+
+function closeTermMenu() {
+  menu.value = null
+}
+
+function onTermMenu(event: MouseEvent) {
+  event.preventDefault()
+  event.stopPropagation()
+  const host = store.activePtyId ? hosts.get(store.activePtyId) : undefined
+  if (!host) {
+    closeTermMenu()
+    return
+  }
+  const pos = clampOverlayBox(
+    { x: event.clientX, y: event.clientY, width: MENU_WIDTH, height: MENU_HEIGHT },
+    { windowWidth: window.innerWidth, windowHeight: window.innerHeight }
+  )
+  menu.value = { ...pos, hasSelection: host.term.hasSelection() }
+}
+
+async function runTermMenu(action: TermMenuAction) {
+  const id = store.activePtyId
+  const host = id ? hosts.get(id) : undefined
+  closeTermMenu()
+  if (!host || !id) return
+  if (action === 'copy') {
+    const text = host.term.getSelection()
+    if (text) await api.clipboardWrite(text)
+    return
+  }
+  if (action === 'paste') {
+    const text = await api.clipboardRead()
+    if (text) host.term.paste(text)
+    return
+  }
+  if (action === 'selectAll') host.term.selectAll()
+}
 
 function fitAll() {
   const id = store.activePtyId
@@ -68,16 +122,32 @@ function cssVar(name: string, fallback: string) {
 }
 
 function theme() {
-  const background = cssVar('--ad-editor', '#0d0d0d')
+  const ink = cssVar('--ad-ink', '#0b0f13')
   const foreground = cssVar('--ad-text', '#ececec')
+  const muted = cssVar('--ad-muted', '#8a8a8a')
+  const opacity = Number.parseFloat(cssVar('--ad-ui-opacity', '0')) || 0
   return {
-    background,
+    background: glassRgba(ink, opacity),
     foreground,
     cursor: foreground,
-    cursorAccent: background,
+    cursorAccent: ink,
     selectionBackground: '#ffffff22',
-    black: background,
-    brightBlack: cssVar('--ad-muted', '#8a8a8a')
+    black: ink,
+    red: cssVar('--ad-error', '#e24b4a'),
+    green: cssVar('--ad-success', '#3d9a6a'),
+    yellow: cssVar('--ad-warning', '#c9a227'),
+    blue: cssVar('--ad-dsh', '#4f7cff'),
+    magenta: cssVar('--ad-grok', '#a78bfa'),
+    cyan: cssVar('--ad-pi', '#22d3ee'),
+    white: foreground,
+    brightBlack: muted,
+    brightRed: cssVar('--ad-error', '#e24b4a'),
+    brightGreen: cssVar('--ad-opencode', '#6ee7b7'),
+    brightYellow: cssVar('--ad-warning', '#c9a227'),
+    brightBlue: cssVar('--ad-dsh', '#4f7cff'),
+    brightMagenta: cssVar('--ad-kimi', '#fb923c'),
+    brightCyan: cssVar('--ad-pi', '#22d3ee'),
+    brightWhite: '#ffffff'
   }
 }
 
@@ -104,6 +174,7 @@ function ensureHost(ptyId: string) {
     fontFamily: termFontFamily(),
     fontSize: props.fontSize,
     theme: theme(),
+    allowTransparency: true,
     cursorBlink: true,
     scrollback: 4000,
     convertEol: false,
@@ -116,9 +187,56 @@ function ensureHost(ptyId: string) {
   const offData = term.onData((data) => {
     void api.ptyWrite(ptyId, data)
   })
-  const host = { term, fit, el, offData, lastCols: 0, lastRows: 0, lastW: 0, lastH: 0 }
+  const offSurface = bindTermSurface(term, el, ptyId)
+  const offClipboard = attachTermClipboard(term, el, {
+    write: (text) => {
+      void api.clipboardWrite(text)
+    },
+    mac: isMac
+  })
+  const host = { term, fit, el, offData, offSurface, offClipboard, lastCols: 0, lastRows: 0, lastW: 0, lastH: 0 }
   hosts.set(ptyId, host)
   return host
+}
+
+function bindTermSurface(term: Terminal, el: HTMLDivElement, ptyId: string) {
+  const refresh = () => {
+    try {
+      term.refresh(0, Math.max(0, term.rows - 1))
+    } catch {
+      /* not measured yet */
+    }
+  }
+  const gate = createRefreshGate({
+    refresh,
+    scheduleFrame: (cb) => requestAnimationFrame(cb),
+    cancelFrame: (id) => cancelAnimationFrame(id)
+  })
+  const send = (data: string) => {
+    void api.ptyWrite(ptyId, data)
+  }
+  const offSync = attachSynchronizedOutput(term, {
+    send,
+    refresh: () => gate.request()
+  })
+  const offOsc = attachOscBackground(term, {
+    send,
+    ink: () => cssVar('--ad-ink', '#0b0f13')
+  })
+  const offScroll = term.onScroll(() => gate.request())
+  const onPointer = () => gate.request()
+  el.addEventListener('mousedown', onPointer)
+  const offFocus = term.onSelectionChange(() => gate.request())
+  return {
+    dispose() {
+      offSync.dispose()
+      offOsc.dispose()
+      offScroll.dispose()
+      offFocus.dispose()
+      el.removeEventListener('mousedown', onPointer)
+      gate.dispose()
+    }
+  }
 }
 
 function fitHost(ptyId: string, host: Host, force = false) {
@@ -170,6 +288,8 @@ function disposeHost(ptyId: string) {
   const host = hosts.get(ptyId)
   if (!host) return
   host.offData.dispose()
+  host.offSurface.dispose()
+  host.offClipboard.dispose()
   host.term.dispose()
   host.el.remove()
   hosts.delete(ptyId)
@@ -198,13 +318,18 @@ watch(
     store.settings.uiBackground,
     store.settings.uiForeground,
     store.settings.uiAccent,
-    store.settings.uiContrast
+    store.settings.uiContrast,
+    store.settings.uiOpacity
   ],
   () => applyTermChrome()
 )
 
-watch([paneAnimating, paneDragging, windowResizing], (now) => {
-  fitScheduler.onBusyChange(now[0] || now[1] || now[2])
+watch([paneAnimating, paneDragging, windowResizing, windowMoving], (now) => {
+  fitScheduler.onBusyChange(now[0] || now[1] || now[2] || now[3])
+})
+
+watch(windowMoving, (moving, was) => {
+  if (was && !moving) fitActive(true)
 })
 
 onMounted(async () => {
@@ -227,10 +352,20 @@ onMounted(async () => {
     observer.observe(target)
   }
   window.addEventListener('ad-appearance', applyTermChrome)
+  window.addEventListener('click', closeTermMenu)
+  window.addEventListener('blur', closeTermMenu)
+  window.addEventListener('keydown', onTermMenuKey)
 })
+
+function onTermMenuKey(event: KeyboardEvent) {
+  if (event.key === 'Escape') closeTermMenu()
+}
 
 onUnmounted(() => {
   window.removeEventListener('ad-appearance', applyTermChrome)
+  window.removeEventListener('click', closeTermMenu)
+  window.removeEventListener('blur', closeTermMenu)
+  window.removeEventListener('keydown', onTermMenuKey)
   unlistenData?.()
   unlistenExit?.()
   observer?.disconnect()
@@ -242,7 +377,7 @@ defineExpose({ ensureHost, show, dispose: disposeHost, fitActive })
 </script>
 
 <template>
-  <section ref="workspaceEl" class="workspace">
+  <section ref="workspaceEl" class="workspace" @contextmenu="onTermMenu">
     <div v-show="store.activePtyId" id="term-mount" class="mount" />
     <div v-if="loading" class="loading" aria-busy="true" aria-live="polite">
       <span class="spinner" aria-hidden="true" />
@@ -277,6 +412,29 @@ defineExpose({ ensureHost, show, dispose: disposeHost, fitActive })
         </div>
       </div>
     </div>
+    <Teleport to="body">
+      <div
+        v-if="menu"
+        class="ad-menu term-menu"
+        role="menu"
+        :style="{ left: menu.x + 'px', top: menu.y + 'px', width: MENU_WIDTH + 'px' }"
+        @click.stop
+        @contextmenu.prevent
+      >
+        <button
+          v-for="item in menuItems"
+          :key="item.id"
+          type="button"
+          role="menuitem"
+          class="ad-menu-item"
+          :disabled="!item.enabled"
+          @click="runTermMenu(item.id)"
+        >
+          <span>{{ item.label }}</span>
+          <span class="ad-menu-hint">{{ item.hint }}</span>
+        </button>
+      </div>
+    </Teleport>
   </section>
 </template>
 
@@ -287,7 +445,7 @@ defineExpose({ ensureHost, show, dispose: disposeHost, fitActive })
   min-width: 0;
   min-height: 0;
   display: flex;
-  background: var(--ad-editor);
+  background: transparent;
   overflow: hidden;
 }
 
@@ -297,6 +455,11 @@ defineExpose({ ensureHost, show, dispose: disposeHost, fitActive })
   min-width: 0;
   min-height: 0;
   overflow: hidden;
+}
+
+.term-menu {
+  position: fixed;
+  z-index: 80;
 }
 
 .empty {
@@ -309,7 +472,7 @@ defineExpose({ ensureHost, show, dispose: disposeHost, fitActive })
 }
 
 .hero {
-  width: min(640px, 100%);
+  width: min(780px, 100%);
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -341,7 +504,7 @@ defineExpose({ ensureHost, show, dispose: disposeHost, fitActive })
 
 .tiles {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 16px;
   width: 100%;
 }
@@ -380,6 +543,12 @@ defineExpose({ ensureHost, show, dispose: disposeHost, fitActive })
   color: var(--ad-muted);
 }
 
+@media (max-width: 900px) {
+  .tiles {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 @media (max-width: 720px) {
   .empty-title {
     font-size: 22px;
@@ -399,7 +568,7 @@ defineExpose({ ensureHost, show, dispose: disposeHost, fitActive })
   align-items: center;
   justify-content: center;
   gap: 12px;
-  background: var(--ad-editor);
+  background: var(--ad-ink);
   color: var(--ad-muted);
 }
 
@@ -430,8 +599,11 @@ defineExpose({ ensureHost, show, dispose: disposeHost, fitActive })
 <style>
 .term-host {
   position: absolute;
-  inset: 8px;
+  inset: 0;
   overflow: hidden;
+  isolation: isolate;
+  contain: layout style;
+  background: var(--ad-editor);
 }
 
 .term-host:not(.is-hidden) {
@@ -448,8 +620,12 @@ defineExpose({ ensureHost, show, dispose: disposeHost, fitActive })
   overflow: hidden;
 }
 
+.term-host .xterm-bg-0 {
+  background-color: var(--ad-editor) !important;
+}
+
 .term-host .xterm-viewport {
-  background-color: #0d0d0d;
+  background-color: var(--ad-editor);
   scrollbar-width: thin;
   scrollbar-color: rgba(255, 255, 255, 0.16) transparent;
 }

@@ -11,6 +11,11 @@ export function isLivePty(item: LivePtyInfo) {
   return item.alive !== false
 }
 
+export function isDshWeb(item: LivePtyInfo | null | undefined) {
+  if (!item || item.toolId !== 'dsh') return false
+  return item.kind !== 'pty'
+}
+
 export function liveOfProject(live: LivePtyInfo[], projectId: string) {
   return live.filter((item) => item.projectId === projectId && isLivePty(item))
 }
@@ -38,9 +43,10 @@ export function isCurrentSession(
     live: LivePtyInfo | null
   }
 ) {
+  if (opts.focused?.sessionId === sessionId && opts.focused.toolId === toolId) return true
   if (opts.live && opts.activePtyId) return opts.live.ptyId === opts.activePtyId
   if (opts.activePtyId) return false
-  return opts.focused?.sessionId === sessionId && opts.focused.toolId === toolId
+  return false
 }
 
 export function focusedFromLive(item: LivePtyInfo): FocusedSession | null {
@@ -132,5 +138,8 @@ export function fallbackPtyAfterExit(
 export function toolTint(toolId: ToolId) {
   if (toolId === 'opencode') return 'var(--ad-opencode)'
   if (toolId === 'kimi') return 'var(--ad-kimi)'
+  if (toolId === 'claude') return 'var(--ad-claude)'
+  if (toolId === 'pi') return 'var(--ad-pi)'
+  if (toolId === 'dsh') return 'var(--ad-dsh)'
   return 'var(--ad-grok)'
 }

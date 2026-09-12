@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { relativeTime } from '../lib/format'
-import { endPaneAnim, layout, sidebarPaneWidth, toggleProjects } from '../lib/layout'
+import { clampOverlayBox, endPaneAnim, layout, sidebarPaneWidth, toggleProjects } from '../lib/layout'
 import { isPendingSessionId } from '../lib/liveBind'
 import { liveDotForPty, liveDotTitle, projectLiveDot, type LiveDotKind } from '../lib/livePulse'
 import { isCurrentSession, liveOfProject } from '../lib/livePty'
@@ -18,7 +18,7 @@ const emit = defineEmits<{
   retry: []
   settings: []
   'start-rename': [payload: { sessionId: string; toolId: ToolId }]
-  rename: [id: string]
+  rename: [payload: { sessionId: string; toolId: ToolId }]
   close: [payload: { sessionId: string; toolId: ToolId }]
   'close-all': [projectId?: string]
   delete: [payload: { sessionId: string; toolId: ToolId }]
@@ -127,14 +127,26 @@ function pickFilter(id: SessionToolFilter) {
   closeFilter()
 }
 
+function menuBox(event: MouseEvent, height: number) {
+  return clampOverlayBox(
+    { x: event.clientX, y: event.clientY, width: MENU_WIDTH, height },
+    {
+      windowWidth: window.innerWidth,
+      windowHeight: window.innerHeight,
+      containRight: sidebarPaneWidth()
+    }
+  )
+}
+
 function openMenu(event: MouseEvent, sessionId: string, toolId: ToolId) {
   event.preventDefault()
   event.stopPropagation()
   closeFilter()
   projectMenu.value = null
+  const pos = menuBox(event, MENU_HEIGHT)
   menu.value = {
-    x: Math.min(event.clientX, window.innerWidth - MENU_WIDTH - 8),
-    y: Math.min(event.clientY, window.innerHeight - MENU_HEIGHT - 8),
+    x: pos.x,
+    y: pos.y,
     sessionId,
     toolId,
     focus: 0
@@ -187,9 +199,10 @@ function openProjectMenu(event: MouseEvent, projectId: string) {
   event.stopPropagation()
   closeFilter()
   menu.value = null
+  const pos = menuBox(event, 52)
   projectMenu.value = {
-    x: Math.min(event.clientX, window.innerWidth - MENU_WIDTH - 8),
-    y: Math.min(event.clientY, window.innerHeight - 52),
+    x: pos.x,
+    y: pos.y,
     projectId
   }
 }
@@ -210,6 +223,11 @@ function renameSession() {
     input?.focus()
     input?.select()
   })
+}
+
+function commitRename(sessionId: string, toolId: ToolId) {
+  if (renaming.value !== sessionId) return
+  emit('rename', { sessionId, toolId })
 }
 
 function onKey(event: KeyboardEvent) {
@@ -291,6 +309,7 @@ onUnmounted(() => {
     :style="{ width: sidebarPaneWidth() + 'px' }"
     aria-label="工作区"
     @transitionend="onPaneTransitionEnd"
+    @contextmenu.prevent
   >
     <div class="body" :style="{ width: layout.sidebarWidth + 'px' }" :aria-hidden="collapsed">
       <div class="head">
@@ -409,7 +428,7 @@ onUnmounted(() => {
 
         <div v-else-if="!store.selectedProjectId" class="muted pad">点上面的项目，或新建会话时再选。</div>
 
-        <div v-else class="session-pane">
+        <div v-else class="session-pane" :class="{ 'is-busy': store.sessionRefreshBusy }">
         <div class="groups">
           <section v-for="group in groups" :key="group.tool.id" class="group">
             <p v-if="visibleTools.length > 1" class="group-title">
@@ -451,8 +470,9 @@ onUnmounted(() => {
                       class="rename"
                       maxlength="80"
                       @click.stop
-                      @keydown.enter="$emit('rename', session.id)"
-                      @keydown.esc="renaming = ''"
+                      @keydown.enter.prevent="commitRename(session.id, session.toolId)"
+                      @keydown.esc.prevent="renaming = ''"
+                      @blur="commitRename(session.id, session.toolId)"
                     />
                     <span class="row-time">{{ relativeTime(session.updatedAt) }}</span>
                   </button>
@@ -892,6 +912,10 @@ onUnmounted(() => {
   padding: 8px 12px 16px;
 }
 
+.session-pane.is-busy .groups {
+  visibility: hidden;
+}
+
 .session-mask {
   position: absolute;
   inset: 0;
@@ -901,7 +925,8 @@ onUnmounted(() => {
   align-items: center;
   justify-content: center;
   gap: 8px;
-  background: rgb(13 13 13 / 0.72);
+  /* Extra fill stacked on --ad-sidebar reads darker than the rest of the rail. */
+  background: transparent;
   color: var(--ad-muted);
   font-size: 12px;
   line-height: 18px;
@@ -929,7 +954,7 @@ onUnmounted(() => {
 .scan-spin {
   width: 12px;
   height: 12px;
-  border: 1.5px solid rgba(255, 255, 255, 0.18);
+  border: 1.5px solid var(--ad-border-strong);
   border-top-color: var(--ad-text);
   border-radius: 50%;
   animation: ad-scan-spin 700ms linear infinite;
@@ -1063,6 +1088,6 @@ onUnmounted(() => {
 
 .menu {
   position: fixed;
-  z-index: 40;
+  z-index: 80;
 }
 </style>

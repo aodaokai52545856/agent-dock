@@ -1,4 +1,4 @@
-export type ToolId = 'opencode' | 'grokbuild' | 'kimi'
+export type ToolId = 'opencode' | 'grokbuild' | 'kimi' | 'claude' | 'pi' | 'dsh'
 
 export type RenameKind = 'native' | 'overlay'
 
@@ -26,6 +26,9 @@ export interface AppSettings {
   opencodePath: string
   grokbuildPath: string
   kimiPath: string
+  claudePath: string
+  piPath: string
+  dshPath: string
   powershellPath: string
   terminalFontSize: number
   uiFontSize: number
@@ -39,9 +42,45 @@ export interface AppSettings {
   uiContrast: number
   translucentSidebar: boolean
   uiOpacity: number
+  uiFrost: number
+  grokFollowGlass: boolean
   sessionToolFilter: SessionToolFilter
   cursorApiKey: string
   codexPath: string
+  ccswitchPath: string
+  ccswitchDownloadDir: string
+  ccswitchInstallDir: string
+}
+
+export interface CcswitchProbe {
+  found: boolean
+  path?: string | null
+  downloadDir: string
+  installDir: string
+}
+
+export interface CcswitchLatest {
+  version: string
+  tag: string
+  assetName: string
+  size: number
+  url: string
+  homepage: string
+  releasesUrl: string
+}
+
+export interface CcswitchInstallResult {
+  ok: boolean
+  path: string
+  version: string
+  log: string
+}
+
+export interface CcswitchProgress {
+  stage: string
+  message: string
+  received: number
+  total: number
 }
 
 export interface AppState {
@@ -109,6 +148,9 @@ export interface ToolProbeMap {
   opencode: BinaryProbe
   grokbuild: BinaryProbe
   kimi: BinaryProbe
+  claude: BinaryProbe
+  pi: BinaryProbe
+  dsh: BinaryProbe
 }
 
 export interface PtyOpened {
@@ -118,6 +160,8 @@ export interface PtyOpened {
   sessionId?: string | null
   title: string
   openedAt?: number | null
+  kind?: 'pty' | 'web' | string | null
+  url?: string | null
 }
 
 export interface LivePtyInfo {
@@ -129,6 +173,8 @@ export interface LivePtyInfo {
   title: string
   alive: boolean
   openedAt?: number | null
+  kind?: 'pty' | 'web' | string | null
+  url?: string | null
 }
 
 export interface ProjectDraft {
@@ -136,6 +182,12 @@ export interface ProjectDraft {
   path: string
   proxyEnabled: boolean
   proxyUrl: string
+}
+
+export interface ToolCheck {
+  name: string
+  ok: boolean
+  detail: string
 }
 
 export interface ToolVersionInfo {
@@ -146,12 +198,36 @@ export interface ToolVersionInfo {
   localVersion: string
   latestVersion: string
   compare: string
+  checks?: ToolCheck[]
 }
 
 export interface UpgradeResult {
   ok: boolean
   log: string
   localVersion: string
+}
+
+export interface DshKeyStatus {
+  configured: boolean
+  writable: boolean
+  source: string
+  masked: string
+  dshHome: string
+  credentialsPath: string
+  envBlocks: boolean
+}
+
+export interface DshKeyMeta {
+  id: string
+  name: string
+  masked: string
+  updatedAt: string
+  active: boolean
+}
+
+export interface DshKeyBundle {
+  status: DshKeyStatus
+  keys: DshKeyMeta[]
 }
 
 export interface GrokAccount {
@@ -215,10 +291,22 @@ export interface GrokSpend {
   message: string | null
 }
 
+export const TOOL_OFFICIAL_URLS: Record<ToolId, string> = {
+  opencode: 'https://opencode.ai',
+  grokbuild: 'https://github.com/xai-org/grok-build#installation',
+  kimi: 'https://code.kimi.com',
+  claude: 'https://code.claude.com/docs/en/quickstart',
+  pi: 'https://pi.dev',
+  dsh: 'https://github.com/deepseek-ai/deepseek-harness'
+}
+
 export const TOOLS: { id: ToolId; label: string; hint: string; tint: string }[] = [
   { id: 'opencode', label: 'OpenCode', hint: '打开编码会话', tint: 'var(--ad-opencode)' },
   { id: 'grokbuild', label: 'Grok', hint: '启动 Grok', tint: 'var(--ad-grok)' },
-  { id: 'kimi', label: 'Kimi', hint: '启动 Kimi', tint: 'var(--ad-kimi)' }
+  { id: 'kimi', label: 'Kimi', hint: '启动 Kimi', tint: 'var(--ad-kimi)' },
+  { id: 'claude', label: 'Claude Code', hint: '启动 Claude Code', tint: 'var(--ad-claude)' },
+  { id: 'pi', label: 'Pi', hint: '启动 Pi', tint: 'var(--ad-pi)' },
+  { id: 'dsh', label: 'DeepSeek', hint: '打开 DeepSeek Web', tint: 'var(--ad-dsh)' }
 ]
 
 export function toolLabel(id: ToolId): string {

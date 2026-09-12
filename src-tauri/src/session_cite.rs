@@ -82,7 +82,7 @@ fn list_session_docs_for(
         return Err("请先打开会话".into());
     }
     match tool_id {
-        ToolId::Opencode => Ok(Vec::new()),
+        ToolId::Opencode | ToolId::Claude | ToolId::Pi | ToolId::Dsh => Ok(Vec::new()),
         ToolId::Grokbuild => {
             let dir = tools::find_grok_session_dir(&project.path, session_id).ok_or_else(|| {
                 "没有找到这个 Grok 会话的本地目录，无法列出文档。".to_string()
@@ -107,7 +107,7 @@ fn list_session_turns_for(
         return Err("请先打开会话".into());
     }
     match tool_id {
-        ToolId::Opencode => Ok(Vec::new()),
+        ToolId::Opencode | ToolId::Claude | ToolId::Pi | ToolId::Dsh => Ok(Vec::new()),
         ToolId::Grokbuild => {
             let dir = tools::find_grok_session_dir(&project.path, session_id).ok_or_else(|| {
                 "没有找到这个 Grok 会话的本地目录，无法读取对话。".to_string()

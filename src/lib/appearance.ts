@@ -99,7 +99,7 @@ export function themeDefaults(resolved: 'light' | 'dark') {
   if (resolved === 'light') {
     return { background: '#F3F3F3', foreground: '#171717', accent: '#171717' }
   }
-  return { background: '#0D0D0D', foreground: '#ECECEC', accent: '#ECECEC' }
+  return { background: '#0B0F13', foreground: '#ECECEC', accent: '#ECECEC' }
 }
 
 export function defaultAppearance(): Appearance {
@@ -212,6 +212,10 @@ function rgbChannels(hex: string) {
   return `${rgb.r} ${rgb.g} ${rgb.b}`
 }
 
+export function glassFill(hex: string, alpha = 'var(--ad-veil)') {
+  return `rgb(${rgbChannels(hex)} / ${alpha})`
+}
+
 function setVar(name: string, value: string | null) {
   const root = document.documentElement
   if (!value) root.style.removeProperty(name)
@@ -243,7 +247,7 @@ export function applyAppearance(input: Appearance) {
   setVar('--ad-ui-font-size', String(appearance.uiFontSize))
   setVar('--ad-ink', background)
   setVar('--ad-bg', background)
-  setVar('--ad-editor', background)
+  setVar('--ad-editor', glassFill(background))
   setVar('--ad-harbor', harbor)
   setVar('--ad-raised', raised)
   setVar('--ad-hover', hover)

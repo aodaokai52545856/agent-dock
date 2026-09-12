@@ -16,7 +16,10 @@ import {
   rememberPty
 } from './livePty'
 import { defaultShellPath } from './platform'
-import { emptyPipeline, loadPipelines } from './pipelineModel'
+import { flowAsPipeline } from './flow/compat.ts'
+import { ensureProjectFlows, loadAllFlows, loadAllRuns, selectedFlow } from './flow/model.ts'
+import { loadCustomRoles, type RoleDef } from './flow/roles.ts'
+import type { FlowRun, ProjectFlows } from './flow/types.ts'
 import type {
   AppMode,
   AppSettings,
@@ -33,24 +36,57 @@ import type {
   ToolId,
   ToolProbeMap
 } from './types'
+import { TOOLS } from './types'
 import {
   appearanceFromSettings,
   appearanceToSettings,
   applyAppearance,
   watchSystemTheme
 } from './appearance'
+import {
+  UI_FROST_DEFAULT,
+  UI_OPACITY_DEFAULT,
+  applyUiGlass as paintUiGlass,
+  clampUiFrost,
+  clampUiOpacity
+} from './uiGlass'
 
-export const UI_OPACITY_MIN = 0
-export const UI_OPACITY_MAX = 80
-export const UI_OPACITY_DEFAULT = 0
+export {
+  UI_FROST_DEFAULT,
+  UI_FROST_MAX,
+  UI_FROST_MIN,
+  UI_OPACITY_DEFAULT,
+  UI_OPACITY_MAX,
+  UI_OPACITY_MIN,
+  clampUiFrost,
+  clampUiOpacity
+} from './uiGlass'
+
+let frostTimer = 0
+
+export function applyUiGlass(opacity: number, frost: number) {
+  paintUiGlass(opacity, frost)
+  if (!api.isTauri || typeof window === 'undefined') return
+  window.clearTimeout(frostTimer)
+  frostTimer = window.setTimeout(() => {
+    void api.setWindowFrost(clampUiFrost(frost))
+  }, 40)
+}
+
+export function applyUiOpacity(value: number) {
+  applyUiGlass(value, UI_FROST_DEFAULT)
+}
 
 const defaultSettings = (): AppSettings => ({
   defaultProxyUrl: 'http://127.0.0.1:7890',
   opencodePath: '',
   grokbuildPath: '',
   kimiPath: '',
+  claudePath: '',
+  piPath: '',
+  dshPath: '',
   powershellPath: defaultShellPath(),
-  terminalFontSize: 13,
+  terminalFontSize: 14,
   uiFontSize: 13,
   uiTheme: 'system',
   uiAccent: '',
@@ -62,9 +98,14 @@ const defaultSettings = (): AppSettings => ({
   uiContrast: 60,
   translucentSidebar: true,
   uiOpacity: UI_OPACITY_DEFAULT,
+  uiFrost: UI_FROST_DEFAULT,
+  grokFollowGlass: true,
   sessionToolFilter: 'all',
   cursorApiKey: '',
-  codexPath: ''
+  codexPath: '',
+  ccswitchPath: '',
+  ccswitchDownloadDir: '',
+  ccswitchInstallDir: ''
 })
 
 const FILTER_STORAGE_KEY = 'ad-session-tool-filter'
@@ -77,24 +118,24 @@ export function parseAppMode(value: unknown): AppMode {
 }
 
 export function parseSessionToolFilter(value: unknown): SessionToolFilter {
-  if (value === 'all' || value === 'opencode' || value === 'grokbuild' || value === 'kimi') return value
+  if (
+    value === 'all' ||
+    value === 'opencode' ||
+    value === 'grokbuild' ||
+    value === 'kimi' ||
+    value === 'claude' ||
+    value === 'pi' ||
+    value === 'dsh'
+  ) {
+    return value
+  }
   return 'all'
-}
-
-export function clampUiOpacity(value: number) {
-  const n = Number(value)
-  if (!Number.isFinite(n)) return UI_OPACITY_DEFAULT
-  return Math.min(UI_OPACITY_MAX, Math.max(UI_OPACITY_MIN, Math.round(n)))
 }
 
 function migrateLoadedUiOpacity(value: number) {
   const n = clampUiOpacity(value)
   if (n === 40 || n === 10) return UI_OPACITY_DEFAULT
   return n
-}
-
-export function applyUiOpacity(value: number) {
-  document.documentElement.style.setProperty('--ad-ui-opacity', String(clampUiOpacity(value)))
 }
 
 export const store = reactive({
@@ -108,8 +149,16 @@ export const store = reactive({
   sessionErrorKind: '' as string,
   sessionError: '',
   sessionErrors: {} as Partial<Record<ToolId, { kind: string; message: string }>>,
-  sessionLoading: { opencode: false, grokbuild: false, kimi: false } as Record<ToolId, boolean>,
+  sessionLoading: {
+    opencode: false,
+    grokbuild: false,
+    kimi: false,
+    claude: false,
+    pi: false,
+    dsh: false
+  } as Record<ToolId, boolean>,
   sessionRefreshBusy: false,
+  renamingSessionId: '',
   sessionQuery: '',
   sessionToolFilter: 'all' as SessionToolFilter,
   probes: null as ToolProbeMap | null,
@@ -121,7 +170,11 @@ export const store = reactive({
   toastTimer: 0,
   grokAuthRev: 0,
   appMode: 'console' as AppMode,
-  pipelines: {} as Record<string, BridgePipeline>,
+  bridgePaneMode: 'edit' as 'edit' | 'run',
+  bridgeSelectedNodeId: '',
+  customRoles: [] as RoleDef[],
+  projectFlows: {} as Record<string, ProjectFlows>,
+  runs: {} as Record<string, FlowRun | null>,
   codexThreads: [] as CodexThread[],
   codexStatus: 'idle' as 'idle' | 'loading' | 'ready' | 'error',
   codexError: '',
@@ -169,22 +222,35 @@ export function findLiveForSession(sessionId: string, toolId: ToolId, projectId 
 
 export const activeLive = computed(() => store.live.find((item) => item.ptyId === store.activePtyId) ?? null)
 
+export const currentFlowBundle = computed(() => {
+  const id = store.selectedProjectId
+  if (!id) return null
+  return ensureProjectFlows(store.projectFlows, id)
+})
+
+export const currentFlow = computed(() => selectedFlow(currentFlowBundle.value))
+
+export const currentRun = computed(() => {
+  const id = store.selectedProjectId
+  if (!id) return null
+  return store.runs[id] ?? null
+})
+
 export const currentPipeline = computed(() => {
   const id = store.selectedProjectId
   if (!id) return null
-  return ensurePipeline(id)
+  const bundle = ensureProjectFlows(store.projectFlows, id)
+  return flowAsPipeline(id, bundle, selectedFlow(bundle), store.runs[id] ?? null)
 })
 
 export const projectHasLivePty = computed(() =>
   store.live.some((item) => item.projectId === store.selectedProjectId && item.alive)
 )
 
-export function ensurePipeline(projectId: string) {
-  if (!projectId) return emptyPipeline('')
-  if (!store.pipelines[projectId]) {
-    store.pipelines[projectId] = emptyPipeline(projectId)
-  }
-  return store.pipelines[projectId]
+export function ensurePipeline(projectId: string): BridgePipeline {
+  const bundle = ensureProjectFlows(store.projectFlows, projectId)
+  if (!(projectId in store.runs)) store.runs[projectId] = null
+  return flowAsPipeline(projectId, bundle, selectedFlow(bundle), store.runs[projectId] ?? null)
 }
 
 export function setAppMode(mode: AppMode) {
@@ -216,14 +282,19 @@ export function applyState(state: AppState) {
     ...defaultSettings(),
     ...state.settings,
     uiOpacity: migrateLoadedUiOpacity(state.settings.uiOpacity),
+    uiFrost: clampUiFrost(state.settings.uiFrost ?? UI_FROST_DEFAULT),
+    grokFollowGlass: Boolean(state.settings.grokFollowGlass),
     ...appearanceToSettings(appearanceFromSettings(state.settings)),
     sessionToolFilter: parseSessionToolFilter(state.settings.sessionToolFilter),
     cursorApiKey: state.settings.cursorApiKey ?? '',
-    codexPath: state.settings.codexPath ?? ''
+    codexPath: state.settings.codexPath ?? '',
+    ccswitchPath: state.settings.ccswitchPath ?? '',
+    ccswitchDownloadDir: state.settings.ccswitchDownloadDir ?? '',
+    ccswitchInstallDir: state.settings.ccswitchInstallDir ?? ''
   }
   store.sessionToolFilter = store.settings.sessionToolFilter
   store.ready = true
-  applyUiOpacity(store.settings.uiOpacity)
+  applyUiGlass(store.settings.uiOpacity, store.settings.uiFrost)
   applyAppearance(appearanceFromSettings(store.settings))
   if (!store.selectedProjectId || !store.projects.some((item) => item.id === store.selectedProjectId)) {
     store.selectedProjectId = store.projects[0]?.id ?? ''
@@ -356,16 +427,20 @@ export async function boot() {
     rememberPty(lastPtyByProject, 'preview-aitools', 'preview-a1')
     store.sessionToolFilter = parseSessionToolFilter(localStorage.getItem(FILTER_STORAGE_KEY))
     store.settings.sessionToolFilter = store.sessionToolFilter
-    applyUiOpacity(store.settings.uiOpacity)
+    applyUiGlass(store.settings.uiOpacity, store.settings.uiFrost)
     applyAppearance(appearanceFromSettings(store.settings))
     restoreAppMode()
-    store.pipelines = loadPipelines()
+    store.projectFlows = loadAllFlows()
+    store.runs = loadAllRuns()
+    store.customRoles = loadCustomRoles()
     if (store.selectedProjectId) ensurePipeline(store.selectedProjectId)
     return
   }
   applyState(await api.loadAppState())
   restoreAppMode()
-  store.pipelines = loadPipelines()
+  store.projectFlows = loadAllFlows()
+  store.runs = loadAllRuns()
+  store.customRoles = loadCustomRoles()
   if (store.selectedProjectId) ensurePipeline(store.selectedProjectId)
   void finishBoot()
 }
@@ -410,10 +485,14 @@ export function isToolScanning(toolId: ToolId) {
 }
 
 export function isSessionScanning() {
-  return store.sessionLoading.opencode || store.sessionLoading.grokbuild || store.sessionLoading.kimi
+  return TOOLS.some((tool) => store.sessionLoading[tool.id])
 }
 
 export async function refreshSessions(opts?: { silent?: boolean }) {
+  if (store.renamingSessionId) {
+    sessionRefreshAgain = opts ?? {}
+    return sessionRefresh ?? Promise.resolve()
+  }
   if (sessionRefresh) {
     sessionRefreshAgain = opts ?? {}
     return sessionRefresh
@@ -431,7 +510,14 @@ async function refreshSessionsNow(opts?: { silent?: boolean }) {
   if (!store.selectedProjectId) {
     store.sessions = []
     store.sessionErrors = {}
-    store.sessionLoading = { opencode: false, grokbuild: false, kimi: false }
+    store.sessionLoading = {
+      opencode: false,
+      grokbuild: false,
+      kimi: false,
+      claude: false,
+      pi: false,
+      dsh: false
+    }
     store.sessionRefreshBusy = false
     store.sessionStatus = 'idle'
     return
@@ -505,7 +591,14 @@ function applyPreviewSessions() {
   const rows = previewSessions[store.selectedProjectId] ?? []
   store.sessions = [...rows]
   store.sessionErrors = {}
-  store.sessionLoading = { opencode: false, grokbuild: false, kimi: false }
+  store.sessionLoading = {
+    opencode: false,
+    grokbuild: false,
+    kimi: false,
+    claude: false,
+    pi: false,
+    dsh: false
+  }
   store.sessionStatus = rows.length ? 'ready' : 'empty'
 }
 
@@ -587,10 +680,10 @@ export async function saveAppSettings(settings: AppSettings) {
 
 function toolsToScan(): ToolId[] {
   const filter = store.sessionToolFilter
-  if (filter === 'opencode' || filter === 'grokbuild' || filter === 'kimi') {
+  if (filter !== 'all' && TOOLS.some((tool) => tool.id === filter)) {
     return [filter]
   }
-  return ['opencode', 'grokbuild', 'kimi']
+  return TOOLS.map((tool) => tool.id)
 }
 
 export async function setSessionToolFilter(id: SessionToolFilter) {
@@ -608,14 +701,28 @@ export async function setSessionToolFilter(id: SessionToolFilter) {
   void refreshSessions()
 }
 
+export function applyLocalSessionTitle(sessionId: string, toolId: ToolId, title: string) {
+  const row = store.sessions.find((item) => item.id === sessionId && item.toolId === toolId)
+  if (row) row.title = title
+  const live = findLiveForSession(sessionId, toolId)
+  if (live) live.title = title
+}
+
 export async function renameCurrentSession(session: SessionRow, title: string) {
   if (!store.selectedProjectId) return
-  const result = await api.renameSession(store.selectedProjectId, session.toolId, session.id, title)
-  await refreshSessions()
-  if (result.kind === 'overlay') {
-    showToast('已保存显示名。OpenCode 自己的标题不会改。')
-  } else {
-    showToast('已写入会话标题')
+  const previous = session.title
+  applyLocalSessionTitle(session.id, session.toolId, title)
+  try {
+    const result = await api.renameSession(store.selectedProjectId, session.toolId, session.id, title)
+    await refreshSessions({ silent: true })
+    if (result.kind === 'overlay') {
+      showToast('已保存显示名。OpenCode 自己的标题不会改。')
+    } else {
+      showToast('已保存显示名')
+    }
+  } catch (error) {
+    applyLocalSessionTitle(session.id, session.toolId, previous)
+    throw error
   }
 }
 

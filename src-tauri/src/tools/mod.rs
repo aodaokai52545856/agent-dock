@@ -1,6 +1,9 @@
+mod claude;
+pub mod dsh;
 mod grokbuild;
 mod kimi;
 mod opencode;
+mod pi;
 pub mod update;
 
 use crate::path_norm::normalize_path;
@@ -15,6 +18,9 @@ pub enum ToolId {
     Opencode,
     Grokbuild,
     Kimi,
+    Claude,
+    Pi,
+    Dsh,
 }
 
 impl ToolId {
@@ -23,6 +29,9 @@ impl ToolId {
             ToolId::Opencode => "opencode",
             ToolId::Grokbuild => "grokbuild",
             ToolId::Kimi => "kimi",
+            ToolId::Claude => "claude",
+            ToolId::Pi => "pi",
+            ToolId::Dsh => "dsh",
         }
     }
 
@@ -31,6 +40,9 @@ impl ToolId {
             ToolId::Opencode => "OpenCode",
             ToolId::Grokbuild => "Grok Build",
             ToolId::Kimi => "Kimi",
+            ToolId::Claude => "Claude Code",
+            ToolId::Pi => "Pi",
+            ToolId::Dsh => "DeepSeek Harness",
         }
     }
 
@@ -39,6 +51,9 @@ impl ToolId {
             ToolId::Opencode => &settings.opencode_path,
             ToolId::Grokbuild => &settings.grokbuild_path,
             ToolId::Kimi => &settings.kimi_path,
+            ToolId::Claude => &settings.claude_path,
+            ToolId::Pi => &settings.pi_path,
+            ToolId::Dsh => &settings.dsh_path,
         }
     }
 
@@ -47,6 +62,9 @@ impl ToolId {
             ToolId::Opencode => &["opencode"],
             ToolId::Grokbuild => &["grokbuild", "grok"],
             ToolId::Kimi => &["kimi"],
+            ToolId::Claude => &["claude"],
+            ToolId::Pi => &["pi"],
+            ToolId::Dsh => &["dsh"],
         }
     }
 }
@@ -103,6 +121,9 @@ pub fn resolve_binary(tool: ToolId, settings: &AppSettings) -> Result<PathBuf, S
 }
 
 pub fn probe_binary(tool: ToolId, settings: &AppSettings) -> BinaryProbe {
+    if tool == ToolId::Dsh {
+        return dsh::probe(settings);
+    }
     match resolve_binary(tool, settings) {
         Ok(path) => BinaryProbe {
             found: true,
@@ -122,6 +143,9 @@ pub fn list_sessions(tool: ToolId, cwd: &str, settings: &AppSettings) -> Result<
         ToolId::Opencode => opencode::list_sessions(cwd, settings),
         ToolId::Grokbuild => grokbuild::list_sessions(cwd),
         ToolId::Kimi => kimi::list_sessions(cwd),
+        ToolId::Claude => claude::list_sessions(cwd),
+        ToolId::Pi => pi::list_sessions(cwd),
+        ToolId::Dsh => dsh::list_sessions(cwd),
     }
 }
 
@@ -140,7 +164,7 @@ pub fn rename_session(
         return Err("名称请控制在 80 个字以内".into());
     }
     match tool {
-        ToolId::Opencode => Ok(RenameKind::Overlay),
+        ToolId::Opencode | ToolId::Claude | ToolId::Pi | ToolId::Dsh => Ok(RenameKind::Overlay),
         ToolId::Grokbuild => grokbuild::rename_session(cwd, session_id, title).map(|_| RenameKind::Native),
         ToolId::Kimi => kimi::rename_session(session_id, title).map(|_| RenameKind::Native),
     }
@@ -156,21 +180,33 @@ pub fn delete_session(
         ToolId::Opencode => opencode::delete_session(cwd, session_id, settings),
         ToolId::Grokbuild => grokbuild::delete_session(cwd, session_id),
         ToolId::Kimi => kimi::delete_session(session_id),
+        ToolId::Claude => claude::delete_session(session_id, cwd),
+        ToolId::Pi => pi::delete_session(cwd, session_id),
+        ToolId::Dsh => dsh::delete_session(cwd, session_id),
     }
 }
 
 pub fn resume_args(tool: ToolId, session_id: &str) -> Vec<String> {
     match tool {
-        ToolId::Opencode => vec!["--session".into(), session_id.into()],
-        ToolId::Grokbuild => vec!["--resume".into(), session_id.into()],
+        ToolId::Opencode | ToolId::Pi => vec!["--session".into(), session_id.into()],
+        ToolId::Grokbuild | ToolId::Claude => vec!["--resume".into(), session_id.into()],
         ToolId::Kimi => vec!["--session".into(), session_id.into()],
+        ToolId::Dsh => Vec::new(),
     }
 }
 
 pub fn launch_args(tool: ToolId, session_id: Option<&str>) -> Vec<String> {
+    launch_args_for(tool, session_id, None)
+}
+
+pub fn launch_args_for(tool: ToolId, session_id: Option<&str>, _exe: Option<&Path>) -> Vec<String> {
     let mut args = Vec::new();
     if tool == ToolId::Grokbuild {
         args.push("--fullscreen".into());
+    }
+    if tool == ToolId::Dsh {
+        args.push("web".into());
+        args.push("--no-open".into());
     }
     if let Some(id) = session_id {
         args.extend(resume_args(tool, id));
@@ -269,6 +305,9 @@ mod tests {
         assert_eq!(resume_args(ToolId::Opencode, "ses_1"), vec!["--session", "ses_1"]);
         assert_eq!(resume_args(ToolId::Grokbuild, "abc"), vec!["--resume", "abc"]);
         assert_eq!(resume_args(ToolId::Kimi, "session_1"), vec!["--session", "session_1"]);
+        assert_eq!(resume_args(ToolId::Claude, "abc-123"), vec!["--resume", "abc-123"]);
+        assert_eq!(resume_args(ToolId::Pi, "sess-pi-1"), vec!["--session", "sess-pi-1"]);
+        assert!(resume_args(ToolId::Dsh, "session_dsh_1").is_empty());
     }
 
     #[test]
@@ -283,6 +322,24 @@ mod tests {
             launch_args(ToolId::Kimi, Some("session_1")),
             vec!["--session", "session_1"]
         );
+        assert_eq!(launch_args(ToolId::Dsh, None), vec!["web", "--no-open"]);
+        assert_eq!(
+            launch_args(ToolId::Dsh, Some("session_dsh_1")),
+            vec!["web", "--no-open"]
+        );
+        assert_eq!(
+            launch_args(ToolId::Pi, Some("sess-pi-1")),
+            vec!["--session", "sess-pi-1"]
+        );
+        assert_eq!(
+            launch_args_for(
+                ToolId::Dsh,
+                None,
+                Some(Path::new(r"C:\Users\me\AppData\Roaming\npm\dsh.cmd"))
+            ),
+            vec!["web", "--no-open"]
+        );
+        assert_eq!(ToolId::Dsh.candidates(), &["dsh"]);
     }
 
     #[test]

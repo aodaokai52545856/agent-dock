@@ -18,9 +18,12 @@ import {
 } from '../lib/appearance'
 import type { AppSettings } from '../lib/types'
 import {
+  UI_FROST_MAX,
+  UI_FROST_MIN,
   UI_OPACITY_MAX,
   UI_OPACITY_MIN,
-  applyUiOpacity,
+  applyUiGlass,
+  clampUiFrost,
   clampUiOpacity
 } from '../lib/store'
 
@@ -48,8 +51,13 @@ function syncForm() {
   form.uiContrast = look.contrast
   form.translucentSidebar = look.translucentSidebar
   form.uiOpacity = clampUiOpacity(props.settings.uiOpacity)
+  form.uiFrost = clampUiFrost(props.settings.uiFrost)
+  form.grokFollowGlass = Boolean(props.settings.grokFollowGlass)
   form.cursorApiKey = props.settings.cursorApiKey ?? ''
   form.codexPath = props.settings.codexPath ?? ''
+  form.claudePath = props.settings.claudePath ?? ''
+  form.piPath = props.settings.piPath ?? ''
+  form.dshPath = props.settings.dshPath ?? ''
   form.saving = false
 }
 
@@ -66,8 +74,13 @@ const form = reactive({
   uiContrast: 60,
   translucentSidebar: true,
   uiOpacity: clampUiOpacity(props.settings.uiOpacity),
+  uiFrost: clampUiFrost(props.settings.uiFrost),
+  grokFollowGlass: Boolean(props.settings.grokFollowGlass),
   cursorApiKey: props.settings.cursorApiKey ?? '',
   codexPath: props.settings.codexPath ?? '',
+  claudePath: props.settings.claudePath ?? '',
+  piPath: props.settings.piPath ?? '',
+  dshPath: props.settings.dshPath ?? '',
   saving: false
 })
 syncForm()
@@ -81,14 +94,14 @@ watch(
   ([open]) => {
     syncForm()
     if (!open) {
-      applyUiOpacity(props.settings.uiOpacity)
+      applyUiGlass(props.settings.uiOpacity, props.settings.uiFrost)
       applyAppearance(appearanceFromSettings(props.settings))
     }
   }
 )
 
-function previewOpacity() {
-  applyUiOpacity(form.uiOpacity)
+function previewGlass() {
+  applyUiGlass(form.uiOpacity, form.uiFrost)
 }
 
 function previewAppearance() {
@@ -117,7 +130,7 @@ function setColor(key: 'uiAccent' | 'uiBackground' | 'uiForeground', value: stri
 }
 
 function submit() {
-  const size = Number(form.terminalFontSize) || 13
+  const size = Number(form.terminalFontSize) || 14
   form.saving = true
   emit('save', {
     ...props.settings,
@@ -135,8 +148,13 @@ function submit() {
     }),
     terminalFontSize: Math.min(22, Math.max(10, size)),
     uiOpacity: clampUiOpacity(form.uiOpacity),
+    uiFrost: clampUiFrost(form.uiFrost),
+    grokFollowGlass: Boolean(form.grokFollowGlass),
     cursorApiKey: form.cursorApiKey.trim(),
-    codexPath: form.codexPath.trim()
+    codexPath: form.codexPath.trim(),
+    claudePath: form.claudePath.trim(),
+    piPath: form.piPath.trim(),
+    dshPath: form.dshPath.trim()
   })
 }
 
@@ -289,20 +307,56 @@ defineExpose({ stopSave })
           :min="UI_OPACITY_MIN"
           :max="UI_OPACITY_MAX"
           step="1"
-          @input="previewOpacity"
+          @input="previewGlass"
         />
       </label>
-      <p class="hint">数字越大，越能透过窗口看到桌面。终端里的字仍保持不透明。拖动即可预览，点保存后写入本机。</p>
+      <p class="hint">数字越大，窗体底色越淡，越能看见后面的桌面。终端里的字仍保持不透明。</p>
+      <label class="field">
+        <span>毛玻璃 <em>{{ form.uiFrost }}%</em></span>
+        <input
+          v-model.number="form.uiFrost"
+          type="range"
+          :min="UI_FROST_MIN"
+          :max="UI_FROST_MAX"
+          step="1"
+          @input="previewGlass"
+        />
+      </label>
+      <p class="hint">数字越大，背后内容越糊。拉到 0 就是清透，不再在桌面上再套一层霜。拖动即可预览，点保存后写入本机。</p>
+      <label class="look-row glass-row">
+        <span>Grok 跟随窗口玻璃</span>
+        <button
+          type="button"
+          class="switch"
+          :class="{ on: form.grokFollowGlass }"
+          role="switch"
+          :aria-checked="form.grokFollowGlass"
+          @click="form.grokFollowGlass = !form.grokFollowGlass"
+        />
+      </label>
+      <p class="hint">打开后，Dock 里新开的 Grok 使用官方 terminal 主题（不涂实色底）。不改 ~/.grok/config.toml，外面单独跑 grok 不受影响。已开的会话要关掉重开。</p>
+      <label class="field">
+        <span>Claude Code 路径</span>
+        <input v-model="form.claudePath" type="text" placeholder="留空则从 PATH 查找 claude" />
+      </label>
+      <label class="field">
+        <span>Pi 路径</span>
+        <input v-model="form.piPath" type="text" placeholder="留空则从 PATH 查找 pi" />
+      </label>
+      <label class="field">
+        <span>DeepSeek Harness 路径</span>
+        <input v-model="form.dshPath" type="text" placeholder="留空则从 PATH 查找 dsh（含 dsh web）" />
+      </label>
       <label class="field">
         <span>Codex 路径</span>
         <input v-model="form.codexPath" type="text" placeholder="留空则从 PATH 查找 codex" />
       </label>
-      <p class="hint">编排模式用 `codex app-server` 列线程并做 detached 审查，不走内嵌终端。</p>
+      <p class="hint">编排里的 Codex 节点用 `codex app-server` 列线程并做 detached 审查，不点桌面窗口，也不走内嵌终端。</p>
       <label class="field">
         <span>Cursor API Key</span>
         <input v-model="form.cursorApiKey" type="password" autocomplete="off" placeholder="只用于自动开发，可留空" />
       </label>
-      <p class="hint">写在本机配置里。Cursor SDK 与 IDE 订阅分开计费。半自动审查不需要这项。</p>
+      <p class="hint">写在本机配置里。Cursor SDK 与 IDE 订阅分开计费。只有通道选 Cursor SDK 的开发者节点才需要。</p>
       <div class="actions">
         <button type="button" class="btn btn-primary" :disabled="form.saving" @click="submit">
           {{ form.saving ? '保存中…' : '保存' }}
@@ -344,6 +398,13 @@ defineExpose({ stopSave })
 
 .look-row:last-child {
   border-bottom: 0;
+}
+
+.glass-row {
+  margin: 8px 0 0;
+  padding: 0;
+  border: 0;
+  min-height: 36px;
 }
 
 .look-row > span:first-child {
@@ -468,7 +529,7 @@ defineExpose({ stopSave })
 }
 
 .theme-preview[data-theme='dark'] {
-  background: linear-gradient(180deg, #2a2a2a 0 18px, #141414 18px);
+  background: linear-gradient(180deg, #1f2327 0 18px, #0b0f13 18px);
 }
 
 .theme-preview[data-theme='light'] {
@@ -476,7 +537,7 @@ defineExpose({ stopSave })
 }
 
 .theme-preview[data-theme='system'] {
-  background: linear-gradient(90deg, #f3f3f3 50%, #161616 50%);
+  background: linear-gradient(90deg, #f3f3f3 50%, #0b0f13 50%);
 }
 
 .theme-preview i,

@@ -4,17 +4,24 @@ use tauri::WebviewWindow;
 
 static REVEALED: AtomicBool = AtomicBool::new(false);
 
-pub fn attach(win: &WebviewWindow) {
+pub fn attach(win: &WebviewWindow, on_close: impl Fn() + Send + Sync + 'static) {
     apply_window_icon(win);
     // Opaque first. Acrylic + a transparent webview before the first paint
     // is the blank gray window.
-    let _ = win.set_background_color(Some(tauri::window::Color(13, 13, 13, 255)));
+    let _ = win.set_background_color(Some(tauri::window::Color(11, 15, 19, 255)));
     apply(win);
 
     let handle = win.clone();
+    let on_close = std::sync::Arc::new(on_close);
     win.on_window_event(move |event| {
         if matches!(event, tauri::WindowEvent::Resized(_)) {
             apply(&handle);
+        }
+        if matches!(
+            event,
+            tauri::WindowEvent::CloseRequested { .. } | tauri::WindowEvent::Destroyed
+        ) {
+            on_close();
         }
     });
 
@@ -36,6 +43,42 @@ pub fn reveal(win: &WebviewWindow) {
     let _ = win.show();
     if first {
         let _ = win.set_focus();
+    }
+}
+
+pub fn raise_resize_overlay(hwnd: isize) {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::Foundation::HWND;
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            FindWindowExW, SetWindowPos, HWND_TOP, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOOWNERZORDER,
+            SWP_NOSIZE,
+        };
+        let parent = hwnd as HWND;
+        if parent.is_null() {
+            return;
+        }
+        let class: Vec<u16> = "TAURI_DRAG_RESIZE_BORDERS\0".encode_utf16().collect();
+        let name: Vec<u16> = "TAURI_DRAG_RESIZE_WINDOW\0".encode_utf16().collect();
+        let child = unsafe { FindWindowExW(parent, std::ptr::null_mut(), class.as_ptr(), name.as_ptr()) };
+        if child.is_null() {
+            return;
+        }
+        unsafe {
+            let _ = SetWindowPos(
+                child,
+                HWND_TOP,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER,
+            );
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = hwnd;
     }
 }
 
@@ -78,6 +121,10 @@ fn refresh_shell_icons() {
 }
 
 fn apply_desktop_glass(win: &WebviewWindow) {
+    set_frost(win, crate::state::default_ui_frost());
+}
+
+pub fn set_frost(win: &WebviewWindow, frost: u32) {
     #[cfg(windows)]
     {
         let Ok(hwnd) = win.hwnd() else {
@@ -86,16 +133,34 @@ fn apply_desktop_glass(win: &WebviewWindow) {
         let hwnd = hwnd.0 as isize;
         set_dark_mode(hwnd);
         reset_frame(hwnd);
-        set_system_backdrop(hwnd);
+        set_system_backdrop(hwnd, backdrop_for_frost(frost));
     }
     #[cfg(target_os = "macos")]
     {
         use window_vibrancy::{apply_vibrancy, NSVisualEffectMaterial};
+        if frost == 0 {
+            let _ = win;
+            return;
+        }
         let _ = apply_vibrancy(win, NSVisualEffectMaterial::HudWindow, None, None);
     }
     #[cfg(all(not(windows), not(target_os = "macos")))]
     {
-        let _ = win;
+        let _ = (win, frost);
+    }
+}
+
+#[cfg(windows)]
+fn backdrop_for_frost(frost: u32) -> u32 {
+    const DWMSBT_NONE: u32 = 1;
+    const DWMSBT_MAINWINDOW: u32 = 2;
+    const DWMSBT_TRANSIENTWINDOW: u32 = 3;
+    if frost == 0 {
+        DWMSBT_NONE
+    } else if frost < 50 {
+        DWMSBT_MAINWINDOW
+    } else {
+        DWMSBT_TRANSIENTWINDOW
     }
 }
 
@@ -140,10 +205,8 @@ fn reset_frame(hwnd: isize) {
 }
 
 #[cfg(windows)]
-fn set_system_backdrop(hwnd: isize) {
+fn set_system_backdrop(hwnd: isize, backdrop: u32) {
     const DWMWA_SYSTEMBACKDROP_TYPE: u32 = 38;
-    const DWMSBT_TRANSIENTWINDOW: u32 = 3;
-    let backdrop: u32 = DWMSBT_TRANSIENTWINDOW;
     unsafe {
         let _ = DwmSetWindowAttribute(
             hwnd,

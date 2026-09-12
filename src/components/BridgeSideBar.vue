@@ -1,12 +1,15 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
-import { relativeTime } from '../lib/format'
 import { endPaneAnim, layout, sidebarPaneWidth, toggleProjects } from '../lib/layout'
 import { liveDotTitle, projectLiveDot, type LiveDotKind } from '../lib/livePulse'
 import { liveOfProject } from '../lib/livePty'
-import { refreshCodexThreads, toggleBridgeThread } from '../lib/pipeline'
-import { currentPipeline, ensurePipeline, store } from '../lib/store'
-import { GATE_LABEL } from '../lib/types'
+import {
+  createPairFlow,
+  deleteFlow,
+  renameFlow,
+  selectFlow
+} from '../lib/flow/runtime.ts'
+import { currentFlow, currentRun, ensurePipeline, store } from '../lib/store'
 
 defineProps<{
   collapsed: boolean
@@ -25,10 +28,6 @@ function onPaneTransitionEnd(event: TransitionEvent) {
   endPaneAnim()
 }
 
-function isSelected(id: string) {
-  return currentPipeline.value?.selectedThreadIds.includes(id) ?? false
-}
-
 function onSelectProject(id: string) {
   emit('select', id)
   ensurePipeline(id)
@@ -45,6 +44,33 @@ function projectLiveCount(projectId: string) {
   return liveOfProject(store.live, projectId).length
 }
 
+const flows = computed(() => store.projectFlows[store.selectedProjectId]?.flows ?? [])
+const selectedFlowId = computed(() => store.projectFlows[store.selectedProjectId]?.selectedFlowId ?? '')
+const renamingId = ref('')
+const renameDraft = ref('')
+const confirmDeleteId = ref('')
+
+function startRename(id: string, name: string) {
+  renamingId.value = id
+  renameDraft.value = name
+}
+
+function commitRename() {
+  if (renamingId.value && renameDraft.value.trim()) {
+    renameFlow(renamingId.value, renameDraft.value)
+  }
+  renamingId.value = ''
+}
+
+function onDelete(id: string) {
+  if (confirmDeleteId.value === id) {
+    deleteFlow(id)
+    confirmDeleteId.value = ''
+    return
+  }
+  confirmDeleteId.value = id
+}
+
 onMounted(() => {
   pulseTimer = window.setInterval(() => {
     now.value = Date.now()
@@ -55,22 +81,14 @@ onUnmounted(() => {
   window.clearInterval(pulseTimer)
 })
 
-const gate = computed(() => currentPipeline.value?.gate ?? 'idle')
-const slice = computed(() => currentPipeline.value?.slice ?? 1)
-const retryCount = computed(() => currentPipeline.value?.retryCount ?? 0)
-const maxRetries = computed(() => currentPipeline.value?.maxRetries ?? 0)
-
-/** Thin progress: retry ratio when failing/retrying; gate-based otherwise. */
-const gateProgress = computed(() => {
-  const g = gate.value
-  if (g === 'passed') return 100
-  if (g === 'failed') {
-    const max = Math.max(1, maxRetries.value)
-    return Math.min(100, Math.round((retryCount.value / max) * 100))
-  }
-  if (g === 'reviewing' || g === 'developing') return 55
-  if (g === 'idle') return 0
-  return 25
+const runHint = computed(() => {
+  const run = currentRun.value
+  if (!run) return ''
+  if (run.status === 'running') return '运行中'
+  if (run.status === 'waiting') return '待桥接'
+  if (run.status === 'failed') return '失败'
+  if (run.status === 'completed') return '已完成'
+  return ''
 })
 </script>
 
@@ -135,51 +153,48 @@ const gateProgress = computed(() => {
         <p v-else-if="!layout.projectsCollapsed" class="muted pad">还没有项目</p>
       </div>
 
-      <div class="block gate-block">
-        <div class="gate-card" :data-gate="gate">
-          <div class="gate-card-top">
-            <span class="gate-dot" :data-gate="gate" />
-            <span class="gate-label">{{ GATE_LABEL[gate] }}</span>
-            <span class="gate-slice">第 {{ slice }} 片</span>
-          </div>
-          <p v-if="retryCount" class="gate-retry">
-            已返工 {{ retryCount }} / {{ maxRetries }} 次
-          </p>
-          <div class="gate-bar" role="progressbar" :aria-valuenow="gateProgress" aria-valuemin="0" aria-valuemax="100">
-            <span class="gate-bar-fill" :style="{ width: gateProgress + '%' }" />
-          </div>
-        </div>
-      </div>
-
-      <div class="block block--threads">
+      <div class="block block--flows">
         <div class="block-head">
-          <p class="kicker">Codex 线程</p>
-          <button type="button" class="text-btn" :disabled="store.codexStatus === 'loading'" @click="refreshCodexThreads">
-            {{ store.codexStatus === 'loading' ? '读取中' : '刷新' }}
+          <p class="kicker">已保存的流程</p>
+          <button type="button" class="text-btn" :disabled="!store.selectedProjectId" @click="createPairFlow">
+            新建
           </button>
         </div>
-        <p class="hint">勾选后作为审查上下文。不会往桌面正在聊的 turn 里塞字。</p>
-        <ul v-if="store.codexThreads.length" class="threads">
-          <li v-for="thread in store.codexThreads" :key="thread.id">
-            <label class="thread" :class="{ 'thread--on': isSelected(thread.id) }">
-              <input type="checkbox" :checked="isSelected(thread.id)" @change="toggleBridgeThread(thread.id)" />
-              <span class="thread-body">
-                <span class="thread-name">{{ thread.name }}</span>
-                <span class="thread-preview">{{ thread.preview || thread.id }}</span>
-              </span>
-              <span class="thread-meta">
-                <span v-if="thread.isPinned" class="pin">钉</span>
-                <span>{{ relativeTime(thread.updatedAt) }}</span>
-              </span>
-            </label>
+        <p class="hint">一对一：开发者完成后交给审查者，未通过再回到开发者。</p>
+        <ul v-if="flows.length" class="flows">
+          <li v-for="item in flows" :key="item.id">
+            <div class="flow" :class="{ 'flow--on': item.id === selectedFlowId }">
+              <button type="button" class="flow-main" @click="selectFlow(item.id)" @dblclick="startRename(item.id, item.name)">
+                <span class="flow-name" :title="item.name">
+                  <input
+                    v-if="renamingId === item.id"
+                    v-model="renameDraft"
+                    class="rename"
+                    @click.stop
+                    @keydown.enter="commitRename"
+                    @blur="commitRename"
+                  />
+                  <template v-else>{{ item.name }}</template>
+                </span>
+                <span v-if="item.id === selectedFlowId && runHint" class="flow-run">{{ runHint }}</span>
+              </button>
+              <div class="project-ops">
+                <button type="button" class="row-btn" @click.stop="startRename(item.id, item.name)">改名</button>
+                <button
+                  type="button"
+                  class="row-btn row-btn-danger"
+                  @click.stop="onDelete(item.id)"
+                >
+                  {{ confirmDeleteId === item.id ? '确认删' : '删除' }}
+                </button>
+              </div>
+            </div>
           </li>
         </ul>
-        <p v-else-if="store.codexStatus === 'loading'" class="muted pad">正在列出本机线程库…</p>
-        <p v-else-if="store.codexError" class="muted pad">{{ store.codexError }}</p>
-        <p v-else class="muted pad">这个目录还没有可桥接的线程。不勾选则会新开一条专用审查线程。</p>
+        <p v-else class="muted pad">还没有流程。点新建会放好「开发 ↔ 审查」。</p>
+        <p v-if="currentFlow" class="meta pad">当前：{{ currentFlow.name }} · {{ currentFlow.nodes.length }} 个节点</p>
       </div>
     </div>
-
   </aside>
 </template>
 
@@ -217,7 +232,7 @@ const gateProgress = computed(() => {
   border-bottom: 1px solid var(--ad-border);
 }
 
-.block--threads {
+.block--flows {
   flex: 1;
   min-height: 0;
   display: flex;
@@ -283,7 +298,16 @@ const gateProgress = computed(() => {
   overflow: auto;
 }
 
-.project {
+.flows {
+  list-style: none;
+  margin: 0;
+  padding: 0 8px 12px;
+  overflow: auto;
+  flex: 1;
+}
+
+.project,
+.flow {
   display: flex;
   align-items: center;
   gap: 2px;
@@ -292,15 +316,19 @@ const gateProgress = computed(() => {
 }
 
 .project:hover,
-.project:focus-within {
+.project:focus-within,
+.flow:hover,
+.flow:focus-within {
   background: var(--ad-hover);
 }
 
-.project--active {
+.project--active,
+.flow--on {
   background: var(--ad-selected);
 }
 
-.project-main {
+.project-main,
+.flow-main {
   flex: 1;
   min-width: 0;
   display: flex;
@@ -324,7 +352,8 @@ const gateProgress = computed(() => {
   stroke: var(--ad-text);
 }
 
-.project-live {
+.project-live,
+.flow-run {
   min-width: 16px;
   height: 16px;
   padding: 0 5px;
@@ -334,12 +363,15 @@ const gateProgress = computed(() => {
   font-size: 11px;
   line-height: 16px;
   text-align: center;
-  font-variant-numeric: tabular-nums;
   flex-shrink: 0;
 }
 
-.project-body,
-.thread-body {
+.flow-run {
+  background: rgba(201, 162, 39, 0.16);
+  color: var(--ad-warning);
+}
+
+.project-body {
   min-width: 0;
   display: flex;
   flex-direction: column;
@@ -347,27 +379,41 @@ const gateProgress = computed(() => {
 }
 
 .project-name,
-.thread-name {
+.flow-name {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--ad-text);
+  flex: 1;
+  min-width: 0;
+}
+
+.rename {
+  width: 100%;
+  height: 24px;
+  padding: 0 6px;
+  border: 1px solid var(--ad-border);
+  border-radius: 6px;
+  background: var(--ad-raised);
+  color: var(--ad-text);
+  font-size: 12px;
 }
 
 .muted,
 .hint,
-.thread-preview,
-.thread-meta,
-.collapsed-label {
+.meta,
+.pad {
   font-size: 12px;
   line-height: 18px;
   color: var(--ad-muted);
 }
 
-.thread-preview {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.pad {
+  padding: 0 12px 8px;
+}
+
+.hint {
+  margin: 0 12px 8px;
 }
 
 .project-ops {
@@ -391,167 +437,5 @@ const gateProgress = computed(() => {
 
 .row-btn-danger:hover {
   color: var(--ad-error);
-}
-
-.pad {
-  padding: 0 12px 8px;
-}
-
-.hint {
-  margin: 0 12px 8px;
-}
-
-.gate-block {
-  padding: 8px 12px 10px;
-}
-
-.gate-card {
-  padding: 10px 12px;
-  border-radius: 10px;
-  border: 1px solid var(--ad-border);
-  background: var(--ad-harbor);
-}
-
-.gate-card-top {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-}
-
-.gate-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--ad-faint);
-  flex-shrink: 0;
-}
-
-.gate-dot[data-gate='passed'] {
-  background: var(--ad-success);
-}
-
-.gate-dot[data-gate='failed'] {
-  background: var(--ad-error);
-}
-
-.gate-dot[data-gate='reviewing'],
-.gate-dot[data-gate='developing'] {
-  background: var(--ad-warning);
-}
-
-.gate-label {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--ad-text);
-  font-size: 13px;
-  line-height: 20px;
-  font-weight: 560;
-}
-
-.gate-slice {
-  flex-shrink: 0;
-  font-size: 12px;
-  line-height: 18px;
-  color: var(--ad-muted);
-  font-variant-numeric: tabular-nums;
-}
-
-.gate-retry {
-  margin: 6px 0 0;
-  font-size: 12px;
-  line-height: 18px;
-  color: var(--ad-muted);
-}
-
-.gate-bar {
-  margin-top: 8px;
-  height: 3px;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.08);
-  overflow: hidden;
-}
-
-.gate-bar-fill {
-  display: block;
-  height: 100%;
-  border-radius: inherit;
-  background: var(--ad-muted);
-  transition: width var(--ad-transition);
-}
-
-.gate-card[data-gate='passed'] .gate-bar-fill {
-  background: var(--ad-success);
-}
-
-.gate-card[data-gate='failed'] .gate-bar-fill {
-  background: var(--ad-error);
-}
-
-.gate-card[data-gate='reviewing'] .gate-bar-fill,
-.gate-card[data-gate='developing'] .gate-bar-fill {
-  background: var(--ad-warning);
-}
-
-.threads {
-  list-style: none;
-  margin: 0;
-  padding: 0 8px 16px;
-  overflow: auto;
-  flex: 1;
-}
-
-.thread {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px;
-  margin-bottom: 2px;
-  border-radius: 8px;
-}
-
-.thread:hover,
-.thread--on {
-  background: var(--ad-hover);
-}
-
-.thread input {
-  margin: 0;
-  accent-color: #ececec;
-}
-
-.thread-meta {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 2px;
-  flex-shrink: 0;
-}
-
-.pin {
-  font-size: 11px;
-  color: var(--ad-text);
-}
-
-.icon-btn {
-  width: 28px;
-  height: 28px;
-  border-radius: 8px;
-  color: var(--ad-muted);
-}
-
-.icon-btn:hover {
-  color: var(--ad-text);
-  background: var(--ad-hover);
-}
-
-.collapsed-label {
-  writing-mode: vertical-rl;
-  font-size: 12px;
-  line-height: 20px;
-  letter-spacing: 2px;
 }
 </style>

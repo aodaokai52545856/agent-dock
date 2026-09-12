@@ -1,17 +1,15 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { toolLabel } from '../lib/types'
 import { activeLive, selectedProject, store } from '../lib/store'
+import { toolLabel } from '../lib/types'
 
 const emit = defineEmits<{
   close: []
-  'toggle-docs': []
 }>()
 
 const props = defineProps<{
   loading?: boolean
   loadingText?: string
-  docsOpen?: boolean
 }>()
 
 const proxyText = computed(() => {
@@ -25,7 +23,11 @@ const live = computed(() => Boolean(activeLive.value))
 </script>
 
 <template>
-  <header v-if="live || loading" class="strip" aria-label="当前启动">
+  <header
+    v-if="live || loading"
+    class="strip"
+    aria-label="当前启动"
+  >
     <span class="ticket">
       <strong>{{ selectedProject?.name ?? '项目' }}</strong>
       <span class="dot">·</span>
@@ -35,29 +37,33 @@ const live = computed(() => Boolean(activeLive.value))
       <span class="dot">·</span>
       <span class="title">{{ title }}</span>
     </span>
-    <span class="status" :class="{ 'status--live': live && !loading, 'status--loading': loading }">
-      {{ loading ? (props.loadingText || '正在打开') : live ? '进行中' : '空闲' }}
-    </span>
-    <button
-      type="button"
-      class="btn btn-ghost btn-small"
-      :class="{ 'is-on': docsOpen }"
-      :aria-pressed="docsOpen"
-      @click="emit('toggle-docs')"
-    >
-      文档
-    </button>
-    <button v-if="live" type="button" class="btn btn-ghost btn-small" @click="emit('close')">关闭终端</button>
+    <div class="tools">
+      <span
+        class="pulse"
+        :class="{ 'is-live': live && !loading, 'is-loading': loading }"
+      >
+        {{ loading ? (props.loadingText || '正在打开') : live ? '进行中' : '空闲' }}
+      </span>
+      <button
+        v-if="live"
+        type="button"
+        class="tool tool-close"
+        aria-label="关闭会话"
+        @click="emit('close')"
+      >
+        关闭会话
+      </button>
+    </div>
   </header>
 </template>
 
 <style scoped>
 .strip {
-  height: 36px;
+  height: 32px;
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 0 20px;
+  padding: 0 var(--ad-stage-pad);
   background: var(--ad-editor);
   border-bottom: 1px solid var(--ad-border);
 }
@@ -94,22 +100,65 @@ const live = computed(() => Boolean(activeLive.value))
   color: var(--ad-text);
 }
 
-.status {
+.tools {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  margin-left: auto;
+  gap: 2px;
+}
+
+.pulse {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 22px;
+  padding: 0 8px 0 2px;
+  margin-right: 4px;
   font-size: 12px;
   line-height: 20px;
   color: var(--ad-muted);
 }
 
-.status--live {
+.pulse::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ad-faint);
+}
+
+.pulse.is-live {
   color: var(--ad-success);
 }
 
-.status--loading {
+.pulse.is-live::before {
+  background: var(--ad-success);
+}
+
+.pulse.is-loading {
   color: var(--ad-accent);
 }
 
-.btn.is-on {
-  background: var(--ad-selected);
-  border-color: rgba(255, 255, 255, 0.1);
+.pulse.is-loading::before {
+  background: var(--ad-accent);
+}
+
+.tool {
+  height: 22px;
+  padding: 0 8px;
+  border-radius: var(--ad-radius-control);
+  font-size: 12px;
+  line-height: 20px;
+  color: var(--ad-muted);
+}
+
+.tool:hover {
+  color: var(--ad-text);
+  background: var(--ad-hover);
+}
+
+.tool-close:hover {
+  color: var(--ad-error);
 }
 </style>

@@ -1,0 +1,157 @@
+<script setup lang="ts">
+import { getCurrentWindow } from '@tauri-apps/api/window'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import * as api from '../lib/api'
+import { DSH_STATUS_BAR, clampDshEmbedBounds, dshEmbedBlocked } from '../lib/dshEmbed'
+import { dshGlassApplyScript, dshGlassTheme, withDshGlassHash } from '../lib/dshGlass'
+import { docRailPaneWidth, layout } from '../lib/layout'
+import { glassRgba } from '../lib/uiGlass'
+import { store } from '../lib/store'
+
+const props = defineProps<{
+  url: string
+}>()
+
+const hostRef = ref<HTMLElement | null>(null)
+const error = ref('')
+
+const theme = computed(() => dshGlassTheme(store.settings))
+const surface = computed(() => glassRgba(theme.value.bg, store.settings.uiOpacity))
+
+function measure() {
+  const el = hostRef.value
+  if (!el) return null
+  const box = el.getBoundingClientRect()
+  const status = document.querySelector('footer.bar')
+  const statusBarHeight = status
+    ? Math.round(status.getBoundingClientRect().height)
+    : DSH_STATUS_BAR
+  return clampDshEmbedBounds(box, {
+    windowWidth: window.innerWidth,
+    windowHeight: window.innerHeight,
+    docRailWidth: layout.docRailCollapsed ? 0 : docRailPaneWidth(),
+    maximized: document.documentElement.classList.contains('ad-maximized'),
+    statusBarHeight
+  })
+}
+
+function masked() {
+  return typeof document !== 'undefined' && dshEmbedBlocked(document)
+}
+
+async function sync(opts?: { navigate?: boolean }) {
+  if (!api.isTauri) return
+  const bounds = measure()
+  try {
+    if (!props.url || !bounds || masked()) {
+      await api.dshEmbedSetVisible(false)
+      return
+    }
+    if (opts?.navigate === false) {
+      await api.dshEmbedSetBounds(bounds)
+      await api.dshEmbedSetVisible(true)
+    } else {
+      await api.dshEmbedOpen(
+        withDshGlassHash(props.url, theme.value),
+        bounds,
+        dshGlassApplyScript(theme.value)
+      )
+    }
+    error.value = ''
+    await pushTheme()
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : String(err)
+  }
+}
+
+async function pushTheme() {
+  if (!api.isTauri || !props.url) return
+  try {
+    await api.dshEmbedApplyTheme(dshGlassApplyScript(theme.value))
+  } catch {
+    /* webview may not exist yet */
+  }
+}
+
+function onResize() {
+  void sync({ navigate: false })
+}
+
+let observer: ResizeObserver | undefined
+let maskObserver: MutationObserver | undefined
+let offResized: (() => void) | undefined
+
+onMounted(() => {
+  observer = new ResizeObserver(onResize)
+  if (hostRef.value) observer.observe(hostRef.value)
+  window.addEventListener('resize', onResize)
+  maskObserver = new MutationObserver(onResize)
+  maskObserver.observe(document.body, {
+    childList: true,
+    subtree: true,
+    attributes: true,
+    attributeFilter: ['class', 'style']
+  })
+  if (api.isTauri) {
+    void getCurrentWindow()
+      .onResized(() => onResize())
+      .then((off) => {
+        offResized = off
+      })
+  }
+  void sync()
+})
+
+onUnmounted(() => {
+  observer?.disconnect()
+  maskObserver?.disconnect()
+  offResized?.()
+  window.removeEventListener('resize', onResize)
+  void api.dshEmbedSetVisible(false)
+})
+
+watch(
+  () => props.url,
+  () => {
+    void sync()
+  }
+)
+
+watch(theme, () => {
+  void pushTheme()
+})
+
+watch(
+  () => [layout.docRailCollapsed, layout.docRailWidth, layout.sidebarWidth, layout.sidebarCollapsed] as const,
+  () => {
+    void sync({ navigate: false })
+  }
+)
+</script>
+
+<template>
+  <div ref="hostRef" class="dsh-web" :style="{ background: surface, colorScheme: theme.scheme }">
+    <p v-if="error" class="wait">{{ error }}</p>
+    <p v-else-if="!url" class="wait">DeepSeek Web 还没有页面地址</p>
+  </div>
+</template>
+
+<style scoped>
+.dsh-web {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.wait {
+  margin: 0;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  color: var(--ad-muted);
+}
+</style>

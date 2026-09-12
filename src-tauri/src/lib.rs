@@ -1,6 +1,14 @@
 mod bridge;
+mod clipboard;
+mod ccswitch;
 mod cursor_dev;
+mod dsh_credentials;
+mod dsh_embed;
+mod dsh_keys;
+mod dsh_web;
+mod dsh_web_guard;
 mod grok_accounts;
+mod secret_box;
 mod grok_spend;
 mod grok_usage;
 mod path_norm;
@@ -21,7 +29,7 @@ use state::{AppSettings, AppState, Project, overlay_key};
 use std::path::Path;
 use std::sync::Arc;
 use tauri::webview::PageLoadEvent;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use grok_accounts::GrokAccountList;
 use grok_spend::GrokSpend;
 use grok_usage::GrokUsage;
@@ -72,6 +80,9 @@ struct ToolProbeMap {
     opencode: BinaryProbe,
     grokbuild: BinaryProbe,
     kimi: BinaryProbe,
+    claude: BinaryProbe,
+    pi: BinaryProbe,
+    dsh: BinaryProbe,
 }
 
 fn validate_project_fields(name: &str, path: &str, proxy_enabled: bool, proxy_url: &str) -> Result<(String, String, String), String> {
@@ -105,7 +116,7 @@ fn load_app_state(app: AppHandle) -> Result<AppState, String> {
 fn save_settings(app: AppHandle, settings: AppSettings) -> Result<AppState, String> {
     let mut next = settings;
     if next.terminal_font_size < 10 || next.terminal_font_size > 22 {
-        next.terminal_font_size = 13;
+        next.terminal_font_size = state::default_terminal_font_size();
     }
     next.default_proxy_url = validate_proxy_url(&next.default_proxy_url)?;
     if next.powershell_path.trim().is_empty()
@@ -178,6 +189,16 @@ fn folder_label(path: String) -> String {
 }
 
 #[tauri::command]
+fn clipboard_write(text: String) -> Result<(), String> {
+    clipboard::write_text(&text)
+}
+
+#[tauri::command]
+fn clipboard_read() -> Result<String, String> {
+    clipboard::read_text()
+}
+
+#[tauri::command]
 fn app_version() -> String {
     tools::update::app_version()
 }
@@ -188,11 +209,17 @@ fn host_platform() -> &'static str {
 }
 
 #[tauri::command]
-async fn list_tool_versions(app: AppHandle) -> Result<Vec<ToolVersionInfo>, String> {
+async fn list_tool_versions(
+    app: AppHandle,
+    proxy_url: Option<String>,
+    tool_id: Option<ToolId>,
+) -> Result<Vec<ToolVersionInfo>, String> {
     let state = state::load_state(&app)?;
-    tauri::async_runtime::spawn_blocking(move || tools::update::list_versions(&state.settings))
-        .await
-        .map_err(|err| format!("检查版本失败：{err}"))
+    tauri::async_runtime::spawn_blocking(move || {
+        tools::update::list_versions(&state.settings, proxy_url.as_deref(), tool_id)
+    })
+    .await
+    .map_err(|err| format!("检查版本失败：{err}"))
 }
 
 #[tauri::command]
@@ -273,17 +300,200 @@ async fn login_grok_account(app: AppHandle) -> Result<GrokAccountList, String> {
 }
 
 #[tauri::command]
-async fn upgrade_tool(app: AppHandle, tool_id: ToolId) -> Result<UpgradeResult, String> {
+async fn upgrade_tool(
+    app: AppHandle,
+    tool_id: ToolId,
+    proxy_url: Option<String>,
+) -> Result<UpgradeResult, String> {
     let state = state::load_state(&app)?;
-    tauri::async_runtime::spawn_blocking(move || tools::update::upgrade_tool(tool_id, &state.settings))
+    tauri::async_runtime::spawn_blocking(move || {
+        tools::update::upgrade_tool(tool_id, &state.settings, proxy_url.as_deref())
+    })
+    .await
+    .map_err(|err| format!("升级失败：{err}"))
+}
+
+#[tauri::command]
+async fn uninstall_tool(app: AppHandle, tool_id: ToolId) -> Result<UpgradeResult, String> {
+    let state = state::load_state(&app)?;
+    tauri::async_runtime::spawn_blocking(move || tools::update::uninstall_tool(tool_id, &state.settings))
         .await
-        .map_err(|err| format!("升级失败：{err}"))
+        .map_err(|err| format!("卸载失败：{err}"))
+}
+
+#[tauri::command]
+fn probe_ccswitch(app: AppHandle) -> Result<ccswitch::Probe, String> {
+    let state = state::load_state(&app)?;
+    Ok(ccswitch::probe(&state.settings))
+}
+
+#[tauri::command]
+async fn ccswitch_latest(proxy_url: Option<String>) -> Result<ccswitch::Latest, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        ccswitch::fetch_latest(proxy_url.as_deref().filter(|item| !item.trim().is_empty()))
+    })
+    .await
+    .map_err(|err| format!("查询 CC Switch 最新版失败：{err}"))?
+}
+
+#[tauri::command]
+async fn install_ccswitch(
+    app: AppHandle,
+    download_dir: String,
+    install_dir: String,
+    proxy_url: Option<String>,
+) -> Result<ccswitch::InstallResult, String> {
+    let state = state::load_state(&app)?;
+    let handle = app.clone();
+    let (result, settings) = tauri::async_runtime::spawn_blocking(move || {
+        let mut settings = state.settings;
+        let result = ccswitch::install(
+            &mut settings,
+            &download_dir,
+            &install_dir,
+            proxy_url.as_deref().filter(|item| !item.trim().is_empty()),
+            |progress| {
+                let _ = handle.emit("ccswitch-progress", &progress);
+            },
+        )?;
+        Ok::<_, String>((result, settings))
+    })
+    .await
+    .map_err(|err| format!("安装 CC Switch 失败：{err}"))??;
+    let mut next = state::load_state(&app)?;
+    next.settings.ccswitch_path = settings.ccswitch_path;
+    next.settings.ccswitch_download_dir = settings.ccswitch_download_dir;
+    next.settings.ccswitch_install_dir = settings.ccswitch_install_dir;
+    state::save_state(&app, &next)?;
+    Ok(result)
+}
+
+#[tauri::command]
+fn launch_ccswitch(app: AppHandle, path: Option<String>) -> Result<(), String> {
+    let state = state::load_state(&app)?;
+    let target = path
+        .map(|item| item.trim().to_string())
+        .filter(|item| !item.is_empty())
+        .or_else(|| ccswitch::probe(&state.settings).path)
+        .ok_or_else(|| "未安装 CC Switch，请先下载安装。".to_string())?;
+    ccswitch::launch(&target)
+}
+
+#[tauri::command]
+fn dsh_key_status(project_path: Option<String>) -> dsh_credentials::DshKeyStatus {
+    dsh_credentials::live_status(project_path.as_deref().map(Path::new))
+}
+
+#[tauri::command]
+fn dsh_list_keys(app: AppHandle, project_path: Option<String>) -> Result<dsh_keys::DshKeyBundle, String> {
+    dsh_keys::list(&app, project_path.as_deref().map(Path::new))
+}
+
+#[tauri::command]
+fn dsh_add_key(
+    app: AppHandle,
+    name: String,
+    key: String,
+    project_path: Option<String>,
+) -> Result<dsh_keys::DshKeyBundle, String> {
+    dsh_keys::add(&app, &name, &key, project_path.as_deref().map(Path::new))
+}
+
+#[tauri::command]
+fn dsh_switch_key(
+    app: AppHandle,
+    id: String,
+    project_path: Option<String>,
+) -> Result<dsh_keys::DshKeyBundle, String> {
+    dsh_keys::switch_to(&app, &id, project_path.as_deref().map(Path::new))
+}
+
+#[tauri::command]
+fn dsh_delete_key(
+    app: AppHandle,
+    id: String,
+    project_path: Option<String>,
+) -> Result<dsh_keys::DshKeyBundle, String> {
+    dsh_keys::delete(&app, &id, project_path.as_deref().map(Path::new))
+}
+
+#[tauri::command]
+fn dsh_rename_key(
+    app: AppHandle,
+    id: String,
+    name: String,
+    project_path: Option<String>,
+) -> Result<dsh_keys::DshKeyBundle, String> {
+    dsh_keys::rename(&app, &id, &name, project_path.as_deref().map(Path::new))
+}
+
+#[tauri::command]
+fn remember_ccswitch_path(app: AppHandle, path: String) -> Result<AppState, String> {
+    let mut state = state::load_state(&app)?;
+    ccswitch::remember_path(&mut state.settings, &path)?;
+    state::save_state(&app, &state)?;
+    Ok(state)
+}
+
+#[tauri::command]
+fn open_external(url: String) -> Result<(), String> {
+    let url = url.trim();
+    if !(url.starts_with("https://") || url.starts_with("http://")) {
+        return Err("只打开 http(s) 链接".into());
+    }
+    #[cfg(windows)]
+    {
+        std::process::Command::new("cmd")
+            .args(["/c", "start", "", url])
+            .spawn()
+            .map_err(|err| format!("无法打开链接：{err}"))?;
+        return Ok(());
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(url)
+            .spawn()
+            .map_err(|err| format!("无法打开链接：{err}"))?;
+        return Ok(());
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(url)
+            .spawn()
+            .map_err(|err| format!("无法打开链接：{err}"))?;
+        return Ok(());
+    }
+}
+
+fn show_main_window(app: &AppHandle) {
+    if let Some(win) = app.get_webview_window("main") {
+        let _ = win.show();
+        return;
+    }
+    if let Some(webview) = app.get_webview("main") {
+        let _ = webview.window().show();
+    }
 }
 
 #[tauri::command]
 fn reveal_main_window(app: AppHandle) {
     if let Some(win) = app.get_webview_window("main") {
         window_chrome::reveal(&win);
+        return;
+    }
+    if let Some(webview) = app.get_webview("main") {
+        let win = webview.window();
+        let _ = win.show();
+        let _ = win.set_focus();
+    }
+}
+
+#[tauri::command]
+fn set_window_frost(app: AppHandle, frost: u32) {
+    if let Some(win) = app.get_webview_window("main") {
+        window_chrome::set_frost(&win, frost);
     }
 }
 
@@ -294,6 +504,9 @@ async fn probe_tools(app: AppHandle) -> Result<ToolProbeMap, String> {
         opencode: tools::probe_binary(ToolId::Opencode, &state.settings),
         grokbuild: tools::probe_binary(ToolId::Grokbuild, &state.settings),
         kimi: tools::probe_binary(ToolId::Kimi, &state.settings),
+        claude: tools::probe_binary(ToolId::Claude, &state.settings),
+        pi: tools::probe_binary(ToolId::Pi, &state.settings),
+        dsh: tools::probe_binary(ToolId::Dsh, &state.settings),
     })
     .await
     .map_err(|err| format!("探测工具失败：{err}"))
@@ -336,8 +549,9 @@ fn list_sessions_inner(app: &AppHandle, project_id: String, tool_id: ToolId) -> 
     match tools::list_sessions(tool_id, &project.path, &state.settings) {
         Ok(mut sessions) => {
             for row in &mut sessions {
-                if let Some(overlay) = state.title_overlays.get(&overlay_key(tool_id.as_str(), &row.id)) {
-                    row.title = overlay.clone();
+                if let Some(overlay) = state::overlay_title(&state.title_overlays, tool_id.as_str(), &row.id)
+                {
+                    row.title = overlay.to_string();
                 }
             }
             Ok(SessionListResult {
@@ -371,12 +585,8 @@ fn rename_session(
     let mut state = state::load_state(&app)?;
     let project = state::find_project(&state, &project_id)?.clone();
     let kind = tools::rename_session(tool_id, &project.path, &session_id, &title, &state.settings)?;
-    if kind == tools::RenameKind::Overlay {
-        state
-            .title_overlays
-            .insert(overlay_key(tool_id.as_str(), &session_id), title.trim().to_string());
-        state::save_state(&app, &state)?;
-    }
+    state::put_title_overlay(&mut state, tool_id.as_str(), &session_id, &title);
+    state::save_state(&app, &state)?;
     Ok(RenameResult { kind })
 }
 
@@ -401,9 +611,10 @@ fn delete_session(
 }
 
 #[tauri::command]
-fn pty_open(
+async fn pty_open(
     app: AppHandle,
-    hub: State<Arc<PtyHub>>,
+    hub: State<'_, Arc<PtyHub>>,
+    web: State<'_, Arc<dsh_web::Hub>>,
     project_id: String,
     tool_id: ToolId,
     session_id: Option<String>,
@@ -411,6 +622,15 @@ fn pty_open(
     cols: u16,
     rows: u16,
 ) -> Result<PtyOpened, String> {
+    if tool_id == ToolId::Dsh {
+        let state = state::load_state(&app)?;
+        let web = web.inner().clone();
+        return tauri::async_runtime::spawn_blocking(move || {
+            web.open(&app, &state, &project_id, session_id, title)
+        })
+        .await
+        .map_err(|err| format!("启动 DeepSeek Web 失败：{err}"))?;
+    }
     let state = state::load_state(&app)?;
     hub.open(app, &state, &project_id, tool_id, session_id, title, cols, rows)
 }
@@ -426,23 +646,68 @@ fn pty_resize(hub: State<Arc<PtyHub>>, pty_id: String, cols: u16, rows: u16) -> 
 }
 
 #[tauri::command]
-fn pty_kill(hub: State<Arc<PtyHub>>, pty_id: String) -> Result<(), String> {
+fn pty_kill(
+    app: AppHandle,
+    hub: State<Arc<PtyHub>>,
+    web: State<Arc<dsh_web::Hub>>,
+    pty_id: String,
+) -> Result<(), String> {
+    if web.kill(&pty_id)? {
+        let _ = dsh_embed::close(&app);
+        return Ok(());
+    }
     hub.kill(&pty_id)
+}
+
+#[tauri::command]
+async fn dsh_embed_open(
+    app: AppHandle,
+    url: String,
+    bounds: dsh_embed::Bounds,
+    theme_script: Option<String>,
+) -> Result<(), String> {
+    dsh_embed::open(&app, url, bounds, theme_script)
+}
+
+#[tauri::command]
+async fn dsh_embed_set_bounds(app: AppHandle, bounds: dsh_embed::Bounds) -> Result<(), String> {
+    dsh_embed::set_bounds(&app, bounds)
+}
+
+#[tauri::command]
+async fn dsh_embed_set_visible(app: AppHandle, visible: bool) -> Result<(), String> {
+    dsh_embed::set_visible(&app, visible)
+}
+
+#[tauri::command]
+async fn dsh_embed_close(app: AppHandle) -> Result<(), String> {
+    dsh_embed::close(&app)
+}
+
+#[tauri::command]
+async fn dsh_embed_apply_theme(app: AppHandle, script: String) -> Result<(), String> {
+    dsh_embed::apply_theme(&app, script)
 }
 
 #[tauri::command]
 fn pty_bind_session(
     hub: State<Arc<PtyHub>>,
+    web: State<Arc<dsh_web::Hub>>,
     pty_id: String,
     session_id: String,
     title: Option<String>,
 ) -> Result<LivePtyInfo, String> {
+    if let Some(info) = web.bind_session(&pty_id, &session_id, title.clone())? {
+        return Ok(info);
+    }
     hub.bind_session(&pty_id, &session_id, title)
 }
 
 #[tauri::command]
-fn list_live_ptys(hub: State<Arc<PtyHub>>) -> Vec<LivePtyInfo> {
-    hub.list()
+fn list_live_ptys(hub: State<Arc<PtyHub>>, web: State<Arc<dsh_web::Hub>>) -> Vec<LivePtyInfo> {
+    let mut live = hub.list();
+    live.extend(web.list());
+    live
 }
 
 #[tauri::command]
@@ -536,15 +801,24 @@ pub fn run() {
             if payload.event() != PageLoadEvent::Finished {
                 return;
             }
-            if let Some(win) = webview.app_handle().get_webview_window(webview.label()) {
-                let _ = win.show();
+            if webview.label() == "dsh-embed" {
+                dsh_embed::on_loaded(&webview);
+                return;
             }
+            show_main_window(webview.app_handle());
         })
         .setup(|app| {
             let hub = PtyHub::new();
             hub.start_monitor(app.handle().clone());
             app.manage(hub);
+            app.manage(Arc::new(dsh_embed::Hub::default()));
             app.manage(Arc::new(bridge::BridgeHub::new()));
+            let web = dsh_web::Hub::new();
+            if let Ok(dir) = app.path().app_data_dir() {
+                web.set_lock_path(dir.join("dsh-web-pids.json"));
+            }
+            web.reap_strays();
+            app.manage(web);
             if let Some(win) = app.get_webview_window("main") {
                 #[cfg(windows)]
                 {
@@ -559,7 +833,8 @@ pub fn run() {
                 {
                     let _ = win.set_shadow(true);
                 }
-                window_chrome::attach(&win);
+                let closer = app.handle().clone();
+                window_chrome::attach(&win, move || dsh_web::shutdown_app(&closer));
             }
             Ok(())
         })
@@ -570,12 +845,28 @@ pub fn run() {
             update_project,
             remove_project,
             folder_label,
+            clipboard_write,
+            clipboard_read,
             reveal_main_window,
+            set_window_frost,
             probe_tools,
             app_version,
             host_platform,
             list_tool_versions,
             upgrade_tool,
+            uninstall_tool,
+            probe_ccswitch,
+            ccswitch_latest,
+            install_ccswitch,
+            launch_ccswitch,
+            remember_ccswitch_path,
+            dsh_key_status,
+            dsh_list_keys,
+            dsh_add_key,
+            dsh_switch_key,
+            dsh_delete_key,
+            dsh_rename_key,
+            open_external,
             list_grok_accounts,
             grok_usage,
             grok_spend,
@@ -593,6 +884,11 @@ pub fn run() {
             pty_write,
             pty_resize,
             pty_kill,
+            dsh_embed_open,
+            dsh_embed_set_bounds,
+            dsh_embed_set_visible,
+            dsh_embed_close,
+            dsh_embed_apply_theme,
             pty_bind_session,
             list_live_ptys,
             codex_probe,
@@ -601,6 +897,14 @@ pub fn run() {
             start_codex_review,
             cursor_dev_run
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running Agent Dock");
+        .build(tauri::generate_context!())
+        .expect("error while building Agent Dock")
+        .run(|app, event| {
+            if matches!(
+                event,
+                tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
+            ) {
+                dsh_web::shutdown_app(app);
+            }
+        });
 }

@@ -2,16 +2,34 @@
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { onMounted, onUnmounted, ref } from 'vue'
 import { isTauri } from '../lib/api'
+import { beginWindowMove, noteWindowMove } from '../lib/layout'
 import { setAppMode, store } from '../lib/store'
+import { isTitlebarDoubleClick } from '../lib/titleDrag'
 
 const emit = defineEmits<{
   settings: []
+  versions: []
   accounts: []
+  deepseek: []
+  'ccswitch-open': []
+  'ccswitch-install': []
 }>()
 
 const fileOpen = ref(false)
+const ccswitchOpen = ref(false)
 const maximized = ref(false)
 let offResized: (() => void) | undefined
+let offMoved: (() => void) | undefined
+
+async function dragWindow(event: MouseEvent) {
+  if (event.button !== 0 || !isTauri) return
+  if (isTitlebarDoubleClick(event)) {
+    await toggleMax()
+    return
+  }
+  beginWindowMove()
+  await getCurrentWindow().startDragging()
+}
 
 async function syncMaximized() {
   if (!isTauri) return
@@ -37,57 +55,91 @@ async function closeWindow() {
 }
 
 function toggleFile() {
+  ccswitchOpen.value = false
   fileOpen.value = !fileOpen.value
 }
 
-function closeFile() {
+function closeMenus() {
   fileOpen.value = false
+  ccswitchOpen.value = false
+}
+
+function toggleCcswitch() {
+  fileOpen.value = false
+  ccswitchOpen.value = !ccswitchOpen.value
 }
 
 function openSettings() {
-  closeFile()
+  closeMenus()
   emit('settings')
 }
 
+function openVersions() {
+  closeMenus()
+  emit('versions')
+}
+
+function openCcswitchApp() {
+  closeMenus()
+  emit('ccswitch-open')
+}
+
+function openCcswitchInstall() {
+  closeMenus()
+  emit('ccswitch-install')
+}
+
 function openAccounts() {
-  closeFile()
+  closeMenus()
   emit('accounts')
 }
 
+function openDeepseek() {
+  closeMenus()
+  emit('deepseek')
+}
+
 function onDocClick() {
-  closeFile()
+  closeMenus()
 }
 
 function onKey(event: KeyboardEvent) {
-  if (event.key === 'Escape') closeFile()
+  if (event.key === 'Escape') closeMenus()
 }
 
 onMounted(() => {
   document.addEventListener('click', onDocClick)
   window.addEventListener('keydown', onKey)
+  window.addEventListener('mouseup', noteWindowMove)
   if (!isTauri) return
   void syncMaximized()
-  void getCurrentWindow()
+  const win = getCurrentWindow()
+  void win
     .onResized(() => {
       void syncMaximized()
     })
     .then((unlisten) => {
       offResized = unlisten
     })
+  void win.onMoved(noteWindowMove).then((unlisten) => {
+    offMoved = unlisten
+  })
 })
 
 onUnmounted(() => {
   document.removeEventListener('click', onDocClick)
   window.removeEventListener('keydown', onKey)
+  window.removeEventListener('mouseup', noteWindowMove)
   offResized?.()
+  offMoved?.()
 })
 </script>
 
 <template>
-  <header class="titlebar">
+  <header class="titlebar" @mousedown="dragWindow">
     <div class="left">
-      <span class="brand" data-tauri-drag-region>Agent Dock</span>
-      <div class="file" @click.stop>
+      <span class="brand">Agent Dock</span>
+      <div class="file" @click.stop @mousedown.stop>
         <button
           type="button"
           class="file-btn"
@@ -96,14 +148,32 @@ onUnmounted(() => {
           :aria-expanded="fileOpen"
           @click="toggleFile"
         >
-          文件
+          系统
         </button>
         <div v-if="fileOpen" class="ad-menu file-menu" role="menu">
           <button type="button" class="ad-menu-item" role="menuitem" @click="openSettings">设置</button>
           <button type="button" class="ad-menu-item" role="menuitem" @click="openAccounts">Grok 账号</button>
+          <button type="button" class="ad-menu-item" role="menuitem" @click="openDeepseek">DeepSeek</button>
         </div>
       </div>
-      <div class="modes" role="tablist" aria-label="顶层模式">
+      <button type="button" class="file-btn" @click="openVersions" @mousedown.stop>版本</button>
+      <div class="file" @click.stop @mousedown.stop>
+        <button
+          type="button"
+          class="file-btn"
+          :class="{ 'is-open': ccswitchOpen }"
+          aria-haspopup="menu"
+          :aria-expanded="ccswitchOpen"
+          @click="toggleCcswitch"
+        >
+          CC Switch
+        </button>
+        <div v-if="ccswitchOpen" class="ad-menu file-menu" role="menu">
+          <button type="button" class="ad-menu-item" role="menuitem" @click="openCcswitchApp">打开</button>
+          <button type="button" class="ad-menu-item" role="menuitem" @click="openCcswitchInstall">下载安装…</button>
+        </div>
+      </div>
+      <div class="modes" role="tablist" aria-label="顶层模式" @mousedown.stop>
         <button
           type="button"
           role="tab"
@@ -122,12 +192,12 @@ onUnmounted(() => {
           :aria-selected="store.appMode === 'bridge'"
           @click="setAppMode('bridge')"
         >
-          编排（施工中）
+          编排
         </button>
       </div>
     </div>
-    <div class="drag" data-tauri-drag-region @dblclick="toggleMax" />
-    <div class="controls" role="group" aria-label="窗口控制">
+    <div class="drag" />
+    <div class="controls" role="group" aria-label="窗口控制" @mousedown.stop>
       <button type="button" class="win" aria-label="最小化" @click="minimize">
         <svg viewBox="0 0 12 12" aria-hidden="true">
           <path d="M2 6h8" />
@@ -182,6 +252,7 @@ onUnmounted(() => {
   font-weight: 600;
   color: var(--ad-text);
   padding-right: 8px;
+  cursor: default;
 }
 
 .file {
@@ -246,6 +317,7 @@ onUnmounted(() => {
   flex: 1;
   height: 100%;
   min-width: 24px;
+  cursor: default;
 }
 
 .controls {

@@ -22,6 +22,10 @@ pub struct PtyOpened {
     pub session_id: Option<String>,
     pub title: String,
     pub opened_at: i64,
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default)]
+    pub url: Option<String>,
 }
 
 #[derive(Clone, Serialize)]
@@ -48,6 +52,10 @@ pub struct LivePtyInfo {
     pub title: String,
     pub alive: bool,
     pub opened_at: i64,
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default)]
+    pub url: Option<String>,
 }
 
 struct LivePty {
@@ -162,6 +170,8 @@ impl PtyHub {
                     session_id: existing.session_id.clone(),
                     title: existing.title.clone(),
                     opened_at: existing.opened_at,
+                    kind: "pty".into(),
+                    url: None,
                 });
             }
         }
@@ -174,14 +184,8 @@ impl PtyHub {
             ));
         }
         let exe = tools::resolve_binary(tool_id, &state.settings)?;
-        let shell = platform::resolve_shell(&state.settings.powershell_path)?;
         let env_pairs = proxy_env(project.proxy_enabled, &project.proxy_url)?;
-        let extra_args = tools::launch_args(tool_id, session_id.as_deref());
-        let kind = shell_kind(&shell);
-        let launch = match kind {
-            ShellKind::PowerShell => wrap_utf8_launch(&build_launch_command(&exe, &extra_args)),
-            ShellKind::Fish | ShellKind::Posix => build_posix_launch(&exe, &extra_args),
-        };
+        let extra_args = tools::launch_args_for(tool_id, session_id.as_deref(), Some(&exe));
 
         let pty_system = NativePtySystem::default();
         let pair = pty_system
@@ -196,6 +200,18 @@ impl PtyHub {
             })
             .map_err(|err| format!("无法创建终端：{err}"))?;
 
+        let shell = platform::resolve_shell(&state.settings.powershell_path)?;
+        let kind = shell_kind(&shell);
+        let launch = match kind {
+            ShellKind::PowerShell => {
+                let mut line = wrap_utf8_launch(&build_launch_command(&exe, &extra_args));
+                if tool_id == ToolId::Grokbuild && state.settings.grok_follow_glass {
+                    line = format!("{}{line}", grok_glass_ps_prefix());
+                }
+                line
+            }
+            ShellKind::Fish | ShellKind::Posix => build_posix_launch(&exe, &extra_args),
+        };
         let mut cmd = CommandBuilder::new(&shell);
         apply_shell_args(&mut cmd, kind, &shell, &launch);
         cmd.cwd(&project.path);
@@ -203,6 +219,14 @@ impl PtyHub {
         cmd.env("COLORTERM", "truecolor");
         cmd.env("PATH", platform::augmented_path());
         scrub_host_terminal_env(&mut cmd);
+        cmd.env("TERM_PROGRAM", "xterm.js");
+        cmd.env("TERM_PROGRAM_VERSION", "5.5.0");
+        apply_grok_glass_env(&mut cmd, tool_id, state.settings.grok_follow_glass);
+        if tool_id == ToolId::Dsh {
+            if let Some(secret) = crate::dsh_keys::active_secret(&app) {
+                cmd.env("DEEPSEEK_API_KEY", secret);
+            }
+        }
         #[cfg(unix)]
         if std::env::var_os("LANG").is_none() && std::env::var_os("LC_ALL").is_none() {
             cmd.env("LANG", "en_US.UTF-8");
@@ -286,6 +310,8 @@ impl PtyHub {
             session_id: resolved_session,
             title: display_title,
             opened_at,
+            kind: "pty".into(),
+            url: None,
         })
     }
 
@@ -348,6 +374,8 @@ fn live_info(pty: &LivePty) -> LivePtyInfo {
         title: pty.title.clone(),
         alive: true,
         opened_at: pty.opened_at,
+        kind: "pty".into(),
+        url: None,
     }
 }
 
@@ -425,6 +453,29 @@ pub fn build_launch_command(exe: &Path, args: &[String]) -> String {
     parts.join(" ")
 }
 
+fn cmd_needs_quotes(value: &str) -> bool {
+    value.is_empty()
+        || value
+            .chars()
+            .any(|c| c.is_whitespace() || matches!(c, '"' | '&' | '|' | '<' | '>' | '^' | '%'))
+}
+
+fn quote_cmd_token(value: &str) -> String {
+    if !cmd_needs_quotes(value) {
+        return value.to_string();
+    }
+    format!("\"{}\"", value.replace('"', "\\\""))
+}
+
+pub fn windows_cmd_line(exe: &Path, args: &[String]) -> String {
+    let mut line = quote_cmd_token(&exe.to_string_lossy());
+    for arg in args {
+        line.push(' ');
+        line.push_str(&quote_cmd_token(arg));
+    }
+    line
+}
+
 pub fn build_posix_launch(exe: &Path, args: &[String]) -> String {
     let mut parts = vec![posix_single_quote(&exe.to_string_lossy())];
     for arg in args {
@@ -449,9 +500,37 @@ fn scrub_host_terminal_env(cmd: &mut CommandBuilder) {
     }
 }
 
+pub fn grok_glass_env(enabled: bool) -> &'static [(&'static str, &'static str)] {
+    if enabled {
+        &[
+            ("GROK_TERMINAL_THEME", "1"),
+            ("GROK_THEME", "terminal"),
+            ("LC_GROK_THEME", "terminal"),
+        ]
+    } else {
+        &[]
+    }
+}
+
+fn apply_grok_glass_env(cmd: &mut CommandBuilder, tool_id: ToolId, enabled: bool) {
+    if tool_id != ToolId::Grokbuild {
+        return;
+    }
+    for (key, value) in grok_glass_env(enabled) {
+        cmd.env(*key, *value);
+    }
+}
+
+fn grok_glass_ps_prefix() -> String {
+    grok_glass_env(true)
+        .iter()
+        .map(|(key, value)| format!("$env:{key}='{value}'; "))
+        .collect()
+}
+
 pub fn wrap_utf8_launch(launch: &str) -> String {
     format!(
-        "Remove-Item Env:TERMINAL_EMULATOR,Env:TERM_PROGRAM,Env:TERM_PROGRAM_VERSION -ErrorAction SilentlyContinue; $env:TERM='xterm-256color'; $env:COLORTERM='truecolor'; [Console]::InputEncoding = [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); {launch}"
+        "Remove-Item Env:TERMINAL_EMULATOR,Env:TERM_PROGRAM,Env:TERM_PROGRAM_VERSION -ErrorAction SilentlyContinue; $env:TERM='xterm-256color'; $env:COLORTERM='truecolor'; $env:TERM_PROGRAM='xterm.js'; $env:TERM_PROGRAM_VERSION='5.5.0'; [Console]::InputEncoding = [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); {launch}"
     )
 }
 
@@ -490,6 +569,51 @@ mod tests {
     use super::*;
 
     #[test]
+    fn windows_cmd_line_quotes_spaces() {
+        let line = windows_cmd_line(
+            Path::new(r"C:\Program Files\npm\dsh.cmd"),
+            &["web".into(), "--no-open".into()],
+        );
+        assert_eq!(line, r#""C:\Program Files\npm\dsh.cmd" web --no-open"#);
+    }
+
+    #[test]
+    fn windows_cmd_line_leaves_plain_npm_shim_unquoted() {
+        let line = windows_cmd_line(
+            Path::new(r"C:\Users\me\AppData\Roaming\npm\dsh.cmd"),
+            &["web".into(), "--no-open".into()],
+        );
+        assert_eq!(
+            line,
+            r"C:\Users\me\AppData\Roaming\npm\dsh.cmd web --no-open"
+        );
+    }
+
+    #[test]
+    fn grok_glass_env_only_when_enabled() {
+        assert!(grok_glass_env(false).is_empty());
+        let pairs = grok_glass_env(true);
+        assert!(pairs.iter().any(|(k, v)| *k == "GROK_TERMINAL_THEME" && *v == "1"));
+        assert!(pairs.iter().any(|(k, v)| *k == "GROK_THEME" && *v == "terminal"));
+        assert!(pairs.iter().any(|(k, v)| *k == "LC_GROK_THEME" && *v == "terminal"));
+        let prefix = grok_glass_ps_prefix();
+        assert!(prefix.contains("$env:GROK_THEME='terminal'"));
+        assert!(prefix.contains("$env:GROK_TERMINAL_THEME='1'"));
+    }
+
+    #[test]
+    fn powershell_launch_can_call_npm_cmd_shim() {
+        let cmd = build_launch_command(
+            Path::new(r"C:\Users\PS\AppData\Roaming\npm\dsh.cmd"),
+            &["--profile".into(), "tui".into()],
+        );
+        assert_eq!(
+            cmd,
+            r"& 'C:\Users\PS\AppData\Roaming\npm\dsh.cmd' '--profile' 'tui'"
+        );
+    }
+
+    #[test]
     fn quotes_powershell_paths_and_args() {
         let cmd = build_launch_command(
             Path::new(r"C:\Program Files\kimi.exe"),
@@ -513,6 +637,7 @@ mod tests {
         assert!(wrapped.contains("[Console]::OutputEncoding"));
         assert!(wrapped.contains("xterm-256color"));
         assert!(wrapped.contains("Remove-Item Env:TERMINAL_EMULATOR"));
+        assert!(wrapped.contains("$env:TERM_PROGRAM='xterm.js'"));
         assert!(wrapped.ends_with("& 'grok.exe'"));
     }
 

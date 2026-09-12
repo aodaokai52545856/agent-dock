@@ -54,7 +54,7 @@ function submit() {
   <div v-if="open" class="ad-mask" @click.self="emit('close')">
     <div class="ad-dialog dialog" role="dialog" aria-modal="true" aria-label="新建会话">
       <h2>新建会话</h2>
-      <p class="lead">必须先选项目和工具，再打开命令行。</p>
+      <p class="lead">必须先选项目和工具，再打开。</p>
 
       <div v-if="!store.projects.length" class="empty">
         <p>还没有项目。先添加一个代码目录。</p>
@@ -108,7 +108,7 @@ function submit() {
 
 <style scoped>
 .dialog {
-  width: 480px;
+  width: 560px;
   max-width: calc(100vw - 48px);
 }
 

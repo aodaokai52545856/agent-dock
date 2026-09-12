@@ -2,6 +2,8 @@ import assert from 'node:assert/strict'
 import {
   clampContrast,
   clampUiFontSize,
+  defaultAppearance,
+  glassFill,
   mixHex,
   parseAppearance,
   parseHex,
@@ -54,5 +56,20 @@ test('parseAppearance fills Codex-like defaults', () => {
   assert.equal(next.accent, '#E6B450')
   assert.equal(next.contrast, 80)
   assert.equal(next.translucentSidebar, false)
-  assert.equal(themeDefaults('dark').background, '#0D0D0D')
+  assert.equal(themeDefaults('dark').background, '#0B0F13')
+})
+
+test('dark theme default is navy ink; custom colors stay empty so light can still resolve', () => {
+  const look = defaultAppearance()
+  assert.equal(look.theme, 'system')
+  assert.equal(look.background, '')
+  assert.equal(look.accent, '')
+  assert.equal(look.foreground, '')
+  assert.equal(themeDefaults('dark').background, '#0B0F13')
+  assert.equal(themeDefaults('light').background, '#F3F3F3')
+})
+
+test('glassFill keeps the ink and lets the window veil through', () => {
+  assert.equal(glassFill('#0B0F13'), 'rgb(11 15 19 / var(--ad-veil))')
+  assert.equal(glassFill('#F3F3F3'), 'rgb(243 243 243 / var(--ad-veil))')
 })

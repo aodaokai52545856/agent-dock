@@ -48,7 +48,7 @@ export function matchUnboundLiveToSessions(
   )
   const usedSession = new Set<string>()
   const binds: LiveBind[] = []
-  const tools: ToolId[] = ['opencode', 'grokbuild', 'kimi']
+  const tools: ToolId[] = ['opencode', 'grokbuild', 'kimi', 'claude', 'pi', 'dsh']
 
   for (const toolId of tools) {
     const unbound = live
