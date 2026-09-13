@@ -31,7 +31,8 @@
 </p>
 
 <p align="center">
-  <img width="1879" alt="Agent Dock 控制台截图" src="https://github.com/user-attachments/assets/21ed1a89-c54f-4a85-8b8a-5a6a4c4f4d43">
+    <img width="1412" height="986" alt="image" src="https://github.com/user-attachments/assets/1380fac6-b7d7-41b8-97e1-3379e781547b" />
+    <img width="1412" height="986" alt="image" src="https://github.com/user-attachments/assets/f89b0c59-6351-43d1-b84c-9265ff1c0da3" />
 </p>
 
 ---
