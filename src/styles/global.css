@@ -59,12 +59,14 @@ html.ad-desktop-glass[data-frost='off'] #app {
   -webkit-backdrop-filter: none;
 }
 
+html.ad-mac.ad-desktop-glass #app {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
 html.ad-maximized,
 html.ad-maximized body,
-html.ad-maximized #app,
-html.ad-mac,
-html.ad-mac body,
-html.ad-mac #app {
+html.ad-maximized #app {
   border-radius: 0;
 }
 
@@ -151,6 +153,10 @@ input[type='range'] {
   border: none;
   box-shadow: none;
   accent-color: var(--ad-range-accent);
+}
+
+html.ad-mac input[type='range'] {
+  height: 28px;
 }
 
 input[type='range']:hover,

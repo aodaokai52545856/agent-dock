@@ -333,6 +333,50 @@ export function parseSessionToolFilter(value: unknown): SessionToolFilter {
   return tool?.id ?? 'all'
 }
 
+export function isToolInstalled(probes: ToolProbeMap | null | undefined, id: ToolId): boolean {
+  if (!probes) return true
+  return Boolean(probes[id]?.found)
+}
+
+export function toolsToScanForFilter(
+  filter: SessionToolFilter,
+  probes: ToolProbeMap | null | undefined
+): ToolId[] {
+  const installed = TOOLS.filter((tool) => isToolInstalled(probes, tool.id)).map((tool) => tool.id)
+  if (filter !== 'all' && TOOLS.some((tool) => tool.id === filter)) {
+    return installed.includes(filter) ? [filter] : []
+  }
+  return installed
+}
+
+export type SessionFilterAvail = {
+  hasSessions?: boolean
+  scanning?: boolean
+  hasError?: boolean
+}
+
+export function sessionFilterBlock(
+  id: SessionToolFilter,
+  probes: ToolProbeMap | null | undefined,
+  avail?: SessionFilterAvail
+): 'missing' | 'empty' | null {
+  if (id === 'all') return null
+  if (!isToolInstalled(probes, id)) return 'missing'
+  if (!avail) return null
+  if (avail.scanning || avail.hasError) return null
+  if (avail.hasSessions === false) return 'empty'
+  return null
+}
+
+export function clampSessionToolFilter(
+  filter: SessionToolFilter,
+  probes: ToolProbeMap | null | undefined,
+  avail?: SessionFilterAvail
+): SessionToolFilter {
+  if (filter === 'all' || sessionFilterBlock(filter, probes, avail)) return 'all'
+  return filter
+}
+
 export interface CodexThread {
   id: string
   name: string

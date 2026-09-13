@@ -2,6 +2,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tauri::WebviewWindow;
 
+#[cfg(target_os = "macos")]
+mod macos;
+#[cfg(windows)]
+mod windows;
+
 static REVEALED: AtomicBool = AtomicBool::new(false);
 
 pub fn attach(win: &WebviewWindow, on_close: impl Fn() + Send + Sync + 'static) {
@@ -35,6 +40,18 @@ pub fn attach(win: &WebviewWindow, on_close: impl Fn() + Send + Sync + 'static) 
 }
 
 pub fn reveal(win: &WebviewWindow) {
+    #[cfg(target_os = "macos")]
+    {
+        let first = !REVEALED.swap(true, Ordering::SeqCst);
+        let handle = win.clone();
+        let _ = win.run_on_main_thread(move || macos::reveal(&handle, first));
+    }
+    #[cfg(not(target_os = "macos"))]
+    reveal_desktop(win);
+}
+
+#[cfg(not(target_os = "macos"))]
+fn reveal_desktop(win: &WebviewWindow) {
     let first = !REVEALED.swap(true, Ordering::SeqCst);
     if first {
         apply_desktop_glass(win);
@@ -48,34 +65,7 @@ pub fn reveal(win: &WebviewWindow) {
 
 pub fn raise_resize_overlay(hwnd: isize) {
     #[cfg(windows)]
-    {
-        use windows_sys::Win32::Foundation::HWND;
-        use windows_sys::Win32::UI::WindowsAndMessaging::{
-            FindWindowExW, SetWindowPos, HWND_TOP, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOOWNERZORDER,
-            SWP_NOSIZE,
-        };
-        let parent = hwnd as HWND;
-        if parent.is_null() {
-            return;
-        }
-        let class: Vec<u16> = "TAURI_DRAG_RESIZE_BORDERS\0".encode_utf16().collect();
-        let name: Vec<u16> = "TAURI_DRAG_RESIZE_WINDOW\0".encode_utf16().collect();
-        let child = unsafe { FindWindowExW(parent, std::ptr::null_mut(), class.as_ptr(), name.as_ptr()) };
-        if child.is_null() {
-            return;
-        }
-        unsafe {
-            let _ = SetWindowPos(
-                child,
-                HWND_TOP,
-                0,
-                0,
-                0,
-                0,
-                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER,
-            );
-        }
-    }
+    windows::raise_resize_overlay(hwnd);
     #[cfg(not(windows))]
     {
         let _ = hwnd;
@@ -84,14 +74,13 @@ pub fn raise_resize_overlay(hwnd: isize) {
 
 pub fn apply(win: &WebviewWindow) {
     #[cfg(windows)]
+    windows::apply(win);
+    #[cfg(target_os = "macos")]
     {
-        let Ok(hwnd) = win.hwnd() else {
-            return;
-        };
-        let round = !win.is_maximized().unwrap_or(false);
-        set_corner_preference(hwnd.0 as isize, round);
+        let handle = win.clone();
+        let _ = win.run_on_main_thread(move || macos::apply(&handle));
     }
-    #[cfg(not(windows))]
+    #[cfg(all(not(windows), not(target_os = "macos")))]
     {
         let _ = win;
     }
@@ -120,29 +109,18 @@ fn refresh_shell_icons() {
     }
 }
 
+#[cfg(not(target_os = "macos"))]
 fn apply_desktop_glass(win: &WebviewWindow) {
     set_frost(win, crate::state::default_ui_frost());
 }
 
 pub fn set_frost(win: &WebviewWindow, frost: u32) {
     #[cfg(windows)]
-    {
-        let Ok(hwnd) = win.hwnd() else {
-            return;
-        };
-        let hwnd = hwnd.0 as isize;
-        set_dark_mode(hwnd);
-        reset_frame(hwnd);
-        set_system_backdrop(hwnd, backdrop_for_frost(frost));
-    }
+    windows::set_frost(win, frost);
     #[cfg(target_os = "macos")]
     {
-        use window_vibrancy::{apply_vibrancy, NSVisualEffectMaterial};
-        if frost == 0 {
-            let _ = win;
-            return;
-        }
-        let _ = apply_vibrancy(win, NSVisualEffectMaterial::HudWindow, None, None);
+        let handle = win.clone();
+        let _ = win.run_on_main_thread(move || macos::set_frost(&handle, frost));
     }
     #[cfg(all(not(windows), not(target_os = "macos")))]
     {
@@ -150,69 +128,31 @@ pub fn set_frost(win: &WebviewWindow, frost: u32) {
     }
 }
 
-#[cfg(windows)]
-fn backdrop_for_frost(frost: u32) -> u32 {
-    const DWMSBT_NONE: u32 = 1;
-    const DWMSBT_MAINWINDOW: u32 = 2;
-    const DWMSBT_TRANSIENTWINDOW: u32 = 3;
-    if frost == 0 {
-        DWMSBT_NONE
-    } else if frost < 50 {
-        DWMSBT_MAINWINDOW
-    } else {
-        DWMSBT_TRANSIENTWINDOW
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn windows_backdrop_mapping_stays_on_dwm_steps() {
+        let src = include_str!("window_chrome/windows.rs");
+        assert!(include_str!("window_chrome.rs").contains("fn reveal_desktop"));
+        assert!(src.contains("DWMSBT_NONE"));
+        assert!(src.contains("else if frost < 50"));
+        assert!(src.contains("DWMSBT_MAINWINDOW"));
+        assert!(src.contains("DWMSBT_TRANSIENTWINDOW"));
+        assert!(src.contains("fn backdrop_for_frost"));
     }
-}
 
-#[cfg(windows)]
-#[link(name = "dwmapi")]
-extern "system" {
-    fn DwmSetWindowAttribute(
-        hwnd: isize,
-        dw_attribute: u32,
-        pv_attribute: *const core::ffi::c_void,
-        cb_attribute: u32,
-    ) -> i32;
-    fn DwmExtendFrameIntoClientArea(hwnd: isize, margins: *const i32) -> i32;
-}
-
-#[cfg(windows)]
-fn set_corner_preference(hwnd: isize, round: bool) {
-    const DWMWA_WINDOW_CORNER_PREFERENCE: u32 = 33;
-    const DWMWCP_ROUND: u32 = 2;
-    const DWMWCP_DONOTROUND: u32 = 1;
-    let pref: u32 = if round { DWMWCP_ROUND } else { DWMWCP_DONOTROUND };
-    unsafe {
-        let _ = DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, (&pref as *const u32).cast(), 4);
-    }
-}
-
-#[cfg(windows)]
-fn set_dark_mode(hwnd: isize) {
-    const DWMWA_USE_IMMERSIVE_DARK_MODE: u32 = 20;
-    let dark: i32 = 1;
-    unsafe {
-        let _ = DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, (&dark as *const i32).cast(), 4);
-    }
-}
-
-#[cfg(windows)]
-fn reset_frame(hwnd: isize) {
-    let margins = [0i32, 0, 0, 0];
-    unsafe {
-        let _ = DwmExtendFrameIntoClientArea(hwnd, margins.as_ptr());
-    }
-}
-
-#[cfg(windows)]
-fn set_system_backdrop(hwnd: isize, backdrop: u32) {
-    const DWMWA_SYSTEMBACKDROP_TYPE: u32 = 38;
-    unsafe {
-        let _ = DwmSetWindowAttribute(
-            hwnd,
-            DWMWA_SYSTEMBACKDROP_TYPE,
-            (&backdrop as *const u32).cast(),
-            4,
-        );
+    #[test]
+    fn macos_native_chrome_uses_layer_radius_and_vibrancy() {
+        let src = include_str!("window_chrome/macos.rs");
+        let dispatcher = include_str!("window_chrome.rs");
+        assert!(dispatcher.contains("run_on_main_thread"));
+        assert!(src.contains("setOpaque"));
+        assert!(src.contains("cornerRadius"));
+        assert!(src.contains("Some(10.0)"));
+        assert!(src.contains("clear_vibrancy"));
+        assert!(src.contains("UnderWindowBackground"));
+        assert!(src.contains("NSVisualEffectState::Active"));
+        let conf = include_str!("../tauri.conf.json");
+        assert!(conf.contains("macOSPrivateApi"));
     }
 }

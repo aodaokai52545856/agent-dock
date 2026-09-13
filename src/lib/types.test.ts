@@ -1,5 +1,28 @@
 import assert from 'node:assert/strict'
-import { TOOLS, TOOL_OFFICIAL_URLS, parseSessionToolFilter } from './types.ts'
+import { readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import {
+  TOOLS,
+  TOOL_OFFICIAL_URLS,
+  clampSessionToolFilter,
+  isToolInstalled,
+  parseSessionToolFilter,
+  sessionFilterBlock,
+  toolsToScanForFilter,
+  type ToolProbeMap
+} from './types.ts'
+
+function probes(missing: Partial<Record<keyof ToolProbeMap, boolean>> = {}): ToolProbeMap {
+  return {
+    opencode: { found: missing.opencode !== true },
+    grokbuild: { found: missing.grokbuild !== true },
+    kimi: { found: missing.kimi !== true },
+    claude: { found: missing.claude !== true },
+    pi: { found: missing.pi !== true },
+    dsh: { found: missing.dsh !== true }
+  }
+}
 
 function test(name: string, fn: () => void) {
   fn()
@@ -42,6 +65,36 @@ test('session filter accepts opened-live view', () => {
   assert.equal(parseSessionToolFilter('live'), 'all')
   assert.equal(parseSessionToolFilter('grokbuild'), 'grokbuild')
   assert.equal(parseSessionToolFilter('nope'), 'all')
+})
+
+test('uninstalled tools are skipped by all and are not a selectable filter', () => {
+  const map = probes({ grokbuild: true })
+  assert.equal(isToolInstalled(map, 'grokbuild'), false)
+  assert.equal(isToolInstalled(map, 'kimi'), true)
+  assert.equal(isToolInstalled(null, 'grokbuild'), true)
+  assert.deepEqual(toolsToScanForFilter('all', map), ['opencode', 'kimi', 'claude', 'pi', 'dsh'])
+  assert.deepEqual(toolsToScanForFilter('grokbuild', map), [])
+  assert.deepEqual(toolsToScanForFilter('kimi', map), ['kimi'])
+  assert.equal(clampSessionToolFilter('grokbuild', map), 'all')
+  assert.equal(clampSessionToolFilter('kimi', map), 'kimi')
+  assert.deepEqual(toolsToScanForFilter('all', null), TOOLS.map((tool) => tool.id))
+  assert.equal(sessionFilterBlock('kimi', map, { hasSessions: false }), 'empty')
+  assert.equal(sessionFilterBlock('kimi', map, { hasSessions: false, scanning: true }), null)
+  assert.equal(sessionFilterBlock('kimi', map, { hasSessions: true }), null)
+  assert.equal(clampSessionToolFilter('kimi', map, { hasSessions: false }), 'all')
+})
+
+test('session picker disables missing tools and all only lists installed groups', () => {
+  const root = dirname(fileURLToPath(import.meta.url))
+  const sidebar = readFileSync(join(root, '../components/SideBar.vue'), 'utf8')
+  assert.match(sidebar, /isToolInstalled/)
+  assert.match(sidebar, /:disabled="isFilterDisabled\(option\.id\)"/)
+  assert.match(sidebar, /未安装/)
+  assert.match(sidebar, /无会话/)
+  assert.match(sidebar, /sessionFilterBlock/)
+  const store = readFileSync(join(root, 'store.ts'), 'utf8')
+  assert.match(store, /toolsToScanForFilter/)
+  assert.match(store, /clampSessionToolFilter/)
 })
 
 test('every tool has an official https download page', () => {

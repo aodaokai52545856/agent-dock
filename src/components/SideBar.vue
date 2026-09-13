@@ -6,8 +6,8 @@ import { isFixedDshSession } from '../lib/dsh'
 import { isPendingSessionId } from '../lib/liveBind'
 import { liveDotForPty, liveDotTitle, projectLiveDot, type LiveDotKind } from '../lib/livePulse'
 import { isCurrentSession, liveOfProject } from '../lib/livePty'
-import { findLiveForSession, isSessionScanning, setSessionLiveOnly, setSessionToolFilter, store, visibleSessions } from '../lib/store'
-import { TOOLS, type SessionToolFilter, type ToolId } from '../lib/types'
+import { findLiveForSession, isSessionScanning, projectSessionRows, setSessionLiveOnly, setSessionToolFilter, store, visibleSessions } from '../lib/store'
+import { isToolInstalled, sessionFilterBlock, TOOLS, type SessionToolFilter, type ToolId } from '../lib/types'
 import ToolMark from './ToolMark.vue'
 
 const emit = defineEmits<{
@@ -55,11 +55,16 @@ const filterUsesMark = computed(
 )
 
 const visibleTools = computed(() => {
-  if (liveFilter.value) return TOOLS
-  if (store.sessionToolFilter !== 'all' && TOOLS.some((tool) => tool.id === store.sessionToolFilter)) {
-    return TOOLS.filter((tool) => tool.id === store.sessionToolFilter)
+  const installed = TOOLS.filter((tool) => isToolInstalled(store.probes, tool.id))
+  const listed = (id: ToolId) =>
+    projectSessionRows.value.some((row) => row.toolId === id) ||
+    Boolean(store.sessionErrors[id]) ||
+    store.sessionLoading[id]
+  if (liveFilter.value) return installed.filter((tool) => listed(tool.id))
+  if (store.sessionToolFilter !== 'all' && installed.some((tool) => tool.id === store.sessionToolFilter)) {
+    return installed.filter((tool) => tool.id === store.sessionToolFilter)
   }
-  return TOOLS
+  return installed.filter((tool) => listed(tool.id))
 })
 
 const groups = computed(() =>
@@ -140,7 +145,23 @@ function toggleFilter(event: MouseEvent) {
   }
 }
 
+function filterHint(id: SessionToolFilter) {
+  const block = sessionFilterBlock(id, store.probes, {
+    hasSessions: id !== 'all' && projectSessionRows.value.some((row) => row.toolId === id),
+    scanning: id !== 'all' && (store.sessionLoading[id] || store.sessionRefreshBusy),
+    hasError: id !== 'all' && Boolean(store.sessionErrors[id])
+  })
+  if (block === 'missing') return '未安装'
+  if (block === 'empty') return '无会话'
+  return ''
+}
+
+function isFilterDisabled(id: SessionToolFilter) {
+  return Boolean(filterHint(id))
+}
+
 function pickFilter(id: SessionToolFilter) {
+  if (isFilterDisabled(id)) return
   void setSessionToolFilter(id)
   closeFilter()
 }
@@ -274,8 +295,15 @@ function onKey(event: KeyboardEvent) {
     const options = toolFilterOptions.value
     if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
       event.preventDefault()
-      const step = event.key === 'ArrowDown' ? 1 : options.length - 1
-      filterFocus.value = (filterFocus.value + step) % options.length
+      const dir = event.key === 'ArrowDown' ? 1 : -1
+      let next = filterFocus.value
+      for (let i = 0; i < options.length; i++) {
+        next = (next + dir + options.length) % options.length
+        if (!isFilterDisabled(options[next].id)) {
+          filterFocus.value = next
+          return
+        }
+      }
       return
     }
     if (event.key === 'Enter' || event.key === ' ') {
@@ -438,11 +466,13 @@ onUnmounted(() => {
                   }"
                   role="option"
                   :aria-selected="store.sessionToolFilter === option.id"
+                  :disabled="isFilterDisabled(option.id)"
                   @mouseenter="filterFocus = index"
                   @click="pickFilter(option.id)"
                 >
                   <span>{{ option.label }}</span>
-                  <span v-if="store.sessionToolFilter === option.id" class="tool-picker-check" aria-hidden="true">
+                  <span v-if="filterHint(option.id)" class="ad-menu-hint">{{ filterHint(option.id) }}</span>
+                  <span v-else-if="store.sessionToolFilter === option.id" class="tool-picker-check" aria-hidden="true">
                     ✓
                   </span>
                 </button>
@@ -490,7 +520,9 @@ onUnmounted(() => {
         </div>
 
         <div v-else-if="!store.selectedProjectId" class="muted pad">点上面的项目，或新建会话时再选。</div>
-        <div v-else-if="liveFilter && !groups.length" class="muted session-empty">还没有打开的会话</div>
+        <div v-else-if="!groups.length" class="muted session-empty">
+          {{ liveFilter ? '还没有打开的会话' : '暂无会话' }}
+        </div>
 
         <div v-else class="session-pane" :class="{ 'is-busy': store.sessionRefreshBusy }">
         <div class="groups">

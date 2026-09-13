@@ -163,3 +163,47 @@ test('settings look controls commit live and do not revert on close', () => {
   assert.doesNotMatch(drawer, /if \(!open\) \{\s*applyUiGlass\(props\.settings/)
   assert.doesNotMatch(drawer, /点保存后写入本机/)
 })
+
+test('windows desktop glass keeps the css backdrop blur on #app', () => {
+  const css = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../styles/global.css'), 'utf8')
+  assert.match(
+    css,
+    /html\.ad-desktop-glass #app \{\s*backdrop-filter:\s*blur\(var\(--ad-frost\)\) saturate\(calc\(1 \+ var\(--ad-ui-frost\) \* 0\.003\)\);\s*-webkit-backdrop-filter:\s*blur\(var\(--ad-frost\)\) saturate\(calc\(1 \+ var\(--ad-ui-frost\) \* 0\.003\)\);/
+  )
+  const dispatcher = readFileSync(
+    join(dirname(fileURLToPath(import.meta.url)), '../../src-tauri/src/window_chrome.rs'),
+    'utf8'
+  )
+  const chrome = readFileSync(
+    join(dirname(fileURLToPath(import.meta.url)), '../../src-tauri/src/window_chrome/windows.rs'),
+    'utf8'
+  )
+  assert.match(dispatcher, /fn reveal_desktop/)
+  assert.match(chrome, /else if frost < 50/)
+  assert.match(chrome, /DWMSBT_MAINWINDOW/)
+})
+
+test('mac glass lets native vibrancy show through instead of css-blurring the webview', () => {
+  const root = join(dirname(fileURLToPath(import.meta.url)), '..')
+  const css = readFileSync(join(root, 'styles/global.css'), 'utf8')
+  const macApp = css.match(/html\.ad-mac\.ad-desktop-glass #app\s*\{[^}]+\}/)
+  assert.ok(macApp, 'Mac desktop glass should disable #app backdrop-filter')
+  assert.match(macApp[0], /backdrop-filter:\s*none/)
+  assert.match(macApp[0], /-webkit-backdrop-filter:\s*none/)
+  assert.match(
+    css,
+    /html\.ad-maximized,\s*html\.ad-maximized body,\s*html\.ad-maximized #app \{\s*border-radius:\s*0;/
+  )
+  assert.doesNotMatch(css, /html\.ad-mac,\s*html\.ad-mac body,\s*html\.ad-mac #app/)
+  const dispatcher = readFileSync(join(root, '../src-tauri/src/window_chrome.rs'), 'utf8')
+  const chrome = readFileSync(join(root, '../src-tauri/src/window_chrome/macos.rs'), 'utf8')
+  const conf = readFileSync(join(root, '../src-tauri/tauri.conf.json'), 'utf8')
+  assert.match(dispatcher, /run_on_main_thread/)
+  assert.match(chrome, /setOpaque/)
+  assert.match(chrome, /cornerRadius/)
+  assert.match(chrome, /Some\(10\.0\)/)
+  assert.match(chrome, /clear_vibrancy/)
+  assert.match(chrome, /UnderWindowBackground/)
+  assert.match(chrome, /NSVisualEffectState::Active/)
+  assert.match(conf, /macOSPrivateApi/)
+})

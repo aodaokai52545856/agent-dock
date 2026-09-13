@@ -16,7 +16,7 @@
     "pack:linux": "node scripts/pack.mjs --os linux",
     "pack:exe": "node scripts/pack.mjs --os win",
     "test:pack": "node scripts/collect-release.test.mjs && node --experimental-strip-types src/lib/platform.test.ts",
-    "icon:gen": "python scripts/generate_icon.py",
+    "icon:gen": "node scripts/generate_icon.mjs",
     "test:fit": "node --experimental-strip-types src/lib/termFit.test.ts && node --experimental-strip-types src/lib/termSync.test.ts && node --experimental-strip-types src/lib/termGlass.test.ts && node --experimental-strip-types src/lib/termClipboard.test.ts && node --experimental-strip-types src/lib/termMenu.test.ts",
     "test:layout": "node --experimental-strip-types src/lib/layout.test.ts && node --experimental-strip-types src/lib/titleDrag.test.ts",
     "test:bridge": "node --experimental-strip-types src/lib/reviewVerdict.test.ts",

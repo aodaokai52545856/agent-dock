@@ -33,12 +33,19 @@ import type {
   LivePtyInfo,
   Project,
   ProjectDraft,
+  SessionFilterAvail,
   SessionRow,
   SessionToolFilter,
   ToolId,
   ToolProbeMap
 } from './types'
-import { TOOLS, parseSessionToolFilter } from './types'
+import {
+  TOOLS,
+  clampSessionToolFilter,
+  isToolInstalled,
+  parseSessionToolFilter,
+  toolsToScanForFilter
+} from './types'
 import {
   appearanceFromSettings,
   applyAppearance,
@@ -188,19 +195,24 @@ export const filteredSessions = computed(() => {
   return store.sessions.filter((item) => item.title.toLowerCase().includes(q) || item.id.toLowerCase().includes(q))
 })
 
-export const visibleSessions = computed(() => {
+export const projectSessionRows = computed(() => {
   const pending = pendingSessionRows(store.live, store.sessions, store.selectedProjectId)
   const rows = [...pending, ...store.sessions]
   const seen = new Set<string>()
-  const uniq = rows.filter((row) => {
+  return rows.filter((row) => {
     const key = `${row.toolId}:${row.id}`
     if (seen.has(key)) return false
     seen.add(key)
     return true
   })
+})
+
+export const visibleSessions = computed(() => {
   const q = store.sessionQuery.trim().toLowerCase()
-  if (!q) return uniq
-  return uniq.filter((item) => item.title.toLowerCase().includes(q) || item.id.toLowerCase().includes(q))
+  if (!q) return projectSessionRows.value
+  return projectSessionRows.value.filter(
+    (item) => item.title.toLowerCase().includes(q) || item.id.toLowerCase().includes(q)
+  )
 })
 
 export function findLiveForSession(sessionId: string, toolId: ToolId, projectId = store.selectedProjectId) {
@@ -463,7 +475,7 @@ export async function boot() {
 
 async function finishBoot() {
   try {
-    store.probes = await api.probeTools()
+    setToolProbes(await api.probeTools())
   } catch {
     /* chrome is already up */
   }
@@ -548,6 +560,12 @@ async function refreshSessionsNow(opts?: { silent?: boolean }) {
   store.sessionError = ''
   store.sessionErrorKind = ''
   store.sessionStatus = 'ready'
+  if (store.probes) {
+    store.sessions = store.sessions.filter((item) => isToolInstalled(store.probes, item.toolId))
+    for (const tool of TOOLS) {
+      if (!isToolInstalled(store.probes, tool.id)) delete store.sessionErrors[tool.id]
+    }
+  }
   if (!opts?.silent) store.sessionRefreshBusy = true
   try {
     for (const toolId of tools) {
@@ -579,6 +597,7 @@ async function refreshSessionsNow(opts?: { silent?: boolean }) {
     store.sessionStatus = store.sessions.length || pendingSessionRows(store.live, store.sessions, projectId).length
       ? 'ready'
       : 'empty'
+    clampCurrentToolFilter()
   } finally {
     store.sessionRefreshBusy = false
   }
@@ -717,13 +736,34 @@ export function flushLookSettings() {
 }
 
 function toolsToScan(): ToolId[] {
-  const tool = TOOLS.find((item) => item.id === store.sessionToolFilter)
-  if (tool) return [tool.id]
-  return TOOLS.map((item) => item.id)
+  return toolsToScanForFilter(store.sessionToolFilter, store.probes)
+}
+
+function filterAvail(id: SessionToolFilter): SessionFilterAvail | undefined {
+  if (id === 'all') return undefined
+  return {
+    hasSessions: projectSessionRows.value.some((row) => row.toolId === id),
+    scanning: store.sessionLoading[id] || store.sessionRefreshBusy,
+    hasError: Boolean(store.sessionErrors[id])
+  }
+}
+
+function clampCurrentToolFilter() {
+  const next = clampSessionToolFilter(store.sessionToolFilter, store.probes, filterAvail(store.sessionToolFilter))
+  store.sessionToolFilter = next
+  store.settings.sessionToolFilter = next
+}
+
+export function setToolProbes(probes: ToolProbeMap) {
+  store.probes = probes
+  const next = clampSessionToolFilter(store.sessionToolFilter, probes)
+  store.sessionToolFilter = next
+  store.settings.sessionToolFilter = next
 }
 
 export async function setSessionToolFilter(id: SessionToolFilter) {
-  const next = parseSessionToolFilter(id)
+  const parsed = parseSessionToolFilter(id)
+  const next = clampSessionToolFilter(parsed, store.probes, filterAvail(parsed))
   if (next === store.sessionToolFilter) return
   store.sessionToolFilter = next
   store.settings.sessionToolFilter = next

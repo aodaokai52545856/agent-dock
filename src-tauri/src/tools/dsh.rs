@@ -277,22 +277,50 @@ fn run_cli(node: &Path, entry: &Path, args: &[&str]) -> Result<String, String> {
 }
 
 pub fn js_entry(exe: &Path) -> Option<PathBuf> {
-    if exe
-        .file_name()
+    js_entry_candidates(exe)
+        .into_iter()
+        .find(|path| is_dsh_bin_js(path))
+}
+
+fn is_dsh_bin_js(path: &Path) -> bool {
+    path.file_name()
         .and_then(|name| name.to_str())
         .is_some_and(|name| name.eq_ignore_ascii_case("bin.js"))
-        && exe.is_file()
-    {
-        return Some(exe.to_path_buf());
-    }
-    let dir = exe.parent()?;
-    let npm = dir
-        .join("node_modules")
+        && path.is_file()
+}
+
+fn npm_package_bin_js(root: &Path) -> PathBuf {
+    root.join("node_modules")
         .join("@deepseek-ai")
         .join("dsh")
         .join("lib")
-        .join("bin.js");
-    npm.is_file().then_some(npm)
+        .join("bin.js")
+}
+
+fn js_entry_candidates(exe: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let mut push = |path: PathBuf| {
+        if !out.contains(&path) {
+            out.push(path);
+        }
+    };
+    push(exe.to_path_buf());
+    if let Some(dir) = exe.parent() {
+        // Windows npm: %APPDATA%/npm/dsh.cmd next to npm/node_modules/@deepseek-ai/dsh
+        push(npm_package_bin_js(dir));
+        // Unix/nvm/Homebrew: prefix/bin/dsh → prefix/lib/node_modules/@deepseek-ai/dsh
+        if let Some(prefix) = dir.parent() {
+            push(npm_package_bin_js(&prefix.join("lib")));
+        }
+    }
+    if let Ok(target) = std::fs::read_link(exe) {
+        if target.is_absolute() {
+            push(target);
+        } else if let Some(dir) = exe.parent() {
+            push(dir.join(target));
+        }
+    }
+    out
 }
 
 pub const FIXED_SESSION_ID: &str = "deepseek";
@@ -565,6 +593,67 @@ mod tests {
         assert_eq!(js_entry(&npm.join("dsh")).as_deref(), Some(bin.as_path()));
         assert_eq!(js_entry(&bin).as_deref(), Some(bin.as_path()));
         assert_eq!(js_entry(Path::new("/missing/dsh.cmd")), None);
+    }
+
+    fn write_dsh_bin_js(root: &Path) -> PathBuf {
+        let bin = root
+            .join("node_modules")
+            .join("@deepseek-ai")
+            .join("dsh")
+            .join("lib")
+            .join("bin.js");
+        fs::create_dir_all(bin.parent().unwrap()).unwrap();
+        fs::write(&bin, "export {}").unwrap();
+        bin
+    }
+
+    #[test]
+    fn js_entry_follows_unix_npm_prefix_layout() {
+        let root = tempfile::tempdir().unwrap();
+        let prefix = root.path();
+        let bin = write_dsh_bin_js(&prefix.join("lib"));
+        let shim = prefix.join("bin").join("dsh");
+        fs::create_dir_all(shim.parent().unwrap()).unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(
+            "../lib/node_modules/@deepseek-ai/dsh/lib/bin.js",
+            &shim,
+        )
+        .unwrap();
+        #[cfg(not(unix))]
+        fs::write(&shim, "#!/usr/bin/env node\n").unwrap();
+        assert_eq!(js_entry(&shim).as_deref(), Some(bin.as_path()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn js_entry_follows_symlink_to_bin_js() {
+        let root = tempfile::tempdir().unwrap();
+        let bin = write_dsh_bin_js(&root.path().join("lib"));
+        let shim = root.path().join("local").join("bin").join("dsh");
+        fs::create_dir_all(shim.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(&bin, &shim).unwrap();
+        assert_eq!(js_entry(&shim).as_deref(), Some(bin.as_path()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn js_entry_follows_relative_symlink_outside_prefix() {
+        let root = tempfile::tempdir().unwrap();
+        let bin = write_dsh_bin_js(&root.path().join("lib"));
+        let shim = root.path().join("local").join("bin").join("dsh");
+        fs::create_dir_all(shim.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(
+            "../../lib/node_modules/@deepseek-ai/dsh/lib/bin.js",
+            &shim,
+        )
+        .unwrap();
+        let found = js_entry(&shim).expect("relative symlink");
+        assert!(found.is_file());
+        assert_eq!(
+            fs::canonicalize(&found).unwrap(),
+            fs::canonicalize(&bin).unwrap()
+        );
     }
 
     #[test]

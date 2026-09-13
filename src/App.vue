@@ -55,6 +55,7 @@ import {
   selectProject,
   selectedProject,
   setSessionToolFilter,
+  setToolProbes,
   showToast,
   store,
   watchPendingSession
@@ -520,7 +521,7 @@ function onCcswitchInstall() {
 
 async function onVersionsChanged() {
   if (!api.isTauri) return
-  store.probes = await api.probeTools()
+  setToolProbes(await api.probeTools())
   void refreshSessions()
 }
 
