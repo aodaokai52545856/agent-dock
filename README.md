@@ -11,7 +11,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/aodaokai52545856/agent-dock/releases/tag/v0.1.0-beta"><img alt="download" src="https://img.shields.io/badge/%E2%AC%87%20%E9%A6%96%E7%89%88%E6%B5%8B%E8%AF%95%E5%8C%85%20v0.1.0--beta-111111?style=for-the-badge"></a>
+  <a href="https://github.com/aodaokai52545856/agent-dock/releases/tag/v0.1.1"><img alt="download" src="https://img.shields.io/badge/%E2%AC%87%20%E6%B5%8B%E8%AF%95%E5%8C%85%20v0.1.1-111111?style=for-the-badge"></a>
 </p>
 
 <p align="center">
@@ -39,18 +39,18 @@
 
 ## 首版测试下载
 
-> **v0.1.0-beta** · 跨平台测试包 · 不需要本机装 Rust
+> **v0.1.1** · 跨平台测试包 · 不需要本机装 Rust
 
 | 文件 | 平台 | 说明 | 大小约 |
 | --- | --- | --- | --- |
-| [**AgentDock-0.1.0-Setup.exe**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.0-beta/AgentDock-0.1.0-Setup.exe) | Windows | NSIS 安装包（推荐） | ~3.5 MB |
-| [**AgentDock-0.1.0.exe**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.0-beta/AgentDock-0.1.0.exe) | Windows | 绿色便携版 | ~14 MB |
-| [**AgentDock-0.1.0.dmg**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.0-beta/AgentDock-0.1.0.dmg) | macOS | 磁盘映像 | ~6.3 MB |
-| [**AgentDock-0.1.0.app.tar.gz**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.0-beta/AgentDock-0.1.0.app.tar.gz) | macOS | `.app` 压缩包 | ~5.6 MB |
-| [**AgentDock-0.1.0.AppImage**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.0-beta/AgentDock-0.1.0.AppImage) | Linux | 免安装可执行 | ~79 MB |
-| [**AgentDock-0.1.0.deb**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.0-beta/AgentDock-0.1.0.deb) | Linux | Debian / Ubuntu | ~5.4 MB |
+| [**AgentDock-0.1.1-Setup.exe**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.1/AgentDock-0.1.1-Setup.exe) | Windows | NSIS 安装包（推荐） | ~3.5 MB |
+| [**AgentDock-0.1.1.exe**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.1/AgentDock-0.1.1.exe) | Windows | 绿色便携版 | ~14 MB |
+| [**AgentDock-0.1.1.dmg**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.1/AgentDock-0.1.1.dmg) | macOS | 磁盘映像 | ~6.3 MB |
+| [**AgentDock-0.1.1.app.tar.gz**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.1/AgentDock-0.1.1.app.tar.gz) | macOS | `.app` 压缩包 | ~5.6 MB |
+| [**AgentDock-0.1.1.AppImage**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.1/AgentDock-0.1.1.AppImage) | Linux | 免安装可执行 | ~79 MB |
+| [**AgentDock-0.1.1.deb**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.1/AgentDock-0.1.1.deb) | Linux | Debian / Ubuntu | ~5.4 MB |
 
-发布页：[Releases · v0.1.0-beta](https://github.com/aodaokai52545856/agent-dock/releases/tag/v0.1.0-beta)
+发布页：[Releases · v0.1.1](https://github.com/aodaokai52545856/agent-dock/releases/tag/v0.1.1)
 
 **运行前提**
 
