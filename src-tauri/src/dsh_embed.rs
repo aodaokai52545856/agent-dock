@@ -75,8 +75,13 @@ pub fn open(
         .ok_or_else(|| "没有主窗口，无法嵌入 DeepSeek Web。".to_string())?;
     let window = host.as_ref().window();
     let init = glass_init_script(theme_script.as_deref());
+    #[cfg(windows)]
     let builder = WebviewBuilder::new(LABEL, WebviewUrl::External(parsed))
         .transparent(true)
+        .background_color(Color(0, 0, 0, 0))
+        .initialization_script_for_all_frames(init);
+    #[cfg(not(windows))]
+    let builder = WebviewBuilder::new(LABEL, WebviewUrl::External(parsed))
         .background_color(Color(0, 0, 0, 0))
         .initialization_script_for_all_frames(init);
     window
@@ -189,8 +194,15 @@ fn apply_bounds(webview: &tauri::Webview, bounds: &Bounds) -> Result<(), String>
 }
 
 fn raise_parent_resize_overlay(webview: &tauri::Webview) {
-    if let Ok(hwnd) = webview.window().hwnd() {
-        crate::window_chrome::raise_resize_overlay(hwnd.0 as isize);
+    #[cfg(windows)]
+    {
+        if let Ok(hwnd) = webview.window().hwnd() {
+            crate::window_chrome::raise_resize_overlay(hwnd.0 as isize);
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = webview;
     }
 }
 

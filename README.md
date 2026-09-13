@@ -1,12 +1,17 @@
 <p align="center">
-  <img src="src-tauri/icons/128x128.png" width="88" height="88" alt="Agent Dock">
+  <img src="src-tauri/icons/128x128.png" width="96" height="96" alt="Agent Dock">
 </p>
 
 <h1 align="center">Agent Dock</h1>
 
 <p align="center">
-  <strong>把本机 AI CLI 收进同一个桌面窗口。</strong><br>
-  控制台续 OpenCode / Grok / Kimi / Claude / Pi / DeepSeek 会话；编排用角色 + 通道画流程图，内置开发-审查闸。
+  <strong>本机 AI 特工的统一驾驶舱。</strong><br>
+  一个窗口接管 OpenCode / Grok / Kimi / Claude / Pi / DeepSeek 会话，<br>
+  再用编排把 Cursor 开发与 Codex 审查串成过闸流水线。
+</p>
+
+<p align="center">
+  <a href="https://github.com/aodaokai52545856/agent-dock/releases/tag/v0.1.0-beta"><img alt="download" src="https://img.shields.io/badge/%E2%AC%87%20%E9%A6%96%E7%89%88%E6%B5%8B%E8%AF%95%E5%8C%85%20v0.1.0--beta-111111?style=for-the-badge"></a>
 </p>
 
 <p align="center">
@@ -17,16 +22,42 @@
 </p>
 
 <p align="center">
-  <a href="#启动">启动</a> ·
-  <a href="#两种模式">模式</a> ·
-  <a href="#打包">打包</a> ·
-  <a href="#编排模式">编排</a> ·
-  <a href="#开发">开发</a>
+  <a href="#%E9%A6%96%E7%89%88%E6%B5%8B%E8%AF%95%E4%B8%8B%E8%BD%BD">下载</a> ·
+  <a href="#%E4%B8%A4%E7%A7%8D%E6%A8%A1%E5%BC%8F">模式</a> ·
+  <a href="#%E5%90%AF%E5%8A%A8">启动</a> ·
+  <a href="#%E6%89%93%E5%8C%85">打包</a> ·
+  <a href="#%E7%BC%96%E6%8E%92%E6%A8%A1%E5%BC%8F">编排</a> ·
+  <a href="#%E5%BC%80%E5%8F%91">开发</a>
 </p>
 
 <p align="center">
-  <img width="1879" alt="Agent Dock 控制台截图" src="https://github.com/user-attachments/assets/21ed1a89-c54f-4a85-8b8a-5a6a4c4f4d43">
+    <img width="1412" height="986" alt="image" src="https://github.com/user-attachments/assets/1380fac6-b7d7-41b8-97e1-3379e781547b" />
+    <img width="1412" height="986" alt="image" src="https://github.com/user-attachments/assets/f89b0c59-6351-43d1-b84c-9265ff1c0da3" />
 </p>
+
+---
+
+## 首版测试下载
+
+> **v0.1.0-beta** · 跨平台测试包 · 不需要本机装 Rust
+
+| 文件 | 平台 | 说明 | 大小约 |
+| --- | --- | --- | --- |
+| [**AgentDock-0.1.0-Setup.exe**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.0-beta/AgentDock-0.1.0-Setup.exe) | Windows | NSIS 安装包（推荐） | ~3.5 MB |
+| [**AgentDock-0.1.0.exe**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.0-beta/AgentDock-0.1.0.exe) | Windows | 绿色便携版 | ~14 MB |
+| [**AgentDock-0.1.0.dmg**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.0-beta/AgentDock-0.1.0.dmg) | macOS | 磁盘映像 | ~6.3 MB |
+| [**AgentDock-0.1.0.app.tar.gz**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.0-beta/AgentDock-0.1.0.app.tar.gz) | macOS | `.app` 压缩包 | ~5.6 MB |
+| [**AgentDock-0.1.0.AppImage**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.0-beta/AgentDock-0.1.0.AppImage) | Linux | 免安装可执行 | ~79 MB |
+| [**AgentDock-0.1.0.deb**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.0-beta/AgentDock-0.1.0.deb) | Linux | Debian / Ubuntu | ~5.4 MB |
+
+发布页：[Releases · v0.1.0-beta](https://github.com/aodaokai52545856/agent-dock/releases/tag/v0.1.0-beta)
+
+**运行前提**
+
+- **Windows：** Win10/11 + [WebView2](https://developer.microsoft.com/microsoft-edge/webview2/)（多数机器已自带）
+- **macOS / Linux：** 按系统装好 WebView / WebKitGTK 等运行时即可
+- CLI（`opencode` / `grok` / `kimi` / `claude` 等）请自行安装并登录；Dock **不代登录**
+- 编排自动开发需要 Cursor API Key；Codex 审查需要本机已登录 Codex
 
 ---
 
@@ -41,11 +72,11 @@ Agent Dock 是一个 **frameless 深色桌面启动器**：
 | 挂上几个项目文件夹 | 左侧工作区，按目录扫 CLI session |
 | 续上一次对话 | 内嵌 xterm，Windows 走 ConPTY，macOS / Linux 走系统 PTY |
 | 只给某个项目走代理 | 写入该终端的 `HTTP_PROXY` / `HTTPS_PROXY`，不动系统环境变量 |
-| 写完一块再让 Codex 审 | 编排模式：`review/start` **detached**，未通过不能进下一片 |
+| 写完一块再让 Codex 审 | 编排：`review/start` **detached**，未通过不能进下一片 |
 | Cursor 自动写、Codex 自动审 | 设置里填 Cursor API Key，走 `@cursor/sdk`（与 IDE 额度分开） |
 | 把审查意见交给 Grok | 流程图节点绑 Grok 窗口，边可选自动或手动桥接 |
 
-**不代登录。** CLI 以及 Codex / Cursor 都请在本机自行安装并登录。客户只需安装打好的 exe / dmg / AppImage，不需要 Rust。
+**客户只需安装 exe / dmg / AppImage，不需要 Rust。** 源码开发才需要本机工具链。
 
 ---
 
@@ -77,7 +108,7 @@ Agent Dock 是一个 **frameless 深色桌面启动器**：
 - **开发-审查闸**：Cursor SDK 开发 → Codex 审查，未通过带意见返工
 - **Codex → Grok**：审查意见桥接到已打开的 Grok 窗口
 
-同一工作区同一时刻只应有一个写者。控制台里该项目若还开着终端，画布会提示不要两边一起改同一棵树。
+同一工作区同一时刻只应有一个写者。
 
 ---
 
@@ -89,9 +120,7 @@ Agent Dock 是一个 **frameless 深色桌面启动器**：
 | macOS 10.15+ | Rust + Node.js，默认 `$SHELL` / zsh | 安装包即可 | 系统 WKWebView |
 | Linux | Rust + Node.js，默认 `$SHELL` / bash | 安装包即可 | WebKitGTK 4.1 |
 
-CLI 按需自备：`opencode`、`grok`、`kimi`、`claude`、Pi、DeepSeek；编排还需要已登录的 **Codex**（桌面端与 CLI 共用 `CODEX_HOME`）。自动开发另需 **Cursor API Key**。
-
-从 Finder / 开始菜单 / 应用菜单打开时，Dock 会补上 Homebrew、nvm、`~/.local/bin`、`~/.kimi-code/bin` 等常见 PATH，避免找不到这些命令。
+从 Finder / 开始菜单 / 应用菜单打开时，Dock 会补上 Homebrew、nvm、`~/.local/bin`、`~/.kimi-code/bin` 等常见 PATH。
 
 ---
 
@@ -105,7 +134,7 @@ npm run icon:gen
 npm run tauri:dev
 ```
 
-开发热更新固定走 `http://localhost:1421`。浏览器里打开只能预览壳子（mock 数据），完整能力在桌面端。源码开发需要本机 Rust；发给客户的安装包已经把 Rust 后端打进二进制，客户不需要 Rust。
+开发热更新固定走 `http://localhost:1421`。浏览器预览只有壳子（mock 数据），完整能力在桌面端。
 
 ---
 
@@ -122,19 +151,13 @@ npm run pack:mac      # Agent Dock.app + AgentDock-<version>.dmg
 npm run pack:linux    # AgentDock-<version>.AppImage + AgentDock-<version>.deb
 ```
 
-`npm run pack:exe` 仍可用，等同 `pack:win`。
-
-GitHub 上打 tag `v*` 或手动跑 [`release`](.github/workflows/release.yml) workflow，会分别在 Windows / macOS / Ubuntu runner 上打包并上传 artifact。
+GitHub 打 tag `v*` 或手动跑 [`release`](.github/workflows/release.yml) workflow，会在 Windows / macOS / Ubuntu runner 上打包并上传 artifact。
 
 ---
 
 ## 代理
 
-创建或编辑项目时可勾选「使用代理」，默认 `http://127.0.0.1:7890`。
-
-- 只注入该项目打开的控制台终端
-- 不改系统环境变量
-- 切换到编排模式也不会关掉已开的 PTY
+创建或编辑项目时可勾选「使用代理」，默认 `http://127.0.0.1:7890`。只注入该项目打开的控制台终端，不改系统环境变量。
 
 ---
 
@@ -142,11 +165,10 @@ GitHub 上打 tag `v*` 或手动跑 [`release`](.github/workflows/release.yml) w
 
 本机 Codex 需已登录。Dock 自己拉 `codex app-server`：
 
-- `thread/list` 按项目目录列出桌面 / CLI session 当审查上下文，**不** `thread/resume`。Windows 上桌面线程目前多标成 `vscode`，cwd 对得上就能勾选
-- `review/start` 使用 `delivery: "detached"`，避免和 Codex 桌面抢同一条 thread 的 writer
-- Grok 窗口走已打开的终端：`ptyWrite` 写入提示行。手动边默认不回车；自动边回车并轮询 `chat_history.jsonl` 的新回合
-- 内置模板「开发-审查闸」：Cursor SDK 开发 → Codex 审查。官方结论是文本，读到 `VERDICT: PASS/FAIL` 才自动开闸，否则请人工标记
-- 内置模板「Codex → Grok」：审查意见手动桥接到 Grok 窗口（可改成自动）
+- `thread/list` 按项目目录列 session 当审查上下文，**不** `thread/resume`
+- `review/start` 使用 `delivery: "detached"`，避免抢桌面 writer
+- Grok 窗口可走 `ptyWrite` 桥接；手动边默认不回车，自动边回车并轮询新回合
+- 内置「开发-审查闸」「Codex → Grok」模板
 
 ```bash
 npm run test:bridge
@@ -161,14 +183,10 @@ npm run spike:app-server -- "/path/to/project"
 ```text
 agent-dock/
 ├── src/                 Vue 3 界面（控制台 + 编排）
-│   ├── components/
-│   └── lib/             store / flow / appearance / 会话文档
-├── src-tauri/           Rust：PTY、CLI 适配、Codex 桥、Cursor 开发、DeepSeek Web
-├── scripts/             图标、打包、Codex spike、Cursor agent
+├── src-tauri/           Rust：PTY、CLI、Codex 桥、Cursor、DeepSeek Web
+├── scripts/             图标、打包、spike
 └── .github/workflows/   跨平台 release
 ```
-
-常用检查：
 
 ```bash
 npm run test:fit
