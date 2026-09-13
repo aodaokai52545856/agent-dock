@@ -22,7 +22,7 @@
 </p>
 
 <p align="center">
-  <a href="#%E9%A6%96%E7%89%88%E6%B5%8B%E8%AF%95%E4%B8%8B%E8%BD%BDwindows">下载</a> ·
+  <a href="#%E9%A6%96%E7%89%88%E6%B5%8B%E8%AF%95%E4%B8%8B%E8%BD%BD">下载</a> ·
   <a href="#%E4%B8%A4%E7%A7%8D%E6%A8%A1%E5%BC%8F">模式</a> ·
   <a href="#%E5%90%AF%E5%8A%A8">启动</a> ·
   <a href="#%E6%89%93%E5%8C%85">打包</a> ·
@@ -37,24 +37,27 @@
 
 ---
 
-## 首版测试下载（Windows）
+## 首版测试下载
 
-> **v0.1.0-beta** · 首个可安装测试包 · 仅 Windows x64 · 不需要本机装 Rust
+> **v0.1.0-beta** · 跨平台测试包 · 不需要本机装 Rust
 
-| 文件 | 说明 | 大小约 |
-| --- | --- | --- |
-| [**AgentDock-0.1.0-Setup.exe**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.0-beta/AgentDock-0.1.0-Setup.exe) | NSIS 安装包，推荐大多数人用 | ~14 MB |
-| [**AgentDock-0.1.0.exe**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.0-beta/AgentDock-0.1.0.exe) | 绿色便携版 | ~3.6 MB |
+| 文件 | 平台 | 说明 | 大小约 |
+| --- | --- | --- | --- |
+| [**AgentDock-0.1.0-Setup.exe**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.0-beta/AgentDock-0.1.0-Setup.exe) | Windows | NSIS 安装包（推荐） | ~3.5 MB |
+| [**AgentDock-0.1.0.exe**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.0-beta/AgentDock-0.1.0.exe) | Windows | 绿色便携版 | ~14 MB |
+| [**AgentDock-0.1.0.dmg**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.0-beta/AgentDock-0.1.0.dmg) | macOS | 磁盘映像 | ~6.3 MB |
+| [**AgentDock-0.1.0.app.tar.gz**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.0-beta/AgentDock-0.1.0.app.tar.gz) | macOS | `.app` 压缩包 | ~5.6 MB |
+| [**AgentDock-0.1.0.AppImage**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.0-beta/AgentDock-0.1.0.AppImage) | Linux | 免安装可执行 | ~79 MB |
+| [**AgentDock-0.1.0.deb**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.0-beta/AgentDock-0.1.0.deb) | Linux | Debian / Ubuntu | ~5.4 MB |
 
 发布页：[Releases · v0.1.0-beta](https://github.com/aodaokai52545856/agent-dock/releases/tag/v0.1.0-beta)
 
 **运行前提**
 
-- Windows 10/11 + [WebView2](https://developer.microsoft.com/microsoft-edge/webview2/)（多数机器已自带）
+- **Windows：** Win10/11 + [WebView2](https://developer.microsoft.com/microsoft-edge/webview2/)（多数机器已自带）
+- **macOS / Linux：** 按系统装好 WebView / WebKitGTK 等运行时即可
 - CLI（`opencode` / `grok` / `kimi` / `claude` 等）请自行安装并登录；Dock **不代登录**
 - 编排自动开发需要 Cursor API Key；Codex 审查需要本机已登录 Codex
-
-macOS / Linux 安装包随后续正式版放出。
 
 ---
 
