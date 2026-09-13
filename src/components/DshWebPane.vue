@@ -12,7 +12,7 @@ import {
 import { dshGlassApplyScript, dshGlassTheme, withDshGlassHash } from '../lib/dshGlass'
 import { docRailPaneWidth, layout } from '../lib/layout'
 import { glassRgba } from '../lib/uiGlass'
-import { store } from '../lib/store'
+import { resumeDshEmbed, store } from '../lib/store'
 
 const props = defineProps<{
   url: string
@@ -44,14 +44,29 @@ function measure() {
 }
 
 function masked() {
-  return typeof document !== 'undefined' && dshEmbedBlocked(document)
+  if (typeof document === 'undefined') return false
+  const bounds = measure()
+  const embed = bounds
+    ? { left: bounds.x, top: bounds.y, width: bounds.width, height: bounds.height }
+    : null
+  return dshEmbedBlocked(document, embed)
 }
 
 let syncing = false
 let queued: { navigate?: boolean } | undefined
 let hasQueue = false
+let released = false
+
+function embedStopped() {
+  return released || store.dshEmbedPaused
+}
+
+async function releaseEmbed() {
+  await api.dshEmbedClose()
+}
 
 async function sync(opts?: { navigate?: boolean }) {
+  if (embedStopped()) return
   queued = opts
   hasQueue = true
   if (syncing) return
@@ -70,6 +85,10 @@ async function sync(opts?: { navigate?: boolean }) {
 
 async function syncOnce(opts?: { navigate?: boolean }) {
   if (!api.isTauri) return
+  if (embedStopped()) {
+    await releaseEmbed()
+    return
+  }
   const bounds = measure()
   try {
     if (!props.url || !bounds || masked()) {
@@ -86,9 +105,17 @@ async function syncOnce(opts?: { navigate?: boolean }) {
         dshGlassApplyScript(theme.value)
       )
     }
+    if (embedStopped()) {
+      await releaseEmbed()
+      return
+    }
     error.value = ''
     await pushTheme()
   } catch (err) {
+    if (embedStopped()) {
+      await releaseEmbed()
+      return
+    }
     error.value = err instanceof Error ? err.message : String(err)
   }
 }
@@ -111,6 +138,8 @@ let maskObserver: MutationObserver | undefined
 let offResized: (() => void) | undefined
 
 onMounted(() => {
+  released = false
+  resumeDshEmbed()
   observer = new ResizeObserver(onResize)
   if (hostRef.value) observer.observe(hostRef.value)
   window.addEventListener('resize', onResize)
@@ -132,11 +161,12 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  released = true
   observer?.disconnect()
   maskObserver?.disconnect()
   offResized?.()
   window.removeEventListener('resize', onResize)
-  void api.dshEmbedSetVisible(false)
+  void releaseEmbed()
 })
 
 watch(

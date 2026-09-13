@@ -1,11 +1,28 @@
 export const DSH_EMBED_EDGE = 12
 export const DSH_EMBED_GUTTER = 6
 export const DSH_STATUS_BAR = 28
-export const DSH_OVERLAY_SELECTOR = '.ad-mask, .ad-menu'
+export const DSH_MASK_SELECTOR = '.ad-mask'
+export const DSH_MENU_SELECTOR = '.ad-menu'
 export const DSH_TOAST_SELECTOR = '.toast'
 
-export function dshEmbedBlocked(root: { querySelector: (selector: string) => unknown }) {
-  return Boolean(root.querySelector(DSH_OVERLAY_SELECTOR))
+export type OverlayRoot = {
+  querySelector: (selector: string) => unknown
+  querySelectorAll?: (selector: string) => ArrayLike<{ getBoundingClientRect: () => Box }>
+}
+
+export function rectsOverlap(a: Box, b: Box) {
+  return a.left < b.left + b.width && a.left + a.width > b.left && a.top < b.top + b.height && a.top + a.height > b.top
+}
+
+export function dshEmbedBlocked(root: OverlayRoot, embed?: Box | null) {
+  if (root.querySelector(DSH_MASK_SELECTOR)) return true
+  if (!embed) return false
+  const menus = root.querySelectorAll?.(DSH_MENU_SELECTOR)
+  if (!menus?.length) return false
+  for (let i = 0; i < menus.length; i++) {
+    if (rectsOverlap(embed, menus[i].getBoundingClientRect())) return true
+  }
+  return false
 }
 
 export function toastOverlayTop(

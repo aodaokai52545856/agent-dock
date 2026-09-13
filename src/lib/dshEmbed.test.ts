@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import {
   DSH_EMBED_EDGE,
   DSH_EMBED_GUTTER,
@@ -7,6 +10,8 @@ import {
   dshEmbedBlocked,
   toastOverlayTop
 } from './dshEmbed.ts'
+
+const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 
 function test(name: string, fn: () => void) {
   fn()
@@ -76,21 +81,32 @@ test('embed stops above the status bar so DeepSeek cannot cover it', () => {
 })
 
 test('title-bar menus and dialogs block the native embed', () => {
-  function fakeRoot(present: string[]) {
+  const embed = { left: 280, top: 80, width: 1000, height: 700 }
+  function fakeRoot(opts: { mask?: boolean; menus?: Box[] }) {
     return {
-      querySelector: (selector: string) => {
-        const parts = selector.split(',').map((item) => item.trim().replace(/^\./, ''))
-        return parts.some((name) => present.includes(name)) ? {} : null
+      querySelector: (selector: string) => (selector.includes('ad-mask') && opts.mask ? {} : null),
+      querySelectorAll: (selector: string) => {
+        if (!selector.includes('ad-menu')) return []
+        return (opts.menus ?? []).map((box) => ({ getBoundingClientRect: () => box }))
       }
     }
   }
-  assert.equal(dshEmbedBlocked(fakeRoot([])), false)
-  assert.equal(dshEmbedBlocked(fakeRoot(['ad-menu'])), true)
-  assert.equal(dshEmbedBlocked(fakeRoot(['ad-mask'])), true)
+  assert.equal(dshEmbedBlocked(fakeRoot({}), embed), false)
+  assert.equal(dshEmbedBlocked(fakeRoot({ mask: true }), embed), true)
   assert.equal(
-    dshEmbedBlocked(fakeRoot(['toast'])),
+    dshEmbedBlocked(fakeRoot({ menus: [{ left: 40, top: 200, width: 228, height: 226 }] }), embed),
     false,
-    'toast should inset the embed, not hide the whole DeepSeek page'
+    'sidebar context menus stay in the rail and must not hide DeepSeek'
+  )
+  assert.equal(
+    dshEmbedBlocked(fakeRoot({ menus: [{ left: 300, top: 90, width: 180, height: 120 }] }), embed),
+    true,
+    'menus that overlap the embed still hide it'
+  )
+  assert.equal(
+    dshEmbedBlocked(fakeRoot({ menus: [{ left: 300, top: 90, width: 180, height: 120 }] })),
+    false,
+    'without embed bounds, only a full-window mask should hide DeepSeek'
   )
 })
 
@@ -113,5 +129,39 @@ test('toast overlay top includes a gutter below the pill', () => {
   assert.equal(
     toastOverlayTop({ getBoundingClientRect: () => ({ bottom: 86 }) }),
     86 + DSH_EMBED_GUTTER
+  )
+})
+
+test('unmounting DeepSeek closes the native embed so a dead localhost page cannot cover the dock', () => {
+  const pane = readFileSync(join(root, 'components/DshWebPane.vue'), 'utf8')
+  assert.match(pane, /onUnmounted\(/)
+  assert.match(pane, /dshEmbedClose/)
+  assert.match(pane, /dshEmbedPaused/)
+  const unmount = pane.slice(pane.indexOf('onUnmounted'))
+  assert.doesNotMatch(
+    unmount.slice(0, 400),
+    /dshEmbedSetVisible\(false\)/,
+    'unmount must close the webview, not merely hide it'
+  )
+})
+
+test('closing sessions pauses the embed before the confirm mask goes away', () => {
+  const app = readFileSync(join(root, 'App.vue'), 'utf8')
+  assert.match(app, /pauseDshEmbed/)
+  assert.match(app, /dshEmbedClose/)
+  const confirm = app.slice(app.indexOf('async function onConfirm'))
+  const dismiss = confirm.indexOf('confirmOpen.value = false')
+  assert.ok(dismiss > 0)
+  assert.match(confirm.slice(0, dismiss), /pauseDshEmbed/)
+  assert.match(confirm.slice(0, dismiss), /dshEmbedClose/)
+})
+
+test('the close button goes home instead of adopting another live session', () => {
+  const app = readFileSync(join(root, 'App.vue'), 'utf8')
+  assert.match(app, /markPtyExit\(id, \{ userClosed: true \}\)/)
+  const pane = readFileSync(join(root, 'components/TerminalPane.vue'), 'utf8')
+  assert.match(
+    pane,
+    /watch\(\s*\(\) => store\.activePtyId[\s\S]{0,220}?immediate:\s*true/
   )
 })

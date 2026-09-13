@@ -388,11 +388,16 @@ watch(liveCount, (n) => {
 
 <style scoped>
 .bar {
+  position: relative;
+  z-index: 2;
+  flex-shrink: 0;
   height: 28px;
   display: flex;
   align-items: center;
   gap: 16px;
   padding: 0 16px;
+  overflow: hidden;
+  isolation: isolate;
   background: var(--ad-sidebar);
   border-top: 1px solid var(--ad-border);
   font-size: 12px;

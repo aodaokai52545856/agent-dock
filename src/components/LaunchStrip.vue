@@ -59,12 +59,17 @@ const live = computed(() => Boolean(activeLive.value))
 
 <style scoped>
 .strip {
+  position: relative;
+  z-index: 2;
+  flex-shrink: 0;
   height: 32px;
   display: flex;
   align-items: center;
   gap: 12px;
   padding: 0 var(--ad-stage-pad);
-  background: var(--ad-editor);
+  overflow: hidden;
+  isolation: isolate;
+  background: var(--ad-sidebar);
   border-bottom: 1px solid var(--ad-border);
 }
 

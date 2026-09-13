@@ -1,4 +1,11 @@
-import { parseHex, resolvedTheme, systemPrefersLight, themeDefaults } from './appearance.ts'
+import {
+  appearanceFromSettings,
+  parseHex,
+  resolvedTheme,
+  systemPrefersLight,
+  themeDefaults,
+  themePaint
+} from './appearance.ts'
 import { clampUiFrost, UI_FROST_DEFAULT, veilAlpha } from './uiGlass.ts'
 import type { AppSettings } from './types.ts'
 
@@ -12,6 +19,9 @@ export type DshGlassTheme = {
 
 type GlassSettings = Pick<AppSettings, 'uiTheme' | 'uiBackground' | 'uiForeground' | 'uiOpacity'> & {
   uiFrost?: number
+  uiAccentLight?: string
+  uiBackgroundLight?: string
+  uiForegroundLight?: string
 }
 
 function clampVeil(value: number) {
@@ -25,9 +35,10 @@ export function dshGlassTheme(settings: GlassSettings): DshGlassTheme {
     typeof window !== 'undefined' ? systemPrefersLight() : false
   )
   const defaults = themeDefaults(scheme)
+  const look = appearanceFromSettings(settings, scheme === 'light')
   return {
-    bg: parseHex(settings.uiBackground) || defaults.background,
-    fg: parseHex(settings.uiForeground) || defaults.foreground,
+    bg: themePaint(look.background, defaults.background, scheme, 'surface'),
+    fg: themePaint(look.foreground, defaults.foreground, scheme, 'ink'),
     veil: Number(veilAlpha(settings.uiOpacity).toFixed(3)),
     frost: clampUiFrost(settings.uiFrost ?? UI_FROST_DEFAULT),
     scheme

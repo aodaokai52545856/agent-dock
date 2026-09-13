@@ -122,6 +122,8 @@ pub fn set_visible(app: &AppHandle, visible: bool) -> Result<(), String> {
 
 pub fn close(app: &AppHandle) -> Result<(), String> {
     if let Some(webview) = app.get_webview(LABEL) {
+        let _ = webview.hide();
+        let _ = webview.eval("try { location.replace('about:blank') } catch (e) {}");
         let _ = webview.close();
     }
     if let Some(hub) = app.try_state::<std::sync::Arc<Hub>>() {
@@ -205,6 +207,18 @@ mod tests {
         let with_theme = glass_init_script(Some("window.__adDshGlass({bg:'#0D0D0D'})"));
         assert!(with_theme.contains("ad-dsh-glass"));
         assert!(with_theme.contains("window.__adDshGlass({bg:'#0D0D0D'})"));
+    }
+
+    #[test]
+    fn close_blanks_the_child_so_a_dead_localhost_page_cannot_cover_the_dock() {
+        let src = include_str!("dsh_embed.rs");
+        let start = src.find("pub fn close").expect("close should exist");
+        let body = src[start..]
+            .split("pub fn apply_theme")
+            .next()
+            .expect("apply_theme follows close");
+        assert!(body.contains("about:blank"), "close must navigate away from the dead dsh url");
+        assert!(body.contains("hide"), "close must hide before destroying the child webview");
     }
 
     #[test]

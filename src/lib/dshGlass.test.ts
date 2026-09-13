@@ -28,6 +28,18 @@ test('empty background uses the dark navy default and full frost', () => {
   assert.equal(theme.frost, 100)
 })
 
+test('light theme does not keep a stored dark canvas', () => {
+  const theme = dshGlassTheme({
+    uiTheme: 'light',
+    uiBackground: '#0B0F13',
+    uiForeground: '',
+    uiOpacity: 0
+  })
+  assert.equal(theme.bg, '#F3F3F3')
+  assert.equal(theme.fg, '#171717')
+  assert.equal(theme.scheme, 'light')
+})
+
 test('theme uses settings background, veil, and frost', () => {
   const theme = dshGlassTheme({
     uiTheme: 'dark',

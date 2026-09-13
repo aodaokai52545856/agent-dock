@@ -44,6 +44,7 @@ import {
   markPtyExit,
   markWindowBlurred,
   noteGrokAccountChange,
+  pauseDshEmbed,
   refreshAfterWindowFocus,
   refreshSessions,
   rememberOpened,
@@ -60,6 +61,7 @@ import {
 import { isPendingSessionId, resolveOpenTarget } from './lib/liveBind'
 import { refreshCodexThreads } from './lib/pipeline'
 import type { ProjectDraft, SessionDoc, ToolId } from './lib/types'
+import { appearanceFromSettings, resolvedTheme, systemPrefersLight } from './lib/appearance'
 
 const projectOpen = ref(false)
 const editing = ref(false)
@@ -262,6 +264,22 @@ function askDeleteSession(sessionId: string, toolId: ToolId) {
 }
 
 async function onConfirm() {
+  const closingAll = confirmMode.value === 'close-all'
+  const closingOne = confirmMode.value === 'close'
+  const closeAllItems = closingAll ? liveOfProject(store.live, closingProjectId.value) : []
+  const deletingLive =
+    confirmMode.value === 'delete' && deletingSession.value
+      ? liveForSession(deletingSession.value.sessionId, deletingSession.value.toolId)
+      : null
+  const closingDsh =
+    (closingAll && closeAllItems.some((item) => isDshWeb(item))) ||
+    (closingOne &&
+      isDshWeb(store.live.find((item) => item.ptyId === (closingPtyId.value || store.activePtyId)))) ||
+    isDshWeb(deletingLive)
+  if (closingDsh) {
+    pauseDshEmbed()
+    await api.dshEmbedClose()
+  }
   confirmOpen.value = false
   if (confirmMode.value === 'remove' && removingProject.value) {
     const name = removingProject.value.name
@@ -278,18 +296,20 @@ async function onConfirm() {
     if (!id) return
     await api.ptyKill(id)
     termRef.value?.dispose(id)
-    markPtyExit(id)
+    markPtyExit(id, { userClosed: true })
     closingPtyId.value = ''
+    if (closingDsh) await api.dshEmbedClose()
     return
   }
   if (confirmMode.value === 'close-all') {
-    const items = liveOfProject(store.live, closingProjectId.value)
+    const items = closeAllItems
     closingProjectId.value = ''
     for (const item of items) {
       await api.ptyKill(item.ptyId)
       termRef.value?.dispose(item.ptyId)
-      markPtyExit(item.ptyId)
+      markPtyExit(item.ptyId, { userClosed: true })
     }
+    await api.dshEmbedClose()
     showToast(items.length ? `已关闭 ${items.length} 个会话` : '没有打开的会话')
     return
   }
@@ -300,7 +320,8 @@ async function onConfirm() {
     if (live) {
       await api.ptyKill(live.ptyId)
       termRef.value?.dispose(live.ptyId)
-      markPtyExit(live.ptyId)
+      markPtyExit(live.ptyId, { userClosed: true })
+      if (isDshWeb(live)) await api.dshEmbedClose()
     }
     const session = store.sessions.find((item) => item.id === target.sessionId && item.toolId === target.toolId)
     if (!session) {
@@ -390,7 +411,11 @@ async function openSession(sessionId?: string, toolId?: ToolId) {
       sessionId: target.sessionId,
       title: session?.title ?? '新会话',
       cols: 120,
-      rows: 32
+      rows: 32,
+      uiTheme: resolvedTheme(
+        appearanceFromSettings(store.settings).theme,
+        systemPrefersLight()
+      )
     })
     store.selectedTool = tool
     rememberOpened({
@@ -755,12 +780,14 @@ const confirmCopy = () => {
 
 .term-stack {
   position: relative;
+  z-index: 0;
   flex: 1;
   min-width: 0;
   min-height: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  isolation: isolate;
 }
 
 .doc-layer {
