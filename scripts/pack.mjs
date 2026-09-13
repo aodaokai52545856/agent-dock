@@ -1,5 +1,7 @@
 import { spawnSync } from 'node:child_process'
-import { detectPackOs, requiredHost, tauriBundles } from './collect-release.mjs'
+import { mkdtempSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { detectPackOs, readAppVersion, requiredHost, tauriBundles } from './collect-release.mjs'
 import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
 
@@ -20,9 +22,14 @@ if (process.platform !== requiredHost(os)) {
   process.exit(1)
 }
 
+const version = readAppVersion(root)
+console.log(`打包 Agent Dock v${version}（${os}）`)
+const overlayDir = mkdtempSync(join(tmpdir(), 'agent-dock-pack-'))
+const overlay = join(overlayDir, 'version.json')
+writeFileSync(overlay, JSON.stringify({ version }))
 const tauri = spawnSync(
   'npx',
-  ['tauri', 'build', '--bundles', tauriBundles(os)],
+  ['tauri', 'build', '--bundles', tauriBundles(os), '--config', overlay],
   { cwd: root, stdio: 'inherit', shell: true }
 )
 if (tauri.status) process.exit(tauri.status)

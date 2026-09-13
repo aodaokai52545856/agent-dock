@@ -1,4 +1,4 @@
-import { cpSync, existsSync, mkdirSync, readdirSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
@@ -20,6 +20,28 @@ export function requiredHost(os) {
   return 'linux'
 }
 
+export function appVersion(pkg) {
+  const version = String(pkg?.version ?? '').trim()
+  if (!/^\d+\.\d+\.\d+/.test(version)) {
+    throw new Error(`package.json 没有有效版本号：${pkg?.version ?? ''}`)
+  }
+  return version
+}
+
+export function readAppVersion(root) {
+  return appVersion(JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')))
+}
+
+export function releaseFileName(kind, version) {
+  if (kind === 'win-exe') return `AgentDock-${version}.exe`
+  if (kind === 'win-setup') return `AgentDock-${version}-Setup.exe`
+  if (kind === 'mac-app') return 'Agent Dock.app'
+  if (kind === 'mac-dmg') return `AgentDock-${version}.dmg`
+  if (kind === 'linux-appimage') return `AgentDock-${version}.AppImage`
+  if (kind === 'linux-deb') return `AgentDock-${version}.deb`
+  throw new Error(`未知产物：${kind}`)
+}
+
 export function cargoReleaseDir(root, env = process.env) {
   return env.CARGO_TARGET_DIR
     ? join(env.CARGO_TARGET_DIR, 'release')
@@ -32,14 +54,14 @@ function firstMatch(dir, test) {
   return hit ? join(dir, hit) : null
 }
 
-export function plannedCopies(os, cargoTarget) {
+export function plannedCopies(os, cargoTarget, version) {
   const bundle = join(cargoTarget, 'bundle')
   if (os === 'win') {
     return [
-      { from: join(cargoTarget, 'agent-dock.exe'), to: 'AgentDock.exe', required: true },
+      { from: join(cargoTarget, 'agent-dock.exe'), to: releaseFileName('win-exe', version), required: true },
       {
         from: firstMatch(join(bundle, 'nsis'), (name) => name.toLowerCase().endsWith('-setup.exe')),
-        to: 'AgentDock-Setup.exe',
+        to: releaseFileName('win-setup', version),
         required: false
       }
     ]
@@ -48,12 +70,12 @@ export function plannedCopies(os, cargoTarget) {
     return [
       {
         from: firstMatch(join(bundle, 'macos'), (name) => name.endsWith('.app')),
-        to: 'Agent Dock.app',
+        to: releaseFileName('mac-app', version),
         required: true
       },
       {
         from: firstMatch(join(bundle, 'dmg'), (name) => name.toLowerCase().endsWith('.dmg')),
-        to: 'AgentDock.dmg',
+        to: releaseFileName('mac-dmg', version),
         required: false
       }
     ]
@@ -61,21 +83,21 @@ export function plannedCopies(os, cargoTarget) {
   return [
     {
       from: firstMatch(join(bundle, 'appimage'), (name) => name.toLowerCase().endsWith('.appimage')),
-      to: 'AgentDock.AppImage',
+      to: releaseFileName('linux-appimage', version),
       required: true
     },
     {
       from: firstMatch(join(bundle, 'deb'), (name) => name.toLowerCase().endsWith('.deb')),
-      to: 'AgentDock.deb',
+      to: releaseFileName('linux-deb', version),
       required: false
     }
   ]
 }
 
-export function copyReleaseFiles(os, cargoTarget, releaseDir) {
+export function copyReleaseFiles(os, cargoTarget, releaseDir, version) {
   mkdirSync(releaseDir, { recursive: true })
   const copied = []
-  for (const item of plannedCopies(os, cargoTarget)) {
+  for (const item of plannedCopies(os, cargoTarget, version)) {
     if (!item.from || !existsSync(item.from)) {
       if (item.required) {
         throw new Error(`没有找到 ${item.to}，请先在对应系统上执行 npm run pack:${os}。`)
@@ -106,8 +128,9 @@ if (isMain) {
   const cargoTarget = cargoReleaseDir(root)
   const releaseDir = join(root, 'release')
   try {
-    const copied = copyReleaseFiles(os, cargoTarget, releaseDir)
-    console.log('已输出到 release/')
+    const version = readAppVersion(root)
+    const copied = copyReleaseFiles(os, cargoTarget, releaseDir, version)
+    console.log(`已输出到 release/（v${version}）`)
     for (const name of copied) console.log(`  ${name}`)
   } catch (err) {
     console.error(err instanceof Error ? err.message : String(err))

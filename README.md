@@ -113,11 +113,13 @@ npm run tauri:dev
 
 **必须在对应系统上打包**，不能从 Windows 打出 `.dmg` / `.AppImage`。打好的安装包把界面打进二进制，不再监听开发端口。产物落到 `release/`。
 
+版本号读 `package.json` 的 `version`，产物文件名带这个版本，例如当前 `0.1.0` 会打出 `AgentDock-0.1.0-Setup.exe`。
+
 ```bash
 npm run pack          # 当前系统
-npm run pack:win      # AgentDock.exe + AgentDock-Setup.exe
-npm run pack:mac      # Agent Dock.app + AgentDock.dmg
-npm run pack:linux    # AgentDock.AppImage + AgentDock.deb
+npm run pack:win      # AgentDock-<version>.exe + AgentDock-<version>-Setup.exe
+npm run pack:mac      # Agent Dock.app + AgentDock-<version>.dmg
+npm run pack:linux    # AgentDock-<version>.AppImage + AgentDock-<version>.deb
 ```
 
 `npm run pack:exe` 仍可用，等同 `pack:win`。
