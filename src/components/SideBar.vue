@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { relativeTime } from '../lib/format'
-import { clampOverlayBox, endPaneAnim, layout, sidebarHeadCompact, sidebarPaneWidth, toggleProjects } from '../lib/layout'
+import { clampOverlayBox, endPaneAnim, layout, sidebarHeadCompact, sidebarPaneWidth, sidebarToolFilterUsesMark, toggleProjects } from '../lib/layout'
 import { isPendingSessionId } from '../lib/liveBind'
 import { liveDotForPty, liveDotTitle, projectLiveDot, type LiveDotKind } from '../lib/livePulse'
 import { isCurrentSession, liveOfProject } from '../lib/livePty'
 import { findLiveForSession, isSessionScanning, setSessionLiveOnly, setSessionToolFilter, store, visibleSessions } from '../lib/store'
 import { TOOLS, type SessionToolFilter, type ToolId } from '../lib/types'
+import ToolMark from './ToolMark.vue'
 
 const emit = defineEmits<{
   add: []
@@ -43,6 +44,13 @@ const liveFilter = computed(() => store.sessionLiveOnly)
 const compactHead = computed(() => sidebarHeadCompact(layout.sidebarWidth))
 const filterLabel = computed(
   () => toolFilterOptions.value.find((option) => option.id === store.sessionToolFilter)?.label ?? '全部'
+)
+const filterToolId = computed(() => {
+  const id = store.sessionToolFilter
+  return id === 'all' ? undefined : id
+})
+const filterUsesMark = computed(
+  () => Boolean(filterToolId.value) && sidebarToolFilterUsesMark(layout.sidebarWidth, filterLabel.value)
 )
 
 const visibleTools = computed(() => {
@@ -390,13 +398,17 @@ onUnmounted(() => {
               <button
                 type="button"
                 class="tool-picker-btn"
-                :class="{ 'is-open': filterOpen }"
+                :class="{ 'is-open': filterOpen, 'is-mark': filterUsesMark }"
                 aria-haspopup="listbox"
                 :aria-expanded="filterOpen"
-                aria-label="筛选会话工具"
+                :aria-label="'筛选会话工具，当前' + filterLabel"
+                :title="filterLabel"
                 @click="toggleFilter"
               >
-                <span>{{ filterLabel }}</span>
+                <span v-if="filterUsesMark && filterToolId" class="tool-picker-mark" aria-hidden="true">
+                  <ToolMark :id="filterToolId" />
+                </span>
+                <span v-else class="tool-picker-label">{{ filterLabel }}</span>
                 <svg class="tool-picker-chevron" viewBox="0 0 12 12" aria-hidden="true">
                   <path d="M2.4 4.2L6 7.8l3.6-3.6" />
                 </svg>
@@ -465,7 +477,7 @@ onUnmounted(() => {
         </div>
 
         <div v-else-if="!store.selectedProjectId" class="muted pad">点上面的项目，或新建会话时再选。</div>
-        <div v-else-if="liveFilter && !groups.length" class="muted pad">还没有打开的会话</div>
+        <div v-else-if="liveFilter && !groups.length" class="muted session-empty">还没有打开的会话</div>
 
         <div v-else class="session-pane" :class="{ 'is-busy': store.sessionRefreshBusy }">
         <div class="groups">
@@ -731,6 +743,11 @@ onUnmounted(() => {
 
 .tool-picker {
   position: relative;
+  min-width: 0;
+}
+
+.tool-picker:has(.is-mark) {
+  flex-shrink: 0;
 }
 
 .live-filter {
@@ -773,7 +790,8 @@ onUnmounted(() => {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  min-width: 72px;
+  min-width: 0;
+  max-width: 100%;
   height: 28px;
   padding: 0 8px 0 10px;
   border: 1px solid transparent;
@@ -781,6 +799,25 @@ onUnmounted(() => {
   color: var(--ad-text);
   font-size: 12px;
   line-height: 20px;
+  white-space: nowrap;
+}
+
+.tool-picker-btn.is-mark {
+  flex-shrink: 0;
+  padding-left: 8px;
+}
+
+.tool-picker-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tool-picker-mark {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
 }
 
 .tool-picker-btn:hover,
@@ -1034,6 +1071,16 @@ onUnmounted(() => {
   border-radius: var(--ad-radius-control);
 }
 
+.session-empty {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px;
+  text-align: center;
+}
+
 .session-pane {
   position: relative;
   flex: 1;
@@ -1131,10 +1178,6 @@ onUnmounted(() => {
 
 .row:hover {
   background: var(--ad-hover);
-}
-
-.row--live {
-  background: transparent;
 }
 
 .row--current {

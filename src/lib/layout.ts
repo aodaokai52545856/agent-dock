@@ -11,6 +11,40 @@ export const SIDEBAR_HEAD_COMPACT = 268
 export function sidebarHeadCompact(width: number) {
   return width <= SIDEBAR_HEAD_COMPACT
 }
+
+const FILTER_HEAD_PAD = 24
+const FILTER_HEAD_GAP = 8
+const FILTER_START_GAPS = 16
+const FILTER_PICKER_CHROME = 34
+const FILTER_LIVE = 80
+const FILTER_KICKER = 36
+const FILTER_REFRESH = 32
+const FILTER_REFRESH_COMPACT = 28
+const FILTER_FONT = 12
+const FILTER_ASCII = 0.62
+
+function estimateUiLabelWidth(label: string, fontSize = FILTER_FONT) {
+  let width = 0
+  for (const char of label) {
+    width += char.charCodeAt(0) > 255 ? fontSize : fontSize * FILTER_ASCII
+  }
+  return width
+}
+
+export function sidebarToolFilterUsesMark(width: number, label: string) {
+  const compact = sidebarHeadCompact(width)
+  const budget =
+    width -
+    FILTER_HEAD_PAD -
+    FILTER_HEAD_GAP -
+    (compact ? FILTER_REFRESH_COMPACT : FILTER_REFRESH) -
+    (compact ? 0 : FILTER_KICKER) -
+    FILTER_START_GAPS -
+    FILTER_LIVE -
+    FILTER_PICKER_CHROME
+  return estimateUiLabelWidth(label) > budget
+}
+
 export const DOCRAIL_MIN = 240
 export const DOCRAIL_MAX = 320
 
@@ -100,11 +134,12 @@ export function endWindowMove() {
 }
 
 export function noteWindowMove() {
-  beginWindowMove()
+  if (!windowMoving.value) return
   if (typeof window === 'undefined') return
   window.clearTimeout(windowMoveTimer)
   windowMoveTimer = window.setTimeout(() => {
     windowMoveTimer = 0
+    if (!windowMoving.value) return
     windowMoving.value = false
     setMovingClass(false)
   }, 160)

@@ -8,12 +8,14 @@ import {
   docRailPaneWidth,
   endWindowMove,
   isLayoutBusy,
+  noteWindowMove,
   layout,
   migrateStoredLayout,
   resizeDocRail,
   resizeSidebar,
   sidebarPaneWidth,
   sidebarHeadCompact,
+  sidebarToolFilterUsesMark,
   SIDEBAR_HEAD_COMPACT,
   clampOverlayBox,
   toggleDocRail,
@@ -44,6 +46,30 @@ test('window move is layout-busy until it is released', () => {
     assert.equal(isLayoutBusy(), true)
     endWindowMove()
     assert.equal(windowMoving.value, false)
+  } finally {
+    endWindowMove()
+  }
+})
+
+test('pointer up does not start a window-move cycle', () => {
+  try {
+    assert.equal(windowMoving.value, false)
+    endWindowMove()
+    assert.equal(windowMoving.value, false)
+    assert.equal(isLayoutBusy(), false)
+  } finally {
+    endWindowMove()
+  }
+})
+
+test('move events do not start a busy cycle unless a drag already began', () => {
+  try {
+    assert.equal(windowMoving.value, false)
+    noteWindowMove()
+    assert.equal(windowMoving.value, false)
+    beginWindowMove()
+    noteWindowMove()
+    assert.equal(windowMoving.value, true)
   } finally {
     endWindowMove()
   }
@@ -92,6 +118,18 @@ test('narrow sidebar compacts the session head so 会话/刷新 do not wrap', ()
   assert.equal(sidebarHeadCompact(SIDEBAR_MIN), true)
   assert.equal(sidebarHeadCompact(SIDEBAR_HEAD_COMPACT), true)
   assert.equal(sidebarHeadCompact(280), false)
+})
+
+test('narrow session filter uses the official mark when the tool name would wrap', () => {
+  assert.equal(sidebarToolFilterUsesMark(SIDEBAR_MIN, 'Claude Code'), true)
+  assert.equal(sidebarToolFilterUsesMark(280, 'Claude Code'), true)
+  assert.equal(sidebarToolFilterUsesMark(360, 'Claude Code'), false)
+})
+
+test('short session filter labels stay text even in a narrow sidebar', () => {
+  assert.equal(sidebarToolFilterUsesMark(SIDEBAR_MIN, '全部'), false)
+  assert.equal(sidebarToolFilterUsesMark(SIDEBAR_MIN, 'Pi'), false)
+  assert.equal(sidebarToolFilterUsesMark(280, 'Grok'), false)
 })
 
 test('workspace width is only the dragged size, never a collapsed strip', () => {
