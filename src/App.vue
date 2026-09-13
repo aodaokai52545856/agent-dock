@@ -40,6 +40,7 @@ import {
   dropProject,
   bindLiveSession,
   findLiveForSession,
+  findVisibleSession,
   markPtyExit,
   markWindowBlurred,
   noteGrokAccountChange,
@@ -315,16 +316,14 @@ async function onConfirm() {
 }
 
 function startRename(payload: { sessionId: string; toolId: ToolId }) {
-  const session = store.sessions.find((item) => item.id === payload.sessionId && item.toolId === payload.toolId)
+  const session = findVisibleSession(payload.sessionId, payload.toolId)
   renamingId.value = payload.sessionId
   store.renamingSessionId = payload.sessionId
   renameDraft.value = session?.title ?? ''
 }
 
 async function commitRename(payload: { sessionId: string; toolId: ToolId }) {
-  const session = store.sessions.find(
-    (item) => item.id === payload.sessionId && item.toolId === payload.toolId
-  )
+  const session = findVisibleSession(payload.sessionId, payload.toolId)
   const title = renameDraft.value.trim()
   renamingId.value = ''
   store.renamingSessionId = ''
@@ -355,7 +354,7 @@ async function openSession(sessionId?: string, toolId?: ToolId) {
     return
   }
   const tool = toolId ?? store.selectedTool
-  if (store.sessionToolFilter !== tool) {
+  if (store.sessionToolFilter !== 'all' && store.sessionToolFilter !== tool) {
     await setSessionToolFilter(tool)
   }
   const session = sessionId ? store.sessions.find((item) => item.id === sessionId && item.toolId === tool) : undefined
@@ -751,7 +750,7 @@ const confirmCopy = () => {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  background: var(--ad-editor);
+  background: transparent;
 }
 
 .term-stack {

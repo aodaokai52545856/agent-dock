@@ -1,3 +1,5 @@
+import { glassRgba } from './uiGlass.ts'
+
 export type Rgb = { r: number; g: number; b: number }
 
 const SURFACE_CHROMA = 36
@@ -69,6 +71,10 @@ export function shouldClearFill(
   if (index === 0) return true
   if (dark) return index >= 232 && index <= 242
   return index === 7 || index === 15 || index >= 252
+}
+
+export function termThemeBackground(ink: string, opacityPercent: number) {
+  return glassRgba(ink, opacityPercent)
 }
 
 export function glassifySpan(

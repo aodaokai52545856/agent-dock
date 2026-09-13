@@ -13,6 +13,8 @@ import {
   resizeDocRail,
   resizeSidebar,
   sidebarPaneWidth,
+  sidebarHeadCompact,
+  SIDEBAR_HEAD_COMPACT,
   clampOverlayBox,
   toggleDocRail,
   toggleProjects,
@@ -84,6 +86,12 @@ test('session menu does not overflow the window bottom', () => {
     { windowWidth: 1280, windowHeight: 840 }
   )
   assert.equal(box.y + 226, 832)
+})
+
+test('narrow sidebar compacts the session head so 会话/刷新 do not wrap', () => {
+  assert.equal(sidebarHeadCompact(SIDEBAR_MIN), true)
+  assert.equal(sidebarHeadCompact(SIDEBAR_HEAD_COMPACT), true)
+  assert.equal(sidebarHeadCompact(280), false)
 })
 
 test('workspace width is only the dragged size, never a collapsed strip', () => {

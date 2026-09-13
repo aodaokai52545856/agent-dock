@@ -123,6 +123,7 @@ pub fn stale_owned_pids(records: &[PidRecord], running: &[u32]) -> Vec<u32> {
         .collect()
 }
 
+#[cfg(test)]
 pub fn keep_live_records(records: &[PidRecord], running: &[u32]) -> Vec<PidRecord> {
     records
         .iter()

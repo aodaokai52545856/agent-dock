@@ -4,7 +4,8 @@ import {
   DSH_EMBED_GUTTER,
   DSH_STATUS_BAR,
   clampDshEmbedBounds,
-  dshEmbedBlocked
+  dshEmbedBlocked,
+  toastOverlayTop
 } from './dshEmbed.ts'
 
 function test(name: string, fn: () => void) {
@@ -86,5 +87,31 @@ test('title-bar menus and dialogs block the native embed', () => {
   assert.equal(dshEmbedBlocked(fakeRoot([])), false)
   assert.equal(dshEmbedBlocked(fakeRoot(['ad-menu'])), true)
   assert.equal(dshEmbedBlocked(fakeRoot(['ad-mask'])), true)
-  assert.equal(dshEmbedBlocked(fakeRoot(['toast'])), true)
+  assert.equal(
+    dshEmbedBlocked(fakeRoot(['toast'])),
+    false,
+    'toast should inset the embed, not hide the whole DeepSeek page'
+  )
+})
+
+test('toast band insets the embed so the native page cannot cover it', () => {
+  const bounds = clampDshEmbedBounds(pane, {
+    windowWidth: 1280,
+    windowHeight: 840,
+    docRailWidth: 0,
+    maximized: false,
+    overlayTop: 92
+  })
+  assert.ok(bounds)
+  assert.equal(bounds!.y, 92)
+  assert.equal(bounds!.height, 780 - 92)
+  assert.equal(bounds!.y + bounds!.height, 780)
+})
+
+test('toast overlay top includes a gutter below the pill', () => {
+  assert.equal(toastOverlayTop(null), 0)
+  assert.equal(
+    toastOverlayTop({ getBoundingClientRect: () => ({ bottom: 86 }) }),
+    86 + DSH_EMBED_GUTTER
+  )
 })

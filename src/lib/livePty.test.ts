@@ -4,6 +4,7 @@ import {
   focusedFromLive,
   forgetPty,
   groupLiveByProject,
+  groupLiveByTool,
   isCurrentSession,
   isDshWeb,
   liveOfProject,
@@ -67,6 +68,18 @@ test('liveOfProject ignores other projects and dead rows', () => {
     liveOfProject(mixed, 'aitools').map((item) => item.ptyId),
     ['a1', 'a2']
   )
+})
+
+test('groupLiveByTool categorizes opened sessions of one project', () => {
+  const groups = groupLiveByTool(live, 'aitools', ['opencode', 'grokbuild', 'kimi', 'claude'])
+  assert.deepEqual(
+    groups.map((group) => [group.toolId, group.items.map((item) => item.ptyId)]),
+    [
+      ['opencode', ['a2']],
+      ['grokbuild', ['a1']]
+    ]
+  )
+  assert.equal(groupLiveByTool(live, 'empty', ['grokbuild']).length, 0)
 })
 
 test('groupLiveByProject keeps open order and falls back to the id', () => {

@@ -6,6 +6,11 @@ export const LAYOUT_VERSION = 3
 export const COLLAPSED_WIDTH = 40
 export const SIDEBAR_MIN = 240
 export const SIDEBAR_MAX = 420
+export const SIDEBAR_HEAD_COMPACT = 268
+
+export function sidebarHeadCompact(width: number) {
+  return width <= SIDEBAR_HEAD_COMPACT
+}
 export const DOCRAIL_MIN = 240
 export const DOCRAIL_MAX = 320
 

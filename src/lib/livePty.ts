@@ -20,6 +20,20 @@ export function liveOfProject(live: LivePtyInfo[], projectId: string) {
   return live.filter((item) => item.projectId === projectId && isLivePty(item))
 }
 
+export function groupLiveByTool(
+  live: LivePtyInfo[],
+  projectId: string,
+  toolOrder: ToolId[]
+): { toolId: ToolId; items: LivePtyInfo[] }[] {
+  const ofProject = liveOfProject(live, projectId)
+  return toolOrder
+    .map((toolId) => ({
+      toolId,
+      items: ofProject.filter((item) => item.toolId === toolId)
+    }))
+    .filter((group) => group.items.length > 0)
+}
+
 export function pickPtyForProject(
   live: LivePtyInfo[],
   projectId: string,

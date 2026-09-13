@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { TOOLS, TOOL_OFFICIAL_URLS } from './types.ts'
+import { TOOLS, TOOL_OFFICIAL_URLS, parseSessionToolFilter } from './types.ts'
 
 function test(name: string, fn: () => void) {
   fn()
@@ -36,6 +36,12 @@ test('DeepSeek install is only ready when Node, dsh and dsh web all pass', () =>
     ]
   }
   assert.equal(ready.checks.every((item) => item.ok), true)
+})
+
+test('session filter accepts opened-live view', () => {
+  assert.equal(parseSessionToolFilter('live'), 'all')
+  assert.equal(parseSessionToolFilter('grokbuild'), 'grokbuild')
+  assert.equal(parseSessionToolFilter('nope'), 'all')
 })
 
 test('every tool has an official https download page', () => {

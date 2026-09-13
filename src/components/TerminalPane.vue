@@ -13,9 +13,8 @@ import { codeFontStack } from '../lib/appearance'
 import { canMeasure, createFitScheduler } from '../lib/termFit'
 import { attachTermClipboard } from '../lib/termClipboard'
 import { termMenuItems, type TermMenuAction } from '../lib/termMenu'
-import { attachOscBackground } from '../lib/termGlass'
+import { attachOscBackground, termThemeBackground } from '../lib/termGlass'
 import { attachSynchronizedOutput, createRefreshGate } from '../lib/termSync'
-import { glassRgba } from '../lib/uiGlass'
 import ToolMark from './ToolMark.vue'
 import { TOOLS, type ToolId } from '../lib/types'
 
@@ -127,7 +126,7 @@ function theme() {
   const muted = cssVar('--ad-muted', '#8a8a8a')
   const opacity = Number.parseFloat(cssVar('--ad-ui-opacity', '0')) || 0
   return {
-    background: glassRgba(ink, opacity),
+    background: termThemeBackground(ink, opacity),
     foreground,
     cursor: foreground,
     cursorAccent: ink,
@@ -469,6 +468,7 @@ defineExpose({ ensureHost, show, dispose: disposeHost, fitActive })
   align-items: center;
   justify-content: center;
   padding: 24px;
+  background: var(--ad-editor);
 }
 
 .hero {
@@ -603,7 +603,7 @@ defineExpose({ ensureHost, show, dispose: disposeHost, fitActive })
   overflow: hidden;
   isolation: isolate;
   contain: layout style;
-  background: var(--ad-editor);
+  background: transparent;
 }
 
 .term-host:not(.is-hidden) {
@@ -621,11 +621,10 @@ defineExpose({ ensureHost, show, dispose: disposeHost, fitActive })
 }
 
 .term-host .xterm-bg-0 {
-  background-color: var(--ad-editor) !important;
+  background-color: transparent !important;
 }
 
 .term-host .xterm-viewport {
-  background-color: var(--ad-editor);
   scrollbar-width: thin;
   scrollbar-color: rgba(255, 255, 255, 0.16) transparent;
 }

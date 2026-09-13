@@ -2,7 +2,13 @@
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import * as api from '../lib/api'
-import { DSH_STATUS_BAR, clampDshEmbedBounds, dshEmbedBlocked } from '../lib/dshEmbed'
+import {
+  DSH_STATUS_BAR,
+  DSH_TOAST_SELECTOR,
+  clampDshEmbedBounds,
+  dshEmbedBlocked,
+  toastOverlayTop
+} from '../lib/dshEmbed'
 import { dshGlassApplyScript, dshGlassTheme, withDshGlassHash } from '../lib/dshGlass'
 import { docRailPaneWidth, layout } from '../lib/layout'
 import { glassRgba } from '../lib/uiGlass'
@@ -26,12 +32,14 @@ function measure() {
   const statusBarHeight = status
     ? Math.round(status.getBoundingClientRect().height)
     : DSH_STATUS_BAR
+  const toast = document.querySelector(DSH_TOAST_SELECTOR)
   return clampDshEmbedBounds(box, {
     windowWidth: window.innerWidth,
     windowHeight: window.innerHeight,
     docRailWidth: layout.docRailCollapsed ? 0 : docRailPaneWidth(),
     maximized: document.documentElement.classList.contains('ad-maximized'),
-    statusBarHeight
+    statusBarHeight,
+    overlayTop: toastOverlayTop(toast)
   })
 }
 
@@ -39,7 +47,28 @@ function masked() {
   return typeof document !== 'undefined' && dshEmbedBlocked(document)
 }
 
+let syncing = false
+let queued: { navigate?: boolean } | undefined
+let hasQueue = false
+
 async function sync(opts?: { navigate?: boolean }) {
+  queued = opts
+  hasQueue = true
+  if (syncing) return
+  syncing = true
+  try {
+    while (hasQueue) {
+      hasQueue = false
+      const current = queued
+      queued = undefined
+      await syncOnce(current)
+    }
+  } finally {
+    syncing = false
+  }
+}
+
+async function syncOnce(opts?: { navigate?: boolean }) {
   if (!api.isTauri) return
   const bounds = measure()
   try {
@@ -123,6 +152,13 @@ watch(theme, () => {
 
 watch(
   () => [layout.docRailCollapsed, layout.docRailWidth, layout.sidebarWidth, layout.sidebarCollapsed] as const,
+  () => {
+    void sync({ navigate: false })
+  }
+)
+
+watch(
+  () => store.toast,
   () => {
     void sync({ navigate: false })
   }

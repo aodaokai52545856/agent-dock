@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import {
   isPendingSessionId,
+  keepLiveTitle,
   matchUnboundLiveToSessions,
   mergeLiveFromServer,
   pendingSessionId,
@@ -183,4 +184,10 @@ test('refreshLive keeps a local bind if the server has not caught up', () => {
   )
   assert.equal(merged[0]?.sessionId, 'fresh')
   assert.equal(merged[0]?.title, '修圆角')
+})
+
+test('keeps a user-typed live title when the disk row later appears', () => {
+  assert.equal(keepLiveTitle('登录超时', 'Claude 会话'), '登录超时')
+  assert.equal(keepLiveTitle('新会话', 'login-fix'), 'login-fix')
+  assert.equal(keepLiveTitle('', 'login-fix'), 'login-fix')
 })

@@ -1,5 +1,5 @@
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 pub fn default_shell() -> String {
     #[cfg(windows)]
@@ -145,7 +145,10 @@ pub fn prepare_command(cmd: &mut Command) {
 }
 
 pub fn apply_no_window(cmd: &mut Command) {
-    let _ = cmd;
+    // Packaged AgentDock.exe is WINDOWS-subsystem (no console). Inheriting that
+    // invalid stdin into node.exe / powershell.exe makes Windows show
+    // "应用程序无法正常启动(0xc0000142)" while `tauri dev` still works.
+    cmd.stdin(Stdio::null());
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -229,7 +232,11 @@ pub fn parse_node_version(text: &str) -> Option<NodeVersion> {
 }
 
 pub fn node_version(exe: &Path) -> Option<NodeVersion> {
-    let output = Command::new(exe).arg("-v").output().ok()?;
+    let mut cmd = Command::new(exe);
+    cmd.arg("-v");
+    prepare_command(&mut cmd);
+    apply_no_window(&mut cmd);
+    let output = cmd.output().ok()?;
     if !output.status.success() {
         return None;
     }
@@ -395,6 +402,38 @@ mod tests {
                 minor: 15,
                 patch: 0
             }
+        );
+    }
+
+    #[test]
+    fn node_version_hides_console_child_for_gui_exe() {
+        let src = include_str!("platform.rs");
+        let start = src
+            .find("pub fn node_version")
+            .expect("node_version should exist");
+        let body = src[start..]
+            .split("pub fn list_node_exes")
+            .next()
+            .expect("list_node_exes follows node_version");
+        assert!(
+            body.contains("apply_no_window"),
+            "packaged WINDOWS-subsystem exe spawning node -v without CREATE_NO_WINDOW shows 0xc0000142"
+        );
+    }
+
+    #[test]
+    fn apply_no_window_nulls_stdin_for_gui_parent() {
+        let src = include_str!("platform.rs");
+        let start = src
+            .find("pub fn apply_no_window")
+            .expect("apply_no_window should exist");
+        let body = src[start..]
+            .split("pub fn which_cmd")
+            .next()
+            .expect("which_cmd follows apply_no_window");
+        assert!(
+            body.contains("Stdio::null"),
+            "GUI parents have no console stdin; inheriting it makes node.exe fail with 0xc0000142"
         );
     }
 

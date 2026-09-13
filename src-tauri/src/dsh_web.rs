@@ -409,13 +409,15 @@ fn list_dsh_web_procs() -> Vec<dsh_web_guard::Proc> {
 fn list_process_table() -> String {
     #[cfg(windows)]
     {
-        let output = Command::new("powershell.exe")
-            .args([
-                "-NoProfile",
-                "-NonInteractive",
-                "-Command",
-                "[Console]::OutputEncoding = [Text.UTF8Encoding]::UTF8; Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '^(node|dsh)' } | ForEach-Object { '{0}`t{1}`t{2}' -f $_.ProcessId, $_.ParentProcessId, (([string]$_.CommandLine) -replace '[\\t\\r\\n]+',' ') }",
-            ])
+        let mut cmd = Command::new("powershell.exe");
+        cmd.args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "[Console]::OutputEncoding = [Text.UTF8Encoding]::UTF8; Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '^(node|dsh)' } | ForEach-Object { '{0}`t{1}`t{2}' -f $_.ProcessId, $_.ParentProcessId, (([string]$_.CommandLine) -replace '[\\t\\r\\n]+',' ') }",
+        ]);
+        platform::apply_no_window(&mut cmd);
+        let output = cmd
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .output();
@@ -536,11 +538,12 @@ fn kill_pid(pid: u32) {
     }
     #[cfg(windows)]
     {
-        let _ = Command::new("taskkill")
-            .args(["/PID", &pid.to_string(), "/T", "/F"])
+        let mut cmd = Command::new("taskkill");
+        cmd.args(["/PID", &pid.to_string(), "/T", "/F"])
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
+            .stderr(Stdio::null());
+        platform::apply_no_window(&mut cmd);
+        let _ = cmd.status();
     }
     #[cfg(not(windows))]
     {
@@ -703,6 +706,22 @@ mod tests {
         let log = "warn: skip\nopen http://localhost:4312/\n";
         assert_eq!(parse_web_url(log).as_deref(), Some("http://localhost:4312/"));
         assert_eq!(parse_web_url("no url here"), None);
+    }
+
+    #[test]
+    fn windows_process_table_hides_powershell_console() {
+        let src = include_str!("dsh_web.rs");
+        let start = src
+            .find("fn list_process_table")
+            .expect("list_process_table should exist");
+        let body = src[start..]
+            .split("fn running_set")
+            .next()
+            .expect("running_set follows list_process_table");
+        assert!(
+            body.contains("apply_no_window"),
+            "powershell from the packaged GUI exe must use CREATE_NO_WINDOW"
+        );
     }
 
     #[test]

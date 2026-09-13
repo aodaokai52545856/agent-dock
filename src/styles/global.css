@@ -352,12 +352,10 @@ input[type='range']:focus {
   animation: live-pulse 2.2s ease-in-out infinite;
 }
 
-.project.project--live,
 .row.row--live {
   position: relative;
 }
 
-.project.project--live::before,
 .row.row--live::before {
   content: '';
   position: absolute;
@@ -371,15 +369,10 @@ input[type='range']:focus {
   pointer-events: none;
 }
 
-.project.project--live .project-main {
-  padding-left: 12px;
-}
-
 .row.row--live .row-main {
   padding-left: 14px;
 }
 
-.project.project--busy::before,
 .row.row--busy::before {
   animation: live-rail-pulse 2.2s ease-in-out infinite;
 }
@@ -414,7 +407,6 @@ input[type='range']:focus {
 
 @media (prefers-reduced-motion: reduce) {
   .live-dot.is-busy,
-  .project.project--busy::before,
   .row.row--busy::before {
     animation: none;
   }

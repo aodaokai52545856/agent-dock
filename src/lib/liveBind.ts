@@ -2,6 +2,13 @@ import type { LivePtyInfo, SessionRow, ToolId } from './types'
 
 export const PENDING_SESSION_PREFIX = '__pending:'
 export const LIVE_BIND_SLACK_MS = 15_000
+export const NEW_SESSION_TITLE = '新会话'
+
+export function keepLiveTitle(liveTitle: string | null | undefined, diskTitle: string) {
+  const custom = liveTitle?.trim() ?? ''
+  if (custom && custom !== NEW_SESSION_TITLE && custom !== diskTitle) return custom
+  return diskTitle
+}
 
 export type LiveBind = {
   ptyId: string
@@ -149,7 +156,7 @@ export function pendingSessionRows(
     .map((item) => ({
       toolId: item.toolId,
       id: item.sessionId || pendingSessionId(item.ptyId),
-      title: item.title?.trim() || '新会话',
+      title: item.title?.trim() || NEW_SESSION_TITLE,
       cwd: '',
       updatedAt: item.openedAt ?? Date.now(),
       renameKind: 'overlay' as const

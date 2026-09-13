@@ -305,6 +305,13 @@ mod tests {
     }
 
     #[test]
+    fn session_tool_filter_keeps_live_opened_view() {
+        assert_eq!(normalize_session_tool_filter("live"), "all");
+        assert_eq!(normalize_session_tool_filter("grokbuild"), "grokbuild");
+        assert_eq!(normalize_session_tool_filter("nope"), "all");
+    }
+
+    #[test]
     fn missing_style_fields_use_navy_glass_defaults() {
         let settings: AppSettings = serde_json::from_str(
             r#"{"defaultProxyUrl":"http://127.0.0.1:7890","opencodePath":"","grokbuildPath":"","kimiPath":""}"#,

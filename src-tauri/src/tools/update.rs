@@ -50,6 +50,7 @@ pub fn app_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
 }
 
+#[cfg(test)]
 pub fn official_url(tool: ToolId) -> &'static str {
     match tool {
         ToolId::Opencode => "https://opencode.ai",
@@ -558,6 +559,7 @@ fn install_kimi_native_binary(
     Ok(())
 }
 
+#[cfg(test)]
 fn sha256_hex(bytes: &[u8]) -> String {
     hex_lower(Sha256::digest(bytes).as_slice())
 }

@@ -1,11 +1,11 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { relativeTime } from '../lib/format'
-import { clampOverlayBox, endPaneAnim, layout, sidebarPaneWidth, toggleProjects } from '../lib/layout'
+import { clampOverlayBox, endPaneAnim, layout, sidebarHeadCompact, sidebarPaneWidth, toggleProjects } from '../lib/layout'
 import { isPendingSessionId } from '../lib/liveBind'
 import { liveDotForPty, liveDotTitle, projectLiveDot, type LiveDotKind } from '../lib/livePulse'
 import { isCurrentSession, liveOfProject } from '../lib/livePty'
-import { findLiveForSession, isSessionScanning, setSessionToolFilter, store, visibleSessions } from '../lib/store'
+import { findLiveForSession, isSessionScanning, setSessionLiveOnly, setSessionToolFilter, store, visibleSessions } from '../lib/store'
 import { TOOLS, type SessionToolFilter, type ToolId } from '../lib/types'
 
 const emit = defineEmits<{
@@ -39,11 +39,14 @@ const filterOpen = ref(false)
 const filterFocus = ref(0)
 
 const toolFilterOptions = computed(() => [{ id: 'all' as const, label: '全部' }, ...TOOLS])
+const liveFilter = computed(() => store.sessionLiveOnly)
+const compactHead = computed(() => sidebarHeadCompact(layout.sidebarWidth))
 const filterLabel = computed(
   () => toolFilterOptions.value.find((option) => option.id === store.sessionToolFilter)?.label ?? '全部'
 )
 
 const visibleTools = computed(() => {
+  if (liveFilter.value) return TOOLS
   if (store.sessionToolFilter !== 'all' && TOOLS.some((tool) => tool.id === store.sessionToolFilter)) {
     return TOOLS.filter((tool) => tool.id === store.sessionToolFilter)
   }
@@ -51,12 +54,18 @@ const visibleTools = computed(() => {
 })
 
 const groups = computed(() =>
-  visibleTools.value.map((tool) => ({
-    tool,
-    sessions: visibleSessions.value.filter((item) => item.toolId === tool.id),
-    error: store.sessionErrors[tool.id]
-  }))
+  visibleTools.value
+    .map((tool) => ({
+      tool,
+      sessions: visibleSessions.value.filter(
+        (item) => item.toolId === tool.id && (!liveFilter.value || isLive(item.id, item.toolId))
+      ),
+      error: liveFilter.value ? undefined : store.sessionErrors[tool.id]
+    }))
+    .filter((group) => !liveFilter.value || group.sessions.length)
 )
+
+const liveCount = computed(() => liveOfProject(store.live, store.selectedProjectId).length)
 
 function onPaneTransitionEnd(event: TransitionEvent) {
   if (event.propertyName !== 'width') return
@@ -127,6 +136,11 @@ function pickFilter(id: SessionToolFilter) {
   closeFilter()
 }
 
+function pickLiveFilter() {
+  closeFilter()
+  setSessionLiveOnly(!store.sessionLiveOnly)
+}
+
 function menuBox(event: MouseEvent, height: number) {
   return clampOverlayBox(
     { x: event.clientX, y: event.clientY, width: MENU_WIDTH, height },
@@ -170,7 +184,7 @@ function menuCanCite() {
 }
 
 function activateMenu(index: number) {
-  if (index === 0 && !menuPending()) renameSession()
+  if (index === 0) renameSession()
   if (index === 1 && menuCanCite()) citeSession()
   if (index === 2 && menuLive()) closeSession()
   if (index === 3 && menuCanCloseAll()) closeAllSessions()
@@ -369,7 +383,7 @@ onUnmounted(() => {
       </div>
 
       <div class="block block--sessions">
-        <div class="block-head">
+        <div class="block-head" :class="{ 'is-compact': compactHead }">
           <div class="block-head-start">
             <p class="kicker">会话</p>
             <div class="tool-picker" @click.stop>
@@ -409,14 +423,38 @@ onUnmounted(() => {
                 </button>
               </div>
             </div>
+            <button
+              type="button"
+              class="live-filter"
+              :class="{ 'is-active': liveFilter }"
+              :aria-pressed="liveFilter"
+              aria-label="已开对话"
+              @click="pickLiveFilter"
+            >
+              已开对话
+              <span v-if="liveCount" class="live-filter-count">{{ liveCount }}</span>
+            </button>
           </div>
-          <button type="button" class="text-btn" :disabled="isSessionScanning()" @click="$emit('retry')">刷新</button>
+          <button
+            type="button"
+            class="text-btn refresh-btn"
+            :class="{ 'is-scanning': isSessionScanning() }"
+            :disabled="isSessionScanning()"
+            aria-label="刷新"
+            @click="$emit('retry')"
+          >
+            <svg class="refresh-icon" viewBox="0 0 16 16" aria-hidden="true">
+              <path d="M13.2 8A5.2 5.2 0 1 1 11.7 4.4" />
+              <path d="M13.2 2.8v3.1h-3.1" />
+            </svg>
+            <span class="refresh-label">刷新</span>
+          </button>
         </div>
         <div class="toolbar">
           <input v-model="store.sessionQuery" class="search" type="search" placeholder="搜索会话" aria-label="搜索会话" />
         </div>
 
-        <div v-if="store.sessionStatus === 'error'" class="state">
+        <div v-if="store.sessionStatus === 'error' && !liveFilter" class="state">
           <p>{{ store.sessionError }}</p>
           <div class="state-actions">
             <button v-if="store.sessionErrorKind === 'cli_missing'" type="button" class="btn btn-primary btn-small" @click="$emit('settings')">
@@ -427,11 +465,12 @@ onUnmounted(() => {
         </div>
 
         <div v-else-if="!store.selectedProjectId" class="muted pad">点上面的项目，或新建会话时再选。</div>
+        <div v-else-if="liveFilter && !groups.length" class="muted pad">还没有打开的会话</div>
 
         <div v-else class="session-pane" :class="{ 'is-busy': store.sessionRefreshBusy }">
         <div class="groups">
           <section v-for="group in groups" :key="group.tool.id" class="group">
-            <p v-if="visibleTools.length > 1" class="group-title">
+            <p v-if="liveFilter || visibleTools.length > 1" class="group-title">
               <span>{{ group.tool.label }}</span>
             </p>
             <div v-if="group.error" class="group-error">
@@ -504,7 +543,6 @@ onUnmounted(() => {
           role="menuitem"
           class="ad-menu-item"
           :class="{ 'is-focus': menu.focus === 0 }"
-          :disabled="menuPending()"
           @mouseenter="menu.focus = 0"
           @click="renameSession"
         >
@@ -605,6 +643,7 @@ onUnmounted(() => {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+  flex-wrap: nowrap;
 }
 
 .head {
@@ -687,17 +726,54 @@ onUnmounted(() => {
   align-items: center;
   gap: 8px;
   min-width: 0;
+  flex-wrap: nowrap;
 }
 
 .tool-picker {
   position: relative;
 }
 
+.live-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  padding: 0 8px;
+  border-radius: var(--ad-radius-control);
+  color: var(--ad-muted);
+  font-size: 12px;
+  line-height: 20px;
+  flex-shrink: 0;
+}
+
+.live-filter:hover {
+  color: var(--ad-text);
+  background: var(--ad-hover);
+}
+
+.live-filter.is-active {
+  color: var(--ad-text);
+  background: var(--ad-hover);
+}
+
+.live-filter-count {
+  min-width: 16px;
+  height: 16px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: rgba(61, 154, 106, 0.16);
+  color: var(--ad-success);
+  font-size: 11px;
+  line-height: 16px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
 .tool-picker-btn {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  min-width: 86px;
+  min-width: 72px;
   height: 28px;
   padding: 0 8px 0 10px;
   border: 1px solid transparent;
@@ -753,6 +829,20 @@ onUnmounted(() => {
   font-size: 12px;
   line-height: 20px;
   color: var(--ad-faint);
+  max-width: 3em;
+  overflow: hidden;
+  white-space: nowrap;
+  transition:
+    max-width var(--ad-transition),
+    opacity var(--ad-transition),
+    margin var(--ad-transition);
+}
+
+.block-head.is-compact .kicker {
+  max-width: 0;
+  opacity: 0;
+  margin: 0;
+  pointer-events: none;
 }
 
 .text-btn {
@@ -761,6 +851,53 @@ onUnmounted(() => {
   font-size: 12px;
   line-height: 20px;
   color: var(--ad-muted);
+}
+
+.refresh-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  overflow: hidden;
+}
+
+.refresh-icon {
+  width: 0;
+  height: 14px;
+  opacity: 0;
+  flex-shrink: 0;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  overflow: hidden;
+  transition:
+    width var(--ad-transition),
+    opacity var(--ad-transition);
+}
+
+.refresh-label {
+  overflow: hidden;
+  max-width: 3em;
+  white-space: nowrap;
+  transition:
+    max-width var(--ad-transition),
+    opacity var(--ad-transition);
+}
+
+.block-head.is-compact .refresh-icon {
+  width: 14px;
+  opacity: 1;
+}
+
+.block-head.is-compact .refresh-label {
+  max-width: 0;
+  opacity: 0;
+}
+
+.refresh-btn.is-scanning .refresh-icon {
+  animation: ad-scan-spin 700ms linear infinite;
 }
 
 .text-btn:hover:not(:disabled) {

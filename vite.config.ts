@@ -13,6 +13,7 @@ export default defineConfig({
     target: 'esnext',
     minify: !process.env.TAURI_ENV_DEBUG,
     sourcemap: !!process.env.TAURI_ENV_DEBUG,
-    outDir: 'dist'
+    outDir: 'dist',
+    chunkSizeWarningLimit: 800
   }
 })

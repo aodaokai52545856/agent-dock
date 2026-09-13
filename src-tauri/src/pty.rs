@@ -453,6 +453,7 @@ pub fn build_launch_command(exe: &Path, args: &[String]) -> String {
     parts.join(" ")
 }
 
+#[cfg(test)]
 fn cmd_needs_quotes(value: &str) -> bool {
     value.is_empty()
         || value
@@ -460,6 +461,7 @@ fn cmd_needs_quotes(value: &str) -> bool {
             .any(|c| c.is_whitespace() || matches!(c, '"' | '&' | '|' | '<' | '>' | '^' | '%'))
 }
 
+#[cfg(test)]
 fn quote_cmd_token(value: &str) -> String {
     if !cmd_needs_quotes(value) {
         return value.to_string();
@@ -467,6 +469,7 @@ fn quote_cmd_token(value: &str) -> String {
     format!("\"{}\"", value.replace('"', "\\\""))
 }
 
+#[cfg(test)]
 pub fn windows_cmd_line(exe: &Path, args: &[String]) -> String {
     let mut line = quote_cmd_token(&exe.to_string_lossy());
     for arg in args {

@@ -164,7 +164,8 @@ pub fn rename_session(
         return Err("名称请控制在 80 个字以内".into());
     }
     match tool {
-        ToolId::Opencode | ToolId::Claude | ToolId::Pi | ToolId::Dsh => Ok(RenameKind::Overlay),
+        ToolId::Opencode | ToolId::Pi | ToolId::Dsh => Ok(RenameKind::Overlay),
+        ToolId::Claude => claude::rename_session(cwd, session_id, title).map(|_| RenameKind::Native),
         ToolId::Grokbuild => grokbuild::rename_session(cwd, session_id, title).map(|_| RenameKind::Native),
         ToolId::Kimi => kimi::rename_session(session_id, title).map(|_| RenameKind::Native),
     }
@@ -193,10 +194,6 @@ pub fn resume_args(tool: ToolId, session_id: &str) -> Vec<String> {
         ToolId::Kimi => vec!["--session".into(), session_id.into()],
         ToolId::Dsh => Vec::new(),
     }
-}
-
-pub fn launch_args(tool: ToolId, session_id: Option<&str>) -> Vec<String> {
-    launch_args_for(tool, session_id, None)
 }
 
 pub fn launch_args_for(tool: ToolId, session_id: Option<&str>, _exe: Option<&Path>) -> Vec<String> {
@@ -312,23 +309,29 @@ mod tests {
 
     #[test]
     fn grok_launch_forces_fullscreen_so_jetbrains_env_cannot_auto_minimal() {
-        assert_eq!(launch_args(ToolId::Grokbuild, None), vec!["--fullscreen"]);
         assert_eq!(
-            launch_args(ToolId::Grokbuild, Some("abc")),
+            launch_args_for(ToolId::Grokbuild, None, None),
+            vec!["--fullscreen"]
+        );
+        assert_eq!(
+            launch_args_for(ToolId::Grokbuild, Some("abc"), None),
             vec!["--fullscreen", "--resume", "abc"]
         );
-        assert!(launch_args(ToolId::Opencode, None).is_empty());
+        assert!(launch_args_for(ToolId::Opencode, None, None).is_empty());
         assert_eq!(
-            launch_args(ToolId::Kimi, Some("session_1")),
+            launch_args_for(ToolId::Kimi, Some("session_1"), None),
             vec!["--session", "session_1"]
         );
-        assert_eq!(launch_args(ToolId::Dsh, None), vec!["web", "--no-open"]);
         assert_eq!(
-            launch_args(ToolId::Dsh, Some("session_dsh_1")),
+            launch_args_for(ToolId::Dsh, None, None),
             vec!["web", "--no-open"]
         );
         assert_eq!(
-            launch_args(ToolId::Pi, Some("sess-pi-1")),
+            launch_args_for(ToolId::Dsh, Some("session_dsh_1"), None),
+            vec!["web", "--no-open"]
+        );
+        assert_eq!(
+            launch_args_for(ToolId::Pi, Some("sess-pi-1"), None),
             vec!["--session", "sess-pi-1"]
         );
         assert_eq!(

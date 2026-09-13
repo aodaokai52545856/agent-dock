@@ -313,6 +313,12 @@ export function toolLabel(id: ToolId): string {
   return TOOLS.find((item) => item.id === id)?.label ?? id
 }
 
+export function parseSessionToolFilter(value: unknown): SessionToolFilter {
+  if (value === 'all') return value
+  const tool = TOOLS.find((item) => item.id === value)
+  return tool?.id ?? 'all'
+}
+
 export interface CodexThread {
   id: string
   name: string

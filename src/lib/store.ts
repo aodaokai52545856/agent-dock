@@ -2,6 +2,7 @@ import { computed, reactive } from 'vue'
 import * as api from './api'
 import {
   isPendingSessionId,
+  keepLiveTitle,
   liveKey,
   matchUnboundLiveToSessions,
   mergeLiveFromServer,
@@ -36,7 +37,7 @@ import type {
   ToolId,
   ToolProbeMap
 } from './types'
-import { TOOLS } from './types'
+import { TOOLS, parseSessionToolFilter } from './types'
 import {
   appearanceFromSettings,
   appearanceToSettings,
@@ -109,6 +110,7 @@ const defaultSettings = (): AppSettings => ({
 })
 
 const FILTER_STORAGE_KEY = 'ad-session-tool-filter'
+const LIVE_ONLY_KEY = 'ad-session-live-only'
 const MODE_STORAGE_KEY = 'ad-app-mode'
 const lastPtyByProject: Record<string, string> = {}
 const previewSessions: Record<string, SessionRow[]> = {}
@@ -117,19 +119,9 @@ export function parseAppMode(value: unknown): AppMode {
   return value === 'bridge' ? 'bridge' : 'console'
 }
 
-export function parseSessionToolFilter(value: unknown): SessionToolFilter {
-  if (
-    value === 'all' ||
-    value === 'opencode' ||
-    value === 'grokbuild' ||
-    value === 'kimi' ||
-    value === 'claude' ||
-    value === 'pi' ||
-    value === 'dsh'
-  ) {
-    return value
-  }
-  return 'all'
+function restoreSessionLiveOnly() {
+  if (typeof localStorage === 'undefined') return
+  store.sessionLiveOnly = localStorage.getItem(LIVE_ONLY_KEY) === '1'
 }
 
 function migrateLoadedUiOpacity(value: number) {
@@ -161,6 +153,7 @@ export const store = reactive({
   renamingSessionId: '',
   sessionQuery: '',
   sessionToolFilter: 'all' as SessionToolFilter,
+  sessionLiveOnly: false,
   probes: null as ToolProbeMap | null,
   live: [] as LivePtyInfo[],
   ptyDataAt: {} as Record<string, number>,
@@ -427,6 +420,7 @@ export async function boot() {
     rememberPty(lastPtyByProject, 'preview-aitools', 'preview-a1')
     store.sessionToolFilter = parseSessionToolFilter(localStorage.getItem(FILTER_STORAGE_KEY))
     store.settings.sessionToolFilter = store.sessionToolFilter
+    restoreSessionLiveOnly()
     applyUiGlass(store.settings.uiOpacity, store.settings.uiFrost)
     applyAppearance(appearanceFromSettings(store.settings))
     restoreAppMode()
@@ -437,6 +431,7 @@ export async function boot() {
     return
   }
   applyState(await api.loadAppState())
+  restoreSessionLiveOnly()
   restoreAppMode()
   store.projectFlows = loadAllFlows()
   store.runs = loadAllRuns()
@@ -679,26 +674,36 @@ export async function saveAppSettings(settings: AppSettings) {
 }
 
 function toolsToScan(): ToolId[] {
-  const filter = store.sessionToolFilter
-  if (filter !== 'all' && TOOLS.some((tool) => tool.id === filter)) {
-    return [filter]
-  }
-  return TOOLS.map((tool) => tool.id)
+  const tool = TOOLS.find((item) => item.id === store.sessionToolFilter)
+  if (tool) return [tool.id]
+  return TOOLS.map((item) => item.id)
 }
 
 export async function setSessionToolFilter(id: SessionToolFilter) {
-  store.sessionToolFilter = id
-  store.settings.sessionToolFilter = id
+  const next = parseSessionToolFilter(id)
+  if (next === store.sessionToolFilter) return
+  store.sessionToolFilter = next
+  store.settings.sessionToolFilter = next
   if (!api.isTauri) {
-    localStorage.setItem(FILTER_STORAGE_KEY, id)
+    localStorage.setItem(FILTER_STORAGE_KEY, next)
     return
   }
   try {
-    await saveAppSettings({ ...store.settings, sessionToolFilter: id })
+    await saveAppSettings({ ...store.settings, sessionToolFilter: next })
   } catch (error) {
     showToast(error instanceof Error ? error.message : '筛选未能保存')
   }
   void refreshSessions()
+}
+
+export function setSessionLiveOnly(on: boolean) {
+  store.sessionLiveOnly = on
+  if (typeof localStorage === 'undefined') return
+  localStorage.setItem(LIVE_ONLY_KEY, on ? '1' : '0')
+}
+
+export function findVisibleSession(sessionId: string, toolId: ToolId) {
+  return visibleSessions.value.find((item) => item.id === sessionId && item.toolId === toolId)
 }
 
 export function applyLocalSessionTitle(sessionId: string, toolId: ToolId, title: string) {
@@ -706,12 +711,19 @@ export function applyLocalSessionTitle(sessionId: string, toolId: ToolId, title:
   if (row) row.title = title
   const live = findLiveForSession(sessionId, toolId)
   if (live) live.title = title
+  if (store.focusedSession?.sessionId === sessionId && store.focusedSession.toolId === toolId) {
+    store.focusedSession = { ...store.focusedSession, title }
+  }
 }
 
 export async function renameCurrentSession(session: SessionRow, title: string) {
   if (!store.selectedProjectId) return
   const previous = session.title
   applyLocalSessionTitle(session.id, session.toolId, title)
+  if (isPendingSessionId(session.id)) {
+    showToast('已保存显示名，会话写入磁盘后会记住')
+    return
+  }
   try {
     const result = await api.renameSession(store.selectedProjectId, session.toolId, session.id, title)
     await refreshSessions({ silent: true })
@@ -772,6 +784,7 @@ export function markPtyExit(ptyId: string) {
   const dying = store.live.find((item) => item.ptyId === ptyId)
   store.live = store.live.filter((item) => item.ptyId !== ptyId)
   adoptLiveFallback(ptyId, dying?.projectId ?? store.selectedProjectId)
+  void refreshSessions({ silent: true })
 }
 
 export function rememberOpened(info: LivePtyInfo) {
@@ -794,16 +807,13 @@ function stopPendingWatch(ptyId: string) {
 
 export function watchPendingSession(ptyId: string) {
   stopPendingWatch(ptyId)
-  let tries = 0
   const tick = () => {
     const live = store.live.find((item) => item.ptyId === ptyId)
     if (!live?.alive || live.sessionId) {
       stopPendingWatch(ptyId)
       return
     }
-    tries += 1
     void refreshSessions({ silent: true })
-    if (tries >= 8) stopPendingWatch(ptyId)
   }
   pendingWatchers.set(ptyId, window.setInterval(tick, 2000))
   window.setTimeout(tick, 800)
@@ -843,7 +853,17 @@ export async function bindLiveSession(ptyId: string, sessionId: string, title?: 
 async function reconcileLiveBinds(projectId: string) {
   const binds = matchUnboundLiveToSessions(store.live, store.sessions, projectId)
   for (const bind of binds) {
-    await bindLiveSession(bind.ptyId, bind.sessionId, bind.title)
+    const live = store.live.find((item) => item.ptyId === bind.ptyId)
+    const title = keepLiveTitle(live?.title, bind.title)
+    await bindLiveSession(bind.ptyId, bind.sessionId, title)
+    if (title !== bind.title) {
+      try {
+        await api.renameSession(projectId, bind.toolId, bind.sessionId, title)
+        applyLocalSessionTitle(bind.sessionId, bind.toolId, title)
+      } catch {
+        /* live title still shows until the next successful rename */
+      }
+    }
     stopPendingWatch(bind.ptyId)
   }
 }
