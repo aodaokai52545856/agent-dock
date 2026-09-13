@@ -225,6 +225,7 @@ export async function ptyOpen(payload: {
   title: string
   cols: number
   rows: number
+  uiTheme?: 'light' | 'dark'
 }): Promise<PtyOpened> {
   return invoke('pty_open', payload)
 }

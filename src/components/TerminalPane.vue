@@ -10,10 +10,19 @@ import { isMac, isWindows } from '../lib/platform'
 import { isSignificantPtyChunk } from '../lib/livePulse'
 import { markPtyExit, notePtyData, selectedProject, store } from '../lib/store'
 import { codeFontStack } from '../lib/appearance'
-import { canMeasure, createFitScheduler } from '../lib/termFit'
+import { canMeasure, createFitScheduler, rowsThatFit } from '../lib/termFit'
 import { attachTermClipboard } from '../lib/termClipboard'
 import { termMenuItems, type TermMenuAction } from '../lib/termMenu'
-import { attachOscBackground, termThemeBackground } from '../lib/termGlass'
+import {
+  ansiPaletteBlack,
+  ansiPaletteWhite,
+  attachOscBackground,
+  canvasPad,
+  ptyCanvasInk,
+  ptyForcesDark,
+  termSchemeFromInk,
+  termThemeBackground
+} from '../lib/termGlass'
 import { attachSynchronizedOutput, createRefreshGate } from '../lib/termSync'
 import ToolMark from './ToolMark.vue'
 import { TOOLS, type ToolId } from '../lib/types'
@@ -88,7 +97,7 @@ function fitAll() {
   const id = store.activePtyId
   if (!id) return
   const host = hosts.get(id)
-  if (host) fitHost(id, host, true)
+  if (host) fitHost(id, host)
 }
 
 const fitScheduler = createFitScheduler({
@@ -120,25 +129,33 @@ function cssVar(name: string, fallback: string) {
   return value || fallback
 }
 
-function theme() {
-  const ink = cssVar('--ad-ink', '#0b0f13')
-  const foreground = cssVar('--ad-text', '#ececec')
-  const muted = cssVar('--ad-muted', '#8a8a8a')
+function toolForPty(ptyId: string) {
+  return store.live.find((item) => item.ptyId === ptyId)?.toolId
+}
+
+function theme(ptyId?: string) {
+  const uiInk = cssVar('--ad-ink', '#0b0f13')
+  const toolId = ptyId ? toolForPty(ptyId) : undefined
+  const follow = !ptyForcesDark(toolId)
+  const ink = ptyCanvasInk(uiInk, toolId)
+  const foreground = follow ? cssVar('--ad-text', '#ececec') : '#ececec'
+  const muted = follow ? cssVar('--ad-muted', '#8a8a8a') : '#8a8a8a'
   const opacity = Number.parseFloat(cssVar('--ad-ui-opacity', '0')) || 0
+  const scheme = termSchemeFromInk(ink)
   return {
     background: termThemeBackground(ink, opacity),
     foreground,
     cursor: foreground,
-    cursorAccent: ink,
-    selectionBackground: '#ffffff22',
-    black: ink,
+    cursorAccent: scheme === 'dark' ? ink : foreground,
+    selectionBackground: scheme === 'dark' ? '#ffffff22' : '#00000018',
+    black: follow ? ink : ansiPaletteBlack(ink),
     red: cssVar('--ad-error', '#e24b4a'),
     green: cssVar('--ad-success', '#3d9a6a'),
     yellow: cssVar('--ad-warning', '#c9a227'),
     blue: cssVar('--ad-dsh', '#4f7cff'),
     magenta: cssVar('--ad-grok', '#a78bfa'),
     cyan: cssVar('--ad-pi', '#22d3ee'),
-    white: foreground,
+    white: follow ? foreground : ansiPaletteWhite(foreground, ink),
     brightBlack: muted,
     brightRed: cssVar('--ad-error', '#e24b4a'),
     brightGreen: cssVar('--ad-opencode', '#6ee7b7'),
@@ -154,10 +171,25 @@ function termFontFamily() {
   return cssVar('--ad-mono', codeFontStack(store.settings.codeFontFamily))
 }
 
+function hostPad(ptyId?: string) {
+  const opacity = Number.parseFloat(cssVar('--ad-ui-opacity', '0')) || 0
+  return canvasPad(cssVar('--ad-ink', '#0b0f13'), opacity, ptyId ? toolForPty(ptyId) : undefined)
+}
+
+function paintHost(el: HTMLDivElement, ptyId: string) {
+  const toolId = toolForPty(ptyId)
+  const ink = ptyCanvasInk(cssVar('--ad-ink', '#0b0f13'), toolId)
+  el.dataset.scheme = termSchemeFromInk(ink)
+  if (toolId) el.dataset.tool = toolId
+  else delete el.dataset.tool
+  el.style.background = hostPad(ptyId)
+}
+
 function applyTermChrome() {
-  hosts.forEach((host) => {
+  hosts.forEach((host, ptyId) => {
+    paintHost(host.el, ptyId)
     host.term.options.fontFamily = termFontFamily()
-    host.term.options.theme = theme()
+    host.term.options.theme = theme(ptyId)
   })
   if (store.activePtyId) show(store.activePtyId)
 }
@@ -166,13 +198,14 @@ function ensureHost(ptyId: string) {
   if (hosts.has(ptyId)) return hosts.get(ptyId)!
   const el = document.createElement('div')
   el.className = 'term-host'
+  paintHost(el, ptyId)
   if (ptyId !== store.activePtyId) el.classList.add('is-hidden')
   const mount = document.getElementById('term-mount')
   mount?.appendChild(el)
   const term = new Terminal({
     fontFamily: termFontFamily(),
     fontSize: props.fontSize,
-    theme: theme(),
+    theme: theme(ptyId),
     allowTransparency: true,
     cursorBlink: true,
     scrollback: 4000,
@@ -183,10 +216,11 @@ function ensureHost(ptyId: string) {
   const fit = new FitAddon()
   term.loadAddon(fit)
   term.open(el)
+  paintHost(el, ptyId)
   const offData = term.onData((data) => {
     void api.ptyWrite(ptyId, data)
   })
-  const offSurface = bindTermSurface(term, el, ptyId)
+  const offSurface = bindTermSurface(term, ptyId)
   const offClipboard = attachTermClipboard(term, el, {
     write: (text) => {
       void api.clipboardWrite(text)
@@ -198,7 +232,7 @@ function ensureHost(ptyId: string) {
   return host
 }
 
-function bindTermSurface(term: Terminal, el: HTMLDivElement, ptyId: string) {
+function bindTermSurface(term: Terminal, ptyId: string) {
   const refresh = () => {
     try {
       term.refresh(0, Math.max(0, term.rows - 1))
@@ -220,19 +254,14 @@ function bindTermSurface(term: Terminal, el: HTMLDivElement, ptyId: string) {
   })
   const offOsc = attachOscBackground(term, {
     send,
-    ink: () => cssVar('--ad-ink', '#0b0f13')
+    ink: () => ptyCanvasInk(cssVar('--ad-ink', '#0b0f13'), toolForPty(ptyId))
   })
   const offScroll = term.onScroll(() => gate.request())
-  const onPointer = () => gate.request()
-  el.addEventListener('mousedown', onPointer)
-  const offFocus = term.onSelectionChange(() => gate.request())
   return {
     dispose() {
       offSync.dispose()
       offOsc.dispose()
       offScroll.dispose()
-      offFocus.dispose()
-      el.removeEventListener('mousedown', onPointer)
       gate.dispose()
     }
   }
@@ -248,7 +277,9 @@ function fitHost(ptyId: string, host: Host, force = false) {
     const proposed = host.fit.proposeDimensions()
     if (!proposed || proposed.cols < 20 || proposed.rows < 8) return
     host.fit.fit()
-    host.term.refresh(0, Math.max(0, host.term.rows - 1))
+    const screen = host.el.querySelector('.xterm-screen') as HTMLElement | null
+    const fittedRows = rowsThatFit(height, screen?.clientHeight ?? 0, host.term.rows)
+    if (fittedRows < host.term.rows) host.term.resize(host.term.cols, fittedRows)
     host.lastW = width
     host.lastH = height
     const cols = host.term.cols
@@ -299,7 +330,8 @@ watch(
   (id) => {
     if (id && !hosts.has(id)) ensureHost(id)
     show(id)
-  }
+  },
+  { immediate: true }
 )
 
 watch(
@@ -328,7 +360,7 @@ watch([paneAnimating, paneDragging, windowResizing, windowMoving], (now) => {
 })
 
 watch(windowMoving, (moving, was) => {
-  if (was && !moving) fitActive(true)
+  if (was && !moving) fitActive()
 })
 
 onMounted(async () => {
@@ -485,9 +517,9 @@ defineExpose({ ensureHost, show, dispose: disposeHost, fitActive })
   width: 36px;
   height: 36px;
   margin-bottom: 20px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  border: 1px solid var(--ad-border-strong);
   border-radius: 50%;
-  color: var(--ad-muted);
+  color: var(--ad-text);
   font-family: var(--ad-mono);
   font-size: 18px;
 }
@@ -602,7 +634,8 @@ defineExpose({ ensureHost, show, dispose: disposeHost, fitActive })
   inset: 0;
   overflow: hidden;
   isolation: isolate;
-  contain: layout style;
+  contain: layout style paint;
+  transform: translateZ(0);
   background: transparent;
 }
 
@@ -617,7 +650,19 @@ defineExpose({ ensureHost, show, dispose: disposeHost, fitActive })
 }
 
 .term-host .xterm {
+  width: 100%;
+  height: 100%;
   overflow: hidden;
+  padding: 8px;
+  box-sizing: border-box;
+}
+
+.term-host[data-scheme='dark'] .xterm {
+  padding: 0;
+}
+
+.term-host[data-tool='pi'] .xterm {
+  padding: 8px;
 }
 
 .term-host .xterm-bg-0 {
@@ -625,20 +670,12 @@ defineExpose({ ensureHost, show, dispose: disposeHost, fitActive })
 }
 
 .term-host .xterm-viewport {
-  scrollbar-width: thin;
-  scrollbar-color: rgba(255, 255, 255, 0.16) transparent;
+  scrollbar-width: none;
 }
 
 .term-host .xterm-viewport::-webkit-scrollbar {
-  width: 8px;
-}
-
-.term-host .xterm-viewport::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.term-host .xterm-viewport::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.16);
-  border-radius: 999px;
+  width: 0;
+  height: 0;
+  display: none;
 }
 </style>

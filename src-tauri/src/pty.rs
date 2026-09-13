@@ -154,6 +154,7 @@ impl PtyHub {
         title: String,
         cols: u16,
         rows: u16,
+        ui_theme: Option<&str>,
     ) -> Result<PtyOpened, String> {
         let key = match session_id.as_deref() {
             Some(id) => session_live_key(project_id, tool_id, id),
@@ -185,7 +186,11 @@ impl PtyHub {
         }
         let exe = tools::resolve_binary(tool_id, &state.settings)?;
         let env_pairs = proxy_env(project.proxy_enabled, &project.proxy_url)?;
-        let extra_args = tools::launch_args_for(tool_id, session_id.as_deref(), Some(&exe));
+        let extra_args = {
+            let mut args = tools::launch_args_for(tool_id, session_id.as_deref(), Some(&exe));
+            args.extend(claude_theme_args(tool_id, ui_theme));
+            args
+        };
 
         let pty_system = NativePtySystem::default();
         let pair = pty_system
@@ -205,6 +210,7 @@ impl PtyHub {
         let launch = match kind {
             ShellKind::PowerShell => {
                 let mut line = wrap_utf8_launch(&build_launch_command(&exe, &extra_args));
+                line = format!("$env:COLORFGBG='{}'; {line}", colorfgbg_for(tool_id, ui_theme));
                 if tool_id == ToolId::Grokbuild && state.settings.grok_follow_glass {
                     line = format!("{}{line}", grok_glass_ps_prefix());
                 }
@@ -221,6 +227,7 @@ impl PtyHub {
         scrub_host_terminal_env(&mut cmd);
         cmd.env("TERM_PROGRAM", "xterm.js");
         cmd.env("TERM_PROGRAM_VERSION", "5.5.0");
+        cmd.env("COLORFGBG", colorfgbg_for(tool_id, ui_theme));
         apply_grok_glass_env(&mut cmd, tool_id, state.settings.grok_follow_glass);
         if tool_id == ToolId::Dsh {
             if let Some(secret) = crate::dsh_keys::active_secret(&app) {
@@ -503,6 +510,66 @@ fn scrub_host_terminal_env(cmd: &mut CommandBuilder) {
     }
 }
 
+pub fn resolved_pty_theme(ui_theme: Option<&str>) -> &'static str {
+    match ui_theme.map(str::trim).unwrap_or("dark") {
+        "light" => "light",
+        _ => "dark",
+    }
+}
+
+pub fn pty_forces_dark(tool_id: ToolId) -> bool {
+    matches!(tool_id, ToolId::Opencode | ToolId::Kimi | ToolId::Pi)
+}
+
+pub fn colorfgbg(ui_theme: Option<&str>) -> &'static str {
+    if resolved_pty_theme(ui_theme) == "light" {
+        "0;15"
+    } else {
+        "15;0"
+    }
+}
+
+pub fn colorfgbg_for(tool_id: ToolId, ui_theme: Option<&str>) -> &'static str {
+    if pty_forces_dark(tool_id) {
+        "15;0"
+    } else {
+        colorfgbg(ui_theme)
+    }
+}
+
+pub fn claude_theme_settings_json(theme: &str) -> String {
+    format!(r#"{{"theme":"{theme}"}}"#)
+}
+
+pub fn claude_theme_settings_path(theme: &str) -> std::path::PathBuf {
+    std::env::temp_dir()
+        .join("agent-dock")
+        .join(format!("claude-theme-{theme}.json"))
+}
+
+fn write_claude_theme_settings(theme: &str) -> Option<std::path::PathBuf> {
+    let path = claude_theme_settings_path(theme);
+    let body = claude_theme_settings_json(theme);
+    if std::fs::read_to_string(&path).ok().as_deref() != Some(body.as_str()) {
+        std::fs::create_dir_all(path.parent()?).ok()?;
+        std::fs::write(&path, body).ok()?;
+    }
+    Some(path)
+}
+
+pub fn claude_theme_args(tool_id: ToolId, ui_theme: Option<&str>) -> Vec<String> {
+    if tool_id != ToolId::Claude {
+        return Vec::new();
+    }
+    let theme = resolved_pty_theme(ui_theme);
+    // Inline JSON contains double quotes. PowerShell -Command is itself a Windows
+    // argv, so those quotes get stripped and Claude sees `{theme:light}`.
+    match write_claude_theme_settings(theme) {
+        Some(path) => vec!["--settings".into(), path.to_string_lossy().into_owned()],
+        None => Vec::new(),
+    }
+}
+
 pub fn grok_glass_env(enabled: bool) -> &'static [(&'static str, &'static str)] {
     if enabled {
         &[
@@ -590,6 +657,39 @@ mod tests {
             line,
             r"C:\Users\me\AppData\Roaming\npm\dsh.cmd web --no-open"
         );
+    }
+
+    #[test]
+    fn claude_launch_follows_dock_theme_for_one_session() {
+        assert!(claude_theme_args(ToolId::Grokbuild, Some("light")).is_empty());
+        let light = claude_theme_args(ToolId::Claude, Some("light"));
+        assert_eq!(light[0], "--settings");
+        assert!(
+            light[1].ends_with("claude-theme-light.json"),
+            "expected a settings file path, got {}",
+            light[1]
+        );
+        assert_eq!(
+            std::fs::read_to_string(&light[1]).expect("theme file"),
+            r#"{"theme":"light"}"#
+        );
+        let dark = claude_theme_args(ToolId::Claude, Some("dark"));
+        assert!(dark[1].ends_with("claude-theme-dark.json"));
+        assert_eq!(colorfgbg(Some("light")), "0;15");
+        assert_eq!(colorfgbg(Some("dark")), "15;0");
+        assert_eq!(colorfgbg_for(ToolId::Grokbuild, Some("light")), "0;15");
+        assert_eq!(colorfgbg_for(ToolId::Opencode, Some("light")), "15;0");
+        assert_eq!(colorfgbg_for(ToolId::Kimi, Some("light")), "15;0");
+        let cmd = build_launch_command(
+            Path::new(r"C:\Users\me\AppData\Roaming\npm\claude.cmd"),
+            &light,
+        );
+        assert!(cmd.contains("'--settings'"));
+        assert!(
+            !cmd.contains(r#"{"theme""#),
+            "inline JSON breaks powershell -Command quoting on Windows: {cmd}"
+        );
+        assert!(cmd.contains("claude-theme-light.json"));
     }
 
     #[test]

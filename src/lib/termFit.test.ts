@@ -1,4 +1,4 @@
-import { canMeasure, createFitScheduler, proposeGrid } from './termFit.ts'
+import { canMeasure, createFitScheduler, proposeGrid, rowsThatFit } from './termFit.ts'
 import assert from 'node:assert/strict'
 
 function test(name: string, fn: () => void) {
@@ -17,6 +17,16 @@ test('proposeGrid floors to whole cells and ignores bad metrics', () => {
   assert.deepEqual(proposeGrid(805, 410, 10, 20), { cols: 80, rows: 20 })
   assert.equal(proposeGrid(0, 400, 10, 20), null)
   assert.equal(proposeGrid(800, 400, 0, 20), null)
+})
+
+test('rowsThatFit drops a row when the screen paints taller than the box', () => {
+  assert.equal(rowsThatFit(400, 400, 20), 20)
+  assert.equal(rowsThatFit(400, 420, 21), 20)
+  assert.equal(rowsThatFit(400, 0, 20), 20)
+})
+
+test('rowsThatFit keeps the row when overflow is less than one cell', () => {
+  assert.equal(rowsThatFit(400, 405, 20), 20)
 })
 
 test('scheduler does not run while layout is busy', () => {

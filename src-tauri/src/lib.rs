@@ -621,6 +621,7 @@ async fn pty_open(
     title: String,
     cols: u16,
     rows: u16,
+    ui_theme: Option<String>,
 ) -> Result<PtyOpened, String> {
     if tool_id == ToolId::Dsh {
         let state = state::load_state(&app)?;
@@ -632,7 +633,17 @@ async fn pty_open(
         .map_err(|err| format!("启动 DeepSeek Web 失败：{err}"))?;
     }
     let state = state::load_state(&app)?;
-    hub.open(app, &state, &project_id, tool_id, session_id, title, cols, rows)
+    hub.open(
+        app,
+        &state,
+        &project_id,
+        tool_id,
+        session_id,
+        title,
+        cols,
+        rows,
+        ui_theme.as_deref(),
+    )
 }
 
 #[tauri::command]

@@ -11,6 +11,12 @@ import {
   parseCssRgb,
   paletteIndex,
   shouldClearFill,
+  termSchemeFromInk,
+  ansiPaletteBlack,
+  ansiPaletteWhite,
+  canvasPad,
+  ptyCanvasInk,
+  ptyForcesDark,
   termThemeBackground
 } from './termGlass.ts'
 
@@ -68,6 +74,37 @@ test('pty theme background is one xterm-parseable rgba veil, not transparent', (
   assert.equal(termThemeBackground('#0B0F13', 100), 'rgba(11, 15, 19, 0.120)')
 })
 
+test('light ink keeps ANSI black actually black so TUIs can paint', () => {
+  assert.equal(termSchemeFromInk('#F3F3F3'), 'light')
+  assert.equal(ansiPaletteBlack('#F3F3F3'), '#171717')
+  assert.equal(ansiPaletteWhite('#171717', '#F3F3F3'), '#ECECEC')
+  assert.equal(termSchemeFromInk('#0B0F13'), 'dark')
+  assert.equal(ansiPaletteBlack('#0B0F13'), '#0B0F13')
+})
+
+test('Grok and Claude follow dock light ink; OpenCode and Kimi stay dark', () => {
+  assert.equal(ptyCanvasInk('#F3F3F3', 'grokbuild'), '#F3F3F3')
+  assert.equal(ptyCanvasInk('#F3F3F3', 'claude'), '#F3F3F3')
+  assert.equal(ptyCanvasInk('#F3F3F3', 'opencode'), '#0B0F13')
+  assert.equal(ptyCanvasInk('#F3F3F3', 'kimi'), '#0B0F13')
+  assert.equal(ptyCanvasInk('#F3F3F3', 'pi'), '#0B0F13')
+  assert.equal(ptyForcesDark('kimi'), true)
+  assert.equal(ptyForcesDark('grokbuild'), false)
+})
+
+test('OpenCode leftover pad stays opaque dark so dock chrome cannot show through', () => {
+  assert.equal(canvasPad('#F3F3F3', 50, 'opencode'), '#0B0F13')
+  assert.equal(canvasPad('#F3F3F3', 50, 'kimi'), '#0B0F13')
+  assert.equal(canvasPad('#F3F3F3', 50, 'pi'), '#0B0F13')
+  assert.match(canvasPad('#F3F3F3', 50, 'grokbuild'), /^rgba\(243, 243, 243, /)
+})
+
+test('Pi keeps a dark inset so the TUI is not flush against the sidebar', () => {
+  const pane = readFileSync(join(root, 'components/TerminalPane.vue'), 'utf8')
+  assert.match(pane, /dataset\.tool/)
+  assert.match(pane, /\[data-tool='pi'\] \.xterm\s*\{[^}]*padding:\s*8px/)
+})
+
 test('pty host css punches extra editor fills so they do not stack on the xterm veil', () => {
   const pane = readFileSync(join(root, 'components/TerminalPane.vue'), 'utf8')
   assert.match(pane, /background:\s*termThemeBackground\(/)
@@ -79,6 +116,26 @@ test('pty host css punches extra editor fills so they do not stack on the xterm 
   )
   assert.doesNotMatch(pane, /\.term-host\s*\{[^}]*--ad-editor/)
   assert.doesNotMatch(pane, /\.xterm-bg-0\s*\{[^}]*--ad-editor/)
+  assert.match(pane, /style\.background = hostPad\(ptyId\)/)
+})
+
+test('pty canvas stays clipped to the tool pane so it cannot paint into the session strip or status bar', () => {
+  const pane = readFileSync(join(root, 'components/TerminalPane.vue'), 'utf8')
+  const host = pane.match(/\.term-host\s*\{[^}]+\}/)
+  assert.ok(host, 'TerminalPane should define .term-host')
+  assert.match(host[0], /overflow:\s*hidden/)
+  assert.match(host[0], /contain:[^;]*paint/)
+  assert.match(host[0], /translateZ\(0\)/)
+  const xterm = pane.match(/\.term-host \.xterm\s*\{[^}]+\}/)
+  assert.ok(xterm, 'TerminalPane should size .xterm to the host')
+  assert.match(xterm[0], /width:\s*100%/)
+  assert.match(xterm[0], /height:\s*100%/)
+  assert.match(xterm[0], /padding:\s*8px/)
+  assert.match(pane, /\[data-scheme='dark'\] \.xterm\s*\{[^}]*padding:\s*0/)
+  const strip = readFileSync(join(root, 'components/LaunchStrip.vue'), 'utf8')
+  assert.match(strip, /\.strip\s*\{[^}]*z-index:\s*[2-9]/)
+  const bar = readFileSync(join(root, 'components/StatusBar.vue'), 'utf8')
+  assert.match(bar, /\.bar\s*\{[^}]*z-index:\s*[2-9]/)
 })
 
 test('empty homepage keeps its own editor veil', () => {

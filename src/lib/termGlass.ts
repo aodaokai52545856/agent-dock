@@ -77,6 +77,36 @@ export function termThemeBackground(ink: string, opacityPercent: number) {
   return glassRgba(ink, opacityPercent)
 }
 
+export const PTY_CANVAS_INK = '#0B0F13'
+
+export function termSchemeFromInk(ink: string): 'light' | 'dark' {
+  const rgb = parseCssRgb(ink)
+  if (!rgb) return 'dark'
+  return luma(rgb) >= 160 ? 'light' : 'dark'
+}
+
+export function ptyForcesDark(toolId?: string | null) {
+  return toolId === 'opencode' || toolId === 'kimi' || toolId === 'pi'
+}
+
+export function ptyCanvasInk(uiInk: string, toolId?: string | null) {
+  if (ptyForcesDark(toolId)) return PTY_CANVAS_INK
+  return uiInk || PTY_CANVAS_INK
+}
+
+export function canvasPad(uiInk: string, opacityPercent: number, toolId?: string | null) {
+  if (ptyForcesDark(toolId)) return PTY_CANVAS_INK
+  return termThemeBackground(ptyCanvasInk(uiInk, toolId), opacityPercent)
+}
+
+export function ansiPaletteBlack(ink: string) {
+  return termSchemeFromInk(ink) === 'light' ? '#171717' : ink
+}
+
+export function ansiPaletteWhite(foreground: string, ink: string) {
+  return termSchemeFromInk(ink) === 'light' ? '#ECECEC' : foreground
+}
+
 export function glassifySpan(
   el: { style: { backgroundColor: string }; className: string },
   dark: boolean

@@ -17,6 +17,14 @@ export function proposeGrid(
   }
 }
 
+export function rowsThatFit(containerHeight: number, screenHeight: number, rows: number) {
+  if (rows <= 1 || screenHeight <= 0 || screenHeight <= containerHeight) return rows
+  const cell = screenHeight / rows
+  if (cell <= 0) return rows
+  if (screenHeight - containerHeight < cell) return rows
+  return Math.max(1, Math.floor(containerHeight / cell))
+}
+
 export type FitSchedulerHooks = {
   isBusy: () => boolean
   run: () => void
