@@ -19,8 +19,8 @@ defineProps<{
       preserveAspectRatio="xMidYMid meet"
       aria-hidden="true"
     >
-      <path d="M18 24H6V12H18V24Z" fill="#5c5858" />
-      <path d="M18 6H6V24H18V6ZM24 30H0V0H24V30Z" fill="#cfc9c9" />
+      <path d="M18 24H6V12H18V24Z" fill="var(--ad-opencode-inner)" />
+      <path d="M18 6H6V24H18V6ZM24 30H0V0H24V30Z" fill="var(--ad-opencode-outer)" />
     </svg>
     <svg
       v-else-if="id === 'grokbuild'"
@@ -44,7 +44,7 @@ defineProps<{
     >
       <path
         d="M21.7202 0.94c1.23 0 2.23 1 2.23 2.23s-1 2.23-2.23 2.23h-1.97c-.15 0-.26-.12-.26-.26V3.17c0-1.23 1-2.23 2.23-2.23Z"
-        fill="#1783FF"
+        fill="var(--ad-kimi-accent)"
       />
       <path
         d="M9.39 13.95 17.82 5.59c.16-.16.07-.47-.14-.47h-4.54l-.14.06-9.08 9.01c-.14.14-.35.02-.35-.21V5.39c0-.15-.1-.27-.22-.27H.22C.1 5.12 0 5.24 0 5.39v18.53c0 .15.1.27.22.27H3.35c.12 0 .22-.12.22-.27v-3.78c0-.08.03-.16.08-.21l2.82-2.79c.07-.07.16-.08.24-.03l7.53 5.54c1.23.83 2.61 1.34 4.01 1.49.12.01.23-.11.23-.27v-3.56c0-.14-.08-.25-.19-.26-.82-.13-1.63-.45-2.35-.94l-6.52-4.72c-.14-.09-.15-.32-.03-.44Z"
@@ -116,7 +116,7 @@ defineProps<{
 
 .mark {
   display: block;
-  color: #f4f4f4;
+  color: var(--ad-mark);
 }
 
 .frame[data-tool='grokbuild'] .mark {

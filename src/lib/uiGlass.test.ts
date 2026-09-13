@@ -5,6 +5,7 @@ import {
   clampUiFrost,
   clampUiOpacity,
   glassRgba,
+  inkBoostPercent,
   veilAlpha
 } from './uiGlass.ts'
 
@@ -31,4 +32,10 @@ test('glass rgba matches the CSS veil and never goes fully black-transparent', (
   assert.equal(glassRgba('#0B0F13', 0), 'rgba(11, 15, 19, 0.900)')
   assert.equal(glassRgba('#1A1B26', 0).startsWith('rgba(26, 27, 38, '), true)
   assert.equal(glassRgba('nope', 0), 'rgba(11, 15, 19, 0.900)')
+})
+
+test('secondary ink jumps toward body text by half glass so 50% opacity still reads', () => {
+  assert.equal(inkBoostPercent(0), 0)
+  assert.equal(inkBoostPercent(50) >= 80, true)
+  assert.equal(inkBoostPercent(100), 95)
 })

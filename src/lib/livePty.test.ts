@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import {
   fallbackPtyAfterExit,
   focusedFromLive,
+  viewAfterPtyExit,
   forgetPty,
   groupLiveByProject,
   groupLiveByTool,
@@ -97,6 +98,13 @@ test('a dead active PTY falls back to the same project, not another project', ()
   assert.equal(fallbackPtyAfterExit(remaining, 'a1', 'aitools', 'd1')?.ptyId, 'd1')
   const otherProjectOnly = live.filter((item) => item.projectId !== 'aitools')
   assert.equal(fallbackPtyAfterExit(otherProjectOnly, 'a1', 'aitools', 'a1'), null)
+})
+
+test('user closing the current session goes home instead of adopting another live pty', () => {
+  const remaining = live.filter((item) => item.ptyId !== 'a1')
+  assert.equal(viewAfterPtyExit(remaining, 'a1', 'aitools', 'a1', { userClosed: true }), '')
+  assert.equal(viewAfterPtyExit(remaining, 'a1', 'aitools', 'd1', { userClosed: true }), 'd1')
+  assert.equal(viewAfterPtyExit(remaining, 'a1', 'aitools', 'a1'), 'a2')
 })
 
 test('forgetPty clears only the remembered slot', () => {

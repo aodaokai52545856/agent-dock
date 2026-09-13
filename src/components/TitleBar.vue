@@ -2,7 +2,7 @@
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { onMounted, onUnmounted, ref } from 'vue'
 import { isTauri } from '../lib/api'
-import { beginWindowMove, noteWindowMove } from '../lib/layout'
+import { beginWindowMove, endWindowMove, noteWindowMove } from '../lib/layout'
 import { setAppMode, store } from '../lib/store'
 import { isTitlebarDoubleClick } from '../lib/titleDrag'
 
@@ -110,7 +110,7 @@ function onKey(event: KeyboardEvent) {
 onMounted(() => {
   document.addEventListener('click', onDocClick)
   window.addEventListener('keydown', onKey)
-  window.addEventListener('mouseup', noteWindowMove)
+  window.addEventListener('mouseup', endWindowMove)
   if (!isTauri) return
   void syncMaximized()
   const win = getCurrentWindow()
@@ -129,7 +129,7 @@ onMounted(() => {
 onUnmounted(() => {
   document.removeEventListener('click', onDocClick)
   window.removeEventListener('keydown', onKey)
-  window.removeEventListener('mouseup', noteWindowMove)
+  window.removeEventListener('mouseup', endWindowMove)
   offResized?.()
   offMoved?.()
 })
@@ -330,7 +330,7 @@ onUnmounted(() => {
   height: 100%;
   display: grid;
   place-items: center;
-  color: #cfcfcf;
+  color: var(--ad-muted);
   background: transparent;
 }
 
@@ -345,8 +345,8 @@ onUnmounted(() => {
 }
 
 .win:hover {
-  background: rgba(255, 255, 255, 0.06);
-  color: #fff;
+  background: var(--ad-hover);
+  color: var(--ad-text);
 }
 
 .win-close:hover {

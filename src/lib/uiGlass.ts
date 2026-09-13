@@ -20,6 +20,10 @@ export function clampUiFrost(value: number) {
   return clampPercent(value, UI_FROST_DEFAULT)
 }
 
+export function inkBoostPercent(opacityPercent: number) {
+  return Math.min(95, Math.round(clampUiOpacity(opacityPercent) * 1.8))
+}
+
 export function applyUiGlass(opacity: number, frost: number) {
   if (typeof document === 'undefined') return
   const nextOpacity = clampUiOpacity(opacity)
@@ -27,6 +31,7 @@ export function applyUiGlass(opacity: number, frost: number) {
   const root = document.documentElement
   root.style.setProperty('--ad-ui-opacity', String(nextOpacity))
   root.style.setProperty('--ad-ui-frost', String(nextFrost))
+  root.style.setProperty('--ad-ink-boost', `${inkBoostPercent(nextOpacity)}%`)
   if (nextFrost <= 0) root.setAttribute('data-frost', 'off')
   else root.removeAttribute('data-frost')
 }

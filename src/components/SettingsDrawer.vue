@@ -7,11 +7,10 @@ import {
   UI_FONT_MAX,
   UI_FONT_MIN,
   UI_THEMES,
-  appearanceFromSettings,
-  appearanceToSettings,
-  applyAppearance,
+  lookPatchFromDraft,
   parseHex,
   resolvedTheme,
+  sanitizeLookSettings,
   systemPrefersLight,
   themeDefaults,
   type UiTheme
@@ -22,9 +21,10 @@ import {
   UI_FROST_MIN,
   UI_OPACITY_MAX,
   UI_OPACITY_MIN,
-  applyUiGlass,
   clampUiFrost,
-  clampUiOpacity
+  clampUiOpacity,
+  commitLookSettings,
+  flushLookSettings
 } from '../lib/store'
 
 const props = defineProps<{
@@ -38,17 +38,20 @@ const emit = defineEmits<{
 }>()
 
 function syncForm() {
-  const look = appearanceFromSettings(props.settings)
+  const look = sanitizeLookSettings(props.settings)
   form.terminalFontSize = props.settings.terminalFontSize
   form.uiFontSize = look.uiFontSize
-  form.uiTheme = look.theme
-  form.uiAccent = look.accent
-  form.uiBackground = look.background
-  form.uiForeground = look.foreground
+  form.uiTheme = look.uiTheme
+  form.uiAccent = look.uiAccent
+  form.uiBackground = look.uiBackground
+  form.uiForeground = look.uiForeground
+  form.uiAccentLight = look.uiAccentLight
+  form.uiBackgroundLight = look.uiBackgroundLight
+  form.uiForegroundLight = look.uiForegroundLight
   form.uiFontFamily = look.uiFontFamily
   form.contentFontFamily = look.contentFontFamily
   form.codeFontFamily = look.codeFontFamily
-  form.uiContrast = look.contrast
+  form.uiContrast = look.uiContrast
   form.translucentSidebar = look.translucentSidebar
   form.uiOpacity = clampUiOpacity(props.settings.uiOpacity)
   form.uiFrost = clampUiFrost(props.settings.uiFrost)
@@ -68,6 +71,9 @@ const form = reactive({
   uiAccent: '',
   uiBackground: '',
   uiForeground: '',
+  uiAccentLight: '',
+  uiBackgroundLight: '',
+  uiForegroundLight: '',
   uiFontFamily: '',
   contentFontFamily: '',
   codeFontFamily: '',
@@ -88,45 +94,82 @@ syncForm()
 const resolved = computed(() => resolvedTheme(form.uiTheme, systemPrefersLight()))
 const defaults = computed(() => themeDefaults(resolved.value))
 const themeTitle = computed(() => (resolved.value === 'light' ? '浅色主题' : '深色主题'))
+const paintAccent = computed(() =>
+  resolved.value === 'light' ? form.uiAccentLight : form.uiAccent
+)
+const paintBackground = computed(() =>
+  resolved.value === 'light' ? form.uiBackgroundLight : form.uiBackground
+)
+const paintForeground = computed(() =>
+  resolved.value === 'light' ? form.uiForegroundLight : form.uiForeground
+)
+
+let hydrating = false
 
 watch(
-  () => [props.open, props.settings] as const,
-  ([open]) => {
-    syncForm()
-    if (!open) {
-      applyUiGlass(props.settings.uiOpacity, props.settings.uiFrost)
-      applyAppearance(appearanceFromSettings(props.settings))
+  () => props.open,
+  (open) => {
+    if (open) {
+      hydrating = true
+      try {
+        syncForm()
+      } finally {
+        hydrating = false
+      }
+      return
     }
+    flushLookSettings()
   }
 )
 
-function previewGlass() {
-  applyUiGlass(form.uiOpacity, form.uiFrost)
+function lookPatch() {
+  return {
+    ...lookPatchFromDraft(form),
+    uiOpacity: clampUiOpacity(form.uiOpacity),
+    uiFrost: clampUiFrost(form.uiFrost)
+  }
 }
 
-function previewAppearance() {
-  applyAppearance({
-    theme: form.uiTheme,
-    uiFontSize: form.uiFontSize,
-    accent: form.uiAccent,
-    background: form.uiBackground,
-    foreground: form.uiForeground,
-    uiFontFamily: form.uiFontFamily,
-    contentFontFamily: form.contentFontFamily,
-    codeFontFamily: form.codeFontFamily,
-    contrast: form.uiContrast,
-    translucentSidebar: form.translucentSidebar
-  })
-}
+watch(
+  () => [
+    form.uiTheme,
+    form.uiFontSize,
+    form.uiAccent,
+    form.uiBackground,
+    form.uiForeground,
+    form.uiAccentLight,
+    form.uiBackgroundLight,
+    form.uiForegroundLight,
+    form.uiFontFamily,
+    form.contentFontFamily,
+    form.codeFontFamily,
+    form.uiContrast,
+    form.translucentSidebar,
+    form.terminalFontSize,
+    form.uiOpacity,
+    form.uiFrost,
+    form.grokFollowGlass
+  ],
+  () => {
+    if (!props.open || hydrating) return
+    commitLookSettings(lookPatch())
+  },
+  { flush: 'sync' }
+)
 
 function pickTheme(id: UiTheme) {
   form.uiTheme = id
-  previewAppearance()
 }
 
-function setColor(key: 'uiAccent' | 'uiBackground' | 'uiForeground', value: string) {
-  form[key] = parseHex(value)
-  previewAppearance()
+function setColor(key: 'accent' | 'background' | 'foreground', value: string) {
+  const hex = parseHex(value)
+  if (resolved.value === 'light') {
+    if (key === 'accent') form.uiAccentLight = hex
+    else if (key === 'background') form.uiBackgroundLight = hex
+    else form.uiForegroundLight = hex
+  } else if (key === 'accent') form.uiAccent = hex
+  else if (key === 'background') form.uiBackground = hex
+  else form.uiForeground = hex
 }
 
 function submit() {
@@ -134,22 +177,8 @@ function submit() {
   form.saving = true
   emit('save', {
     ...props.settings,
-    ...appearanceToSettings({
-      theme: form.uiTheme,
-      uiFontSize: form.uiFontSize,
-      accent: form.uiAccent,
-      background: form.uiBackground,
-      foreground: form.uiForeground,
-      uiFontFamily: form.uiFontFamily,
-      contentFontFamily: form.contentFontFamily,
-      codeFontFamily: form.codeFontFamily,
-      contrast: form.uiContrast,
-      translucentSidebar: form.translucentSidebar
-    }),
+    ...lookPatch(),
     terminalFontSize: Math.min(22, Math.max(10, size)),
-    uiOpacity: clampUiOpacity(form.uiOpacity),
-    uiFrost: clampUiFrost(form.uiFrost),
-    grokFollowGlass: Boolean(form.grokFollowGlass),
     cursorApiKey: form.cursorApiKey.trim(),
     codexPath: form.codexPath.trim(),
     claudePath: form.claudePath.trim(),
@@ -201,10 +230,10 @@ defineExpose({ stopSave })
           <span class="swatch">
             <input
               type="color"
-              :value="form.uiAccent || defaults.accent"
-              @input="setColor('uiAccent', ($event.target as HTMLInputElement).value)"
+              :value="paintAccent || defaults.accent"
+              @input="setColor('accent', ($event.target as HTMLInputElement).value)"
             />
-            <code>{{ (form.uiAccent || defaults.accent).toLowerCase() }}</code>
+            <code>{{ (paintAccent || defaults.accent).toLowerCase() }}</code>
           </span>
         </label>
         <label class="look-row">
@@ -212,10 +241,10 @@ defineExpose({ stopSave })
           <span class="swatch">
             <input
               type="color"
-              :value="form.uiBackground || defaults.background"
-              @input="setColor('uiBackground', ($event.target as HTMLInputElement).value)"
+              :value="paintBackground || defaults.background"
+              @input="setColor('background', ($event.target as HTMLInputElement).value)"
             />
-            <code>{{ (form.uiBackground || defaults.background).toLowerCase() }}</code>
+            <code>{{ (paintBackground || defaults.background).toLowerCase() }}</code>
           </span>
         </label>
         <label class="look-row">
@@ -223,15 +252,15 @@ defineExpose({ stopSave })
           <span class="swatch">
             <input
               type="color"
-              :value="form.uiForeground || defaults.foreground"
-              @input="setColor('uiForeground', ($event.target as HTMLInputElement).value)"
+              :value="paintForeground || defaults.foreground"
+              @input="setColor('foreground', ($event.target as HTMLInputElement).value)"
             />
-            <code>{{ (form.uiForeground || defaults.foreground).toLowerCase() }}</code>
+            <code>{{ (paintForeground || defaults.foreground).toLowerCase() }}</code>
           </span>
         </label>
         <label class="look-row">
           <span>UI 字体</span>
-          <select v-model="form.uiFontFamily" @change="previewAppearance">
+          <select v-model="form.uiFontFamily">
             <option v-for="item in UI_FONTS" :key="item.id || 'ui-default'" :value="item.id">
               {{ item.label }}
             </option>
@@ -239,7 +268,7 @@ defineExpose({ stopSave })
         </label>
         <label class="look-row">
           <span>内容字体</span>
-          <select v-model="form.contentFontFamily" @change="previewAppearance">
+          <select v-model="form.contentFontFamily">
             <option v-for="item in CONTENT_FONTS" :key="item.id || 'content-default'" :value="item.id">
               {{ item.label }}
             </option>
@@ -247,7 +276,7 @@ defineExpose({ stopSave })
         </label>
         <label class="look-row">
           <span>代码字体</span>
-          <select v-model="form.codeFontFamily" @change="previewAppearance">
+          <select v-model="form.codeFontFamily">
             <option v-for="item in CODE_FONTS" :key="item.id || 'code-default'" :value="item.id">
               {{ item.label }}
             </option>
@@ -261,7 +290,7 @@ defineExpose({ stopSave })
             :class="{ on: form.translucentSidebar }"
             role="switch"
             :aria-checked="form.translucentSidebar"
-            @click="form.translucentSidebar = !form.translucentSidebar; previewAppearance()"
+            @click="form.translucentSidebar = !form.translucentSidebar"
           />
         </label>
         <label class="look-row">
@@ -273,7 +302,6 @@ defineExpose({ stopSave })
               min="0"
               max="100"
               step="1"
-              @input="previewAppearance"
             />
             <strong>{{ form.uiContrast }}</strong>
           </span>
@@ -287,7 +315,6 @@ defineExpose({ stopSave })
               :min="UI_FONT_MIN"
               :max="UI_FONT_MAX"
               step="1"
-              @input="previewAppearance"
             />
             <strong>{{ form.uiFontSize }}</strong>
           </span>
@@ -298,7 +325,7 @@ defineExpose({ stopSave })
         <span>终端字号</span>
         <input v-model.number="form.terminalFontSize" type="number" min="10" max="22" />
       </label>
-      <p class="hint">只影响右侧命令行窗口的字号。代码字体在上面外观里选。</p>
+      <p class="hint">只影响右侧命令行窗口的字号，改完立刻生效。代码字体在上面外观里选。</p>
       <label class="field">
         <span>界面透明度 <em>{{ form.uiOpacity }}%</em></span>
         <input
@@ -307,7 +334,6 @@ defineExpose({ stopSave })
           :min="UI_OPACITY_MIN"
           :max="UI_OPACITY_MAX"
           step="1"
-          @input="previewGlass"
         />
       </label>
       <p class="hint">数字越大，窗体底色越淡，越能看见后面的桌面。终端里的字仍保持不透明。</p>
@@ -319,10 +345,9 @@ defineExpose({ stopSave })
           :min="UI_FROST_MIN"
           :max="UI_FROST_MAX"
           step="1"
-          @input="previewGlass"
         />
       </label>
-      <p class="hint">数字越大，背后内容越糊。拉到 0 就是清透，不再在桌面上再套一层霜。拖动即可预览，点保存后写入本机。</p>
+      <p class="hint">数字越大，背后内容越糊。拉到 0 就是清透，不再在桌面上再套一层霜。外观、透明度和毛玻璃拖动即生效，并自动写入本机。</p>
       <label class="look-row glass-row">
         <span>Grok 跟随窗口玻璃</span>
         <button

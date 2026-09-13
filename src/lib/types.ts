@@ -36,6 +36,9 @@ export interface AppSettings {
   uiAccent: string
   uiBackground: string
   uiForeground: string
+  uiAccentLight: string
+  uiBackgroundLight: string
+  uiForegroundLight: string
   uiFontFamily: string
   contentFontFamily: string
   codeFontFamily: string

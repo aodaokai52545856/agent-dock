@@ -44,6 +44,12 @@ pub struct AppSettings {
     #[serde(default)]
     pub ui_foreground: String,
     #[serde(default)]
+    pub ui_accent_light: String,
+    #[serde(default)]
+    pub ui_background_light: String,
+    #[serde(default)]
+    pub ui_foreground_light: String,
+    #[serde(default)]
     pub ui_font_family: String,
     #[serde(default)]
     pub content_font_family: String,
@@ -140,6 +146,9 @@ impl Default for AppSettings {
             ui_accent: String::new(),
             ui_background: String::new(),
             ui_foreground: String::new(),
+            ui_accent_light: String::new(),
+            ui_background_light: String::new(),
+            ui_foreground_light: String::new(),
             ui_font_family: String::new(),
             content_font_family: String::new(),
             code_font_family: String::new(),

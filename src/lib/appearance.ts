@@ -117,30 +117,101 @@ export function defaultAppearance(): Appearance {
   }
 }
 
-export function appearanceFromSettings(settings: {
+type AppearanceSettings = {
   uiTheme?: unknown
   uiFontSize?: number
   uiAccent?: string
   uiBackground?: string
   uiForeground?: string
+  uiAccentLight?: string
+  uiBackgroundLight?: string
+  uiForegroundLight?: string
   uiFontFamily?: string
   contentFontFamily?: string
   codeFontFamily?: string
   uiContrast?: number
   translucentSidebar?: boolean
-}): Appearance {
-  return parseAppearance({
-    theme: settings.uiTheme,
-    uiFontSize: settings.uiFontSize,
+}
+
+export function themeOverrides(
+  settings: Pick<
+    AppearanceSettings,
+    'uiAccent' | 'uiBackground' | 'uiForeground' | 'uiAccentLight' | 'uiBackgroundLight' | 'uiForegroundLight'
+  >,
+  resolved: 'light' | 'dark'
+) {
+  if (resolved === 'light') {
+    return {
+      accent: settings.uiAccentLight,
+      background: settings.uiBackgroundLight,
+      foreground: settings.uiForegroundLight
+    }
+  }
+  return {
     accent: settings.uiAccent,
     background: settings.uiBackground,
-    foreground: settings.uiForeground,
+    foreground: settings.uiForeground
+  }
+}
+
+export function appearanceFromSettings(
+  settings: AppearanceSettings,
+  preferLight = typeof window !== 'undefined' ? systemPrefersLight() : false
+): Appearance {
+  const theme = parseTheme(settings.uiTheme)
+  const colors = themeOverrides(settings, resolvedTheme(theme, preferLight))
+  return parseAppearance({
+    theme,
+    uiFontSize: settings.uiFontSize,
+    accent: colors.accent,
+    background: colors.background,
+    foreground: colors.foreground,
     uiFontFamily: settings.uiFontFamily,
     contentFontFamily: settings.contentFontFamily,
     codeFontFamily: settings.codeFontFamily,
     contrast: settings.uiContrast,
     translucentSidebar: settings.translucentSidebar
   })
+}
+
+export function sanitizeLookSettings(settings: AppearanceSettings) {
+  return {
+    uiTheme: parseTheme(settings.uiTheme),
+    uiFontSize: clampUiFontSize(settings.uiFontSize ?? UI_FONT_DEFAULT),
+    uiAccent: parseHex(settings.uiAccent),
+    uiBackground: parseHex(settings.uiBackground),
+    uiForeground: parseHex(settings.uiForeground),
+    uiAccentLight: parseHex(settings.uiAccentLight),
+    uiBackgroundLight: parseHex(settings.uiBackgroundLight),
+    uiForegroundLight: parseHex(settings.uiForegroundLight),
+    uiFontFamily: parseFamily(settings.uiFontFamily, UI_FONTS),
+    contentFontFamily: parseFamily(settings.contentFontFamily, CONTENT_FONTS),
+    codeFontFamily: parseFamily(settings.codeFontFamily, CODE_FONTS),
+    uiContrast: clampContrast(settings.uiContrast ?? UI_CONTRAST_DEFAULT),
+    translucentSidebar: settings.translucentSidebar !== false
+  }
+}
+
+export const TERMINAL_FONT_MIN = 10
+export const TERMINAL_FONT_MAX = 22
+export const TERMINAL_FONT_DEFAULT = 14
+
+export function clampTerminalFontSize(value: number) {
+  if (!Number.isFinite(value)) return TERMINAL_FONT_DEFAULT
+  return Math.min(TERMINAL_FONT_MAX, Math.max(TERMINAL_FONT_MIN, Math.round(value)))
+}
+
+export function lookPatchFromDraft(
+  draft: AppearanceSettings & {
+    terminalFontSize?: number
+    grokFollowGlass?: boolean
+  }
+) {
+  return {
+    ...sanitizeLookSettings(draft),
+    terminalFontSize: clampTerminalFontSize(draft.terminalFontSize ?? TERMINAL_FONT_DEFAULT),
+    grokFollowGlass: Boolean(draft.grokFollowGlass)
+  }
 }
 
 export function appearanceToSettings(appearance: Appearance) {
@@ -216,6 +287,68 @@ export function glassFill(hex: string, alpha = 'var(--ad-veil)') {
   return `rgb(${rgbChannels(hex)} / ${alpha})`
 }
 
+export function chromeSurfaces(background: string, foreground: string) {
+  const harbor = mixHex(foreground, background, 0.06)
+  const raised = mixHex(foreground, background, 0.09)
+  const hover = mixHex(foreground, background, 0.12)
+  const selected = mixHex(foreground, background, 0.18)
+  return {
+    harbor: glassFill(harbor),
+    raised: glassFill(raised),
+    hover: glassFill(hover),
+    selected: glassFill(selected)
+  }
+}
+
+export function inkTones(
+  foreground: string,
+  background: string,
+  contrastPercent: number,
+  theme: 'light' | 'dark'
+) {
+  const contrast = contrastPercent / 100
+  const mutedAmt = theme === 'light' ? 0.55 + contrast * 0.28 : 0.32 + contrast * 0.3
+  const faintAmt = theme === 'light' ? 0.4 + contrast * 0.22 : 0.18 + contrast * 0.22
+  return {
+    muted: mixHex(foreground, background, mutedAmt),
+    faint: mixHex(foreground, background, faintAmt)
+  }
+}
+
+export function colorLuminance(hex: string) {
+  const parsed = parseHex(hex)
+  if (!parsed) return 0
+  const { r, g, b } = toRgb(parsed)
+  const lin = (channel: number) => {
+    const s = channel / 255
+    return s <= 0.04045 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4
+  }
+  return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b)
+}
+
+export function isDarkColor(hex: string) {
+  return colorLuminance(hex) < 0.45
+}
+
+export function themePaint(
+  custom: string,
+  fallback: string,
+  resolved: 'light' | 'dark',
+  role: 'surface' | 'ink'
+) {
+  const hex = parseHex(custom)
+  if (!hex) return fallback
+  const dark = isDarkColor(hex)
+  if (role === 'surface') {
+    if (resolved === 'dark' && dark) return hex
+    if (resolved === 'light' && !dark) return hex
+    return fallback
+  }
+  if (resolved === 'dark' && !dark) return hex
+  if (resolved === 'light' && dark) return hex
+  return fallback
+}
+
 function setVar(name: string, value: string | null) {
   const root = document.documentElement
   if (!value) root.style.removeProperty(name)
@@ -229,16 +362,12 @@ export function applyAppearance(input: Appearance) {
     typeof window !== 'undefined' ? systemPrefersLight() : false
   )
   const defaults = themeDefaults(resolved)
-  const background = appearance.background || defaults.background
-  const foreground = appearance.foreground || defaults.foreground
-  const accent = appearance.accent || defaults.accent
+  const background = themePaint(appearance.background, defaults.background, resolved, 'surface')
+  const foreground = themePaint(appearance.foreground, defaults.foreground, resolved, 'ink')
+  const accent = themePaint(appearance.accent, defaults.accent, resolved, 'ink')
   const contrast = appearance.contrast / 100
-  const muted = mixHex(foreground, background, 0.28 + contrast * 0.32)
-  const faint = mixHex(foreground, background, 0.14 + contrast * 0.22)
-  const harbor = mixHex(foreground, background, 0.06)
-  const raised = mixHex(foreground, background, 0.09)
-  const hover = mixHex(foreground, background, 0.12)
-  const selected = mixHex(foreground, background, 0.18)
+  const tones = inkTones(foreground, background, appearance.contrast, resolved)
+  const chrome = chromeSurfaces(background, foreground)
   const ui = fontStack(appearance.uiFontFamily, UI_STACK)
   const content = appearance.contentFontFamily ? fontStack(appearance.contentFontFamily, UI_STACK) : ui
   const root = document.documentElement
@@ -248,13 +377,13 @@ export function applyAppearance(input: Appearance) {
   setVar('--ad-ink', background)
   setVar('--ad-bg', background)
   setVar('--ad-editor', glassFill(background))
-  setVar('--ad-harbor', harbor)
-  setVar('--ad-raised', raised)
-  setVar('--ad-hover', hover)
-  setVar('--ad-selected', selected)
+  setVar('--ad-harbor', chrome.harbor)
+  setVar('--ad-raised', chrome.raised)
+  setVar('--ad-hover', chrome.hover)
+  setVar('--ad-selected', chrome.selected)
   setVar('--ad-text', foreground)
-  setVar('--ad-muted', muted)
-  setVar('--ad-faint', faint)
+  setVar('--ad-muted-base', tones.muted)
+  setVar('--ad-faint-base', tones.faint)
   setVar('--ad-accent', accent)
   setVar('--ad-accent-hover', mixHex(accent, foreground, 0.65))
   setVar('--ad-accent-active', mixHex(accent, background, 0.82))

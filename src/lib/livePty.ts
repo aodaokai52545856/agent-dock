@@ -149,6 +149,22 @@ export function fallbackPtyAfterExit(
   return null
 }
 
+export function viewAfterPtyExit(
+  live: LivePtyInfo[],
+  deadPtyId: string,
+  deadProjectId?: string | null,
+  activePtyId?: string | null,
+  opts?: { userClosed?: boolean }
+): string {
+  if (opts?.userClosed) {
+    if (activePtyId && activePtyId !== deadPtyId) {
+      return live.find((item) => item.ptyId === activePtyId && isLivePty(item))?.ptyId ?? ''
+    }
+    return ''
+  }
+  return fallbackPtyAfterExit(live, deadPtyId, deadProjectId, activePtyId)?.ptyId ?? ''
+}
+
 export function toolTint(toolId: ToolId) {
   if (toolId === 'opencode') return 'var(--ad-opencode)'
   if (toolId === 'kimi') return 'var(--ad-kimi)'

@@ -10,7 +10,7 @@ import {
   ptyIdFromPending
 } from './liveBind'
 import {
-  fallbackPtyAfterExit,
+  viewAfterPtyExit,
   focusedFromLive,
   forgetPty,
   pickPtyForProject,
@@ -40,8 +40,8 @@ import type {
 import { TOOLS, parseSessionToolFilter } from './types'
 import {
   appearanceFromSettings,
-  appearanceToSettings,
   applyAppearance,
+  sanitizeLookSettings,
   watchSystemTheme
 } from './appearance'
 import {
@@ -93,6 +93,9 @@ const defaultSettings = (): AppSettings => ({
   uiAccent: '',
   uiBackground: '',
   uiForeground: '',
+  uiAccentLight: '',
+  uiBackgroundLight: '',
+  uiForegroundLight: '',
   uiFontFamily: '',
   contentFontFamily: '',
   codeFontFamily: '',
@@ -154,6 +157,7 @@ export const store = reactive({
   sessionQuery: '',
   sessionToolFilter: 'all' as SessionToolFilter,
   sessionLiveOnly: false,
+  dshEmbedPaused: false,
   probes: null as ToolProbeMap | null,
   live: [] as LivePtyInfo[],
   ptyDataAt: {} as Record<string, number>,
@@ -277,7 +281,7 @@ export function applyState(state: AppState) {
     uiOpacity: migrateLoadedUiOpacity(state.settings.uiOpacity),
     uiFrost: clampUiFrost(state.settings.uiFrost ?? UI_FROST_DEFAULT),
     grokFollowGlass: Boolean(state.settings.grokFollowGlass),
-    ...appearanceToSettings(appearanceFromSettings(state.settings)),
+    ...sanitizeLookSettings(state.settings),
     sessionToolFilter: parseSessionToolFilter(state.settings.sessionToolFilter),
     cursorApiKey: state.settings.cursorApiKey ?? '',
     codexPath: state.settings.codexPath ?? '',
@@ -673,6 +677,28 @@ export async function saveAppSettings(settings: AppSettings) {
   applyState(await api.saveSettings(settings))
 }
 
+let lookSaveTimer = 0
+
+export function commitLookSettings(patch: Partial<AppSettings>) {
+  Object.assign(store.settings, patch)
+  applyUiGlass(store.settings.uiOpacity, store.settings.uiFrost)
+  applyAppearance(appearanceFromSettings(store.settings))
+  if (typeof window === 'undefined') return
+  window.clearTimeout(lookSaveTimer)
+  lookSaveTimer = window.setTimeout(() => {
+    lookSaveTimer = 0
+    void saveAppSettings({ ...store.settings })
+  }, 280)
+}
+
+export function flushLookSettings() {
+  if (typeof window === 'undefined') return
+  if (!lookSaveTimer) return
+  window.clearTimeout(lookSaveTimer)
+  lookSaveTimer = 0
+  void saveAppSettings({ ...store.settings })
+}
+
 function toolsToScan(): ToolId[] {
   const tool = TOOLS.find((item) => item.id === store.sessionToolFilter)
   if (tool) return [tool.id]
@@ -700,6 +726,14 @@ export function setSessionLiveOnly(on: boolean) {
   store.sessionLiveOnly = on
   if (typeof localStorage === 'undefined') return
   localStorage.setItem(LIVE_ONLY_KEY, on ? '1' : '0')
+}
+
+export function pauseDshEmbed() {
+  store.dshEmbedPaused = true
+}
+
+export function resumeDshEmbed() {
+  store.dshEmbedPaused = false
 }
 
 export function findVisibleSession(sessionId: string, toolId: ToolId) {
@@ -748,12 +782,16 @@ export async function deleteCurrentSession(session: SessionRow) {
   showToast('已删除会话')
 }
 
-function adoptLiveFallback(deadPtyId: string, deadProjectId?: string | null) {
+function adoptLiveFallback(deadPtyId: string, deadProjectId?: string | null, opts?: { userClosed?: boolean }) {
   forgetPty(lastPtyByProject, deadPtyId)
-  if (store.activePtyId && store.activePtyId !== deadPtyId && store.live.some((item) => item.ptyId === store.activePtyId)) {
+  const nextId = viewAfterPtyExit(store.live, deadPtyId, deadProjectId, store.activePtyId, opts)
+  if (!nextId) {
+    store.activePtyId = ''
+    store.focusedSession = null
     return
   }
-  const next = fallbackPtyAfterExit(store.live, deadPtyId, deadProjectId, store.activePtyId)
+  if (nextId === store.activePtyId) return
+  const next = store.live.find((item) => item.ptyId === nextId)
   if (!next) {
     store.activePtyId = ''
     store.focusedSession = null
@@ -778,12 +816,12 @@ export function notePtyData(ptyId: string, at = Date.now()) {
   store.ptyDataAt[ptyId] = at
 }
 
-export function markPtyExit(ptyId: string) {
+export function markPtyExit(ptyId: string, opts?: { userClosed?: boolean }) {
   stopPendingWatch(ptyId)
   delete store.ptyDataAt[ptyId]
   const dying = store.live.find((item) => item.ptyId === ptyId)
   store.live = store.live.filter((item) => item.ptyId !== ptyId)
-  adoptLiveFallback(ptyId, dying?.projectId ?? store.selectedProjectId)
+  adoptLiveFallback(ptyId, dying?.projectId ?? store.selectedProjectId, opts)
   void refreshSessions({ silent: true })
 }
 

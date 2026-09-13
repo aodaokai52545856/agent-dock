@@ -54,8 +54,7 @@ html.ad-desktop-glass #app {
   -webkit-backdrop-filter: blur(var(--ad-frost)) saturate(calc(1 + var(--ad-ui-frost) * 0.003));
 }
 
-html.ad-desktop-glass[data-frost='off'] #app,
-html.ad-moving.ad-desktop-glass #app {
+html.ad-desktop-glass[data-frost='off'] #app {
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
 }
@@ -130,6 +129,11 @@ input:disabled,
 select:disabled,
 textarea:disabled {
   opacity: 0.45;
+}
+
+::placeholder {
+  color: var(--ad-muted);
+  opacity: 1;
 }
 
 button:focus-visible,
@@ -243,9 +247,11 @@ input[type='range']:focus {
 
 .ad-dialog,
 .ad-drawer {
-  background: var(--ad-raised);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: var(--ad-float);
+  border: 1px solid var(--ad-border);
   box-shadow: var(--ad-shadow-dialog);
+  backdrop-filter: blur(22px) saturate(1.08);
+  -webkit-backdrop-filter: blur(22px) saturate(1.08);
 }
 
 .ad-dialog {
@@ -275,9 +281,20 @@ input[type='range']:focus {
 .ad-menu {
   padding: 6px;
   border-radius: 10px;
-  background: var(--ad-raised);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: var(--ad-float);
+  border: 1px solid var(--ad-border);
   box-shadow: var(--ad-shadow-menu);
+  backdrop-filter: blur(22px) saturate(1.08);
+  -webkit-backdrop-filter: blur(22px) saturate(1.08);
+}
+
+html[data-theme='light'] .ad-dialog,
+html[data-theme='light'] .ad-drawer,
+html[data-theme='light'] .ad-menu {
+  --ad-raised: #ffffff;
+  --ad-harbor: #f5f5f5;
+  --ad-hover: #f1f1f1;
+  --ad-selected: #e8e8e8;
 }
 
 .ad-menu-item {
@@ -365,7 +382,6 @@ input[type='range']:focus {
   width: 3px;
   border-radius: 99px;
   background: #4ade80;
-  box-shadow: 0 0 8px rgba(74, 222, 128, 0.55);
   pointer-events: none;
 }
 
@@ -374,18 +390,16 @@ input[type='range']:focus {
 }
 
 .row.row--busy::before {
-  animation: live-rail-pulse 2.2s ease-in-out infinite;
+  animation: live-rail-pulse 1.5s ease-in-out infinite;
 }
 
 @keyframes live-rail-pulse {
   0%,
   100% {
     opacity: 1;
-    box-shadow: 0 0 8px rgba(74, 222, 128, 0.55);
   }
   50% {
     opacity: 0.28;
-    box-shadow: 0 0 2px rgba(74, 222, 128, 0.2);
   }
 }
 
