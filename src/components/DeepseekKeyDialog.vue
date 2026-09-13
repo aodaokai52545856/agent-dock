@@ -2,7 +2,7 @@
 import { ref, watch } from 'vue'
 import * as api from '../lib/api'
 import { DSH_PLATFORM_URL } from '../lib/dsh'
-import { selectedProject } from '../lib/store'
+import { noteDshKeyChange, selectedProject } from '../lib/store'
 import type { DshKeyBundle, DshKeyMeta } from '../lib/types'
 
 const props = defineProps<{
@@ -74,6 +74,7 @@ async function addKey() {
   error.value = ''
   try {
     data.value = await api.dshAddKey(name, key, projectPath())
+    noteDshKeyChange()
     nameDraft.value = ''
     keyDraft.value = ''
   } catch (err) {
@@ -89,6 +90,7 @@ async function switchTo(item: DshKeyMeta) {
   error.value = ''
   try {
     data.value = await api.dshSwitchKey(item.id, projectPath())
+    noteDshKeyChange()
   } catch (err) {
     error.value = err instanceof Error ? err.message : String(err)
   } finally {
@@ -103,6 +105,7 @@ async function removeKey() {
   error.value = ''
   try {
     data.value = await api.dshDeleteKey(item.id, projectPath())
+    noteDshKeyChange()
     removing.value = null
   } catch (err) {
     error.value = err instanceof Error ? err.message : String(err)

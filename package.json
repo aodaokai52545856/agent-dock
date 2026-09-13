@@ -1,7 +1,7 @@
 {
   "name": "agent-dock",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -21,7 +21,7 @@
     "test:layout": "node --experimental-strip-types src/lib/layout.test.ts && node --experimental-strip-types src/lib/titleDrag.test.ts",
     "test:bridge": "node --experimental-strip-types src/lib/reviewVerdict.test.ts",
     "test:flow": "node --experimental-strip-types src/lib/flow/envelope.test.ts && node --experimental-strip-types src/lib/flow/engine.test.ts && node --experimental-strip-types src/lib/flow/model.test.ts && node --experimental-strip-types src/lib/flow/ptyWait.test.ts && node --experimental-strip-types src/lib/flow/roles.test.ts",
-    "test:usage": "node --experimental-strip-types src/lib/grokUsage.test.ts && node --experimental-strip-types src/lib/grokSpend.test.ts",
+    "test:usage": "node --experimental-strip-types src/lib/grokUsage.test.ts && node --experimental-strip-types src/lib/grokSpend.test.ts && node --experimental-strip-types src/lib/dshBalance.test.ts",
     "test:appearance": "node --experimental-strip-types src/lib/appearance.test.ts && node --experimental-strip-types src/lib/uiGlass.test.ts",
     "test:cite": "node --experimental-strip-types src/lib/sessionCite.test.ts && node --experimental-strip-types src/lib/markdown.test.ts",
     "test:ccswitch": "node --experimental-strip-types src/lib/ccswitch.test.ts",

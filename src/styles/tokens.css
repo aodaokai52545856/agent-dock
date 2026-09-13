@@ -54,6 +54,8 @@
   --ad-glass-sheen: transparent;
   --ad-float: rgb(31 35 39 / 0.94);
   --ad-float-inset: rgb(25 28 32 / 0.96);
+  --ad-float-solid: #1f2327;
+  --ad-float-inset-solid: #191c20;
   --ad-mask: rgba(0, 0, 0, 0.56);
   --ad-blur: 0px;
   --ad-blur-strong: 0px;
@@ -100,6 +102,8 @@ html[data-theme='light'] {
   --ad-glass-soft: rgba(0, 0, 0, 0.04);
   --ad-float: rgb(255 255 255 / 0.97);
   --ad-float-inset: rgb(247 247 247 / 0.98);
+  --ad-float-solid: #ffffff;
+  --ad-float-inset-solid: #f7f7f7;
   --ad-mask: rgba(17, 17, 17, 0.34);
   --ad-primary: #171717;
   --ad-primary-text: #ffffff;

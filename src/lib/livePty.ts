@@ -1,3 +1,4 @@
+import { DSH_FIXED_SESSION_ID, DSH_FIXED_SESSION_TITLE } from './dsh.ts'
 import { pendingSessionId } from './liveBind.ts'
 import type { FocusedSession, LivePtyInfo, ToolId } from './types'
 
@@ -64,6 +65,13 @@ export function isCurrentSession(
 }
 
 export function focusedFromLive(item: LivePtyInfo): FocusedSession | null {
+  if (item.toolId === 'dsh') {
+    return {
+      toolId: 'dsh',
+      sessionId: DSH_FIXED_SESSION_ID,
+      title: item.title?.trim() || DSH_FIXED_SESSION_TITLE
+    }
+  }
   if (item.sessionId) {
     return {
       toolId: item.toolId,

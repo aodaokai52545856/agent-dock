@@ -164,7 +164,8 @@ pub fn rename_session(
         return Err("名称请控制在 80 个字以内".into());
     }
     match tool {
-        ToolId::Opencode | ToolId::Pi | ToolId::Dsh => Ok(RenameKind::Overlay),
+        ToolId::Opencode | ToolId::Pi => Ok(RenameKind::Overlay),
+        ToolId::Dsh => Err("DeepSeek 入口不能改名。".into()),
         ToolId::Claude => claude::rename_session(cwd, session_id, title).map(|_| RenameKind::Native),
         ToolId::Grokbuild => grokbuild::rename_session(cwd, session_id, title).map(|_| RenameKind::Native),
         ToolId::Kimi => kimi::rename_session(session_id, title).map(|_| RenameKind::Native),

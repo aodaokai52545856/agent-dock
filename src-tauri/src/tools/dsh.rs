@@ -1,13 +1,15 @@
 use super::{
-    BinaryProbe, RenameKind, SessionRow, ToolId, file_mtime_millis, first_string, matches_cwd,
-    resolve_binary, truncate_title,
+    BinaryProbe, RenameKind, SessionRow, ToolId, file_mtime_millis, resolve_binary,
 };
 use crate::platform;
 use crate::state::AppSettings;
 use serde::Serialize;
-use serde_json::Value;
-use std::collections::BTreeSet;
+#[cfg(test)]
+use super::{first_string, matches_cwd, truncate_title};
+#[cfg(test)]
 use std::fs;
+#[cfg(test)]
+use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -293,16 +295,10 @@ pub fn js_entry(exe: &Path) -> Option<PathBuf> {
     npm.is_file().then_some(npm)
 }
 
-pub fn dsh_home() -> PathBuf {
-    std::env::var_os("DSH_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            dirs::home_dir()
-                .unwrap_or_else(|| PathBuf::from("."))
-                .join(".dsh")
-        })
-}
+pub const FIXED_SESSION_ID: &str = "deepseek";
+pub const FIXED_SESSION_TITLE: &str = "deepseek";
 
+#[cfg(test)]
 pub fn encode_cwd(cwd: &str) -> String {
     let mut text = cwd.trim().trim_matches('"').replace('\\', "/");
     while text.len() > 1 && text.ends_with('/') {
@@ -312,31 +308,18 @@ pub fn encode_cwd(cwd: &str) -> String {
     format!("--{}--", trimmed.replace(['/', ':'], "-"))
 }
 
-fn session_roots() -> Vec<PathBuf> {
-    let mut roots = vec![dsh_home().join("sessions")];
-    if let Some(home) = dirs::home_dir() {
-        let tui = home.join(".dsh-tui").join("sessions");
-        if tui != roots[0] {
-            roots.push(tui);
-        }
-    }
-    roots
-}
-
 pub fn list_sessions(cwd: &str) -> Result<Vec<SessionRow>, String> {
-    let mut rows = Vec::new();
-    let mut seen = BTreeSet::new();
-    for root in session_roots() {
-        for row in list_sessions_in(&root, cwd)? {
-            if seen.insert(row.id.clone()) {
-                rows.push(row);
-            }
-        }
-    }
-    rows.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
-    Ok(rows)
+    Ok(vec![SessionRow {
+        tool_id: ToolId::Dsh,
+        id: FIXED_SESSION_ID.into(),
+        title: FIXED_SESSION_TITLE.into(),
+        cwd: cwd.to_string(),
+        updated_at: file_mtime_millis(Path::new(cwd)),
+        rename_kind: RenameKind::Overlay,
+    }])
 }
 
+#[cfg(test)]
 pub fn list_sessions_in(root: &Path, cwd: &str) -> Result<Vec<SessionRow>, String> {
     if !root.is_dir() {
         return Ok(Vec::new());
@@ -391,31 +374,11 @@ pub fn list_sessions_in(root: &Path, cwd: &str) -> Result<Vec<SessionRow>, Strin
     Ok(rows)
 }
 
-pub fn delete_session(cwd: &str, session_id: &str) -> Result<(), String> {
-    let dir = find_session_dir(cwd, session_id).ok_or_else(|| {
-        "没有找到这个 DeepSeek Harness 会话目录，无法删除。请确认 ~/.dsh/sessions 还在。".to_string()
-    })?;
-    fs::remove_dir_all(&dir).map_err(|err| format!("删除 DeepSeek Harness 会话失败：{err}"))
+pub fn delete_session(_cwd: &str, _session_id: &str) -> Result<(), String> {
+    Err("DeepSeek 入口不能删除。".into())
 }
 
-pub fn find_session_dir(cwd: &str, session_id: &str) -> Option<PathBuf> {
-    for root in session_roots() {
-        let preferred = root.join(encode_cwd(cwd)).join(session_id);
-        if preferred.is_dir() {
-            return Some(preferred);
-        }
-        if let Ok(projects) = fs::read_dir(&root) {
-            for project in projects.flatten() {
-                let candidate = project.path().join(session_id);
-                if candidate.is_dir() {
-                    return Some(candidate);
-                }
-            }
-        }
-    }
-    None
-}
-
+#[cfg(test)]
 fn session_log_file(dir: &Path) -> Option<PathBuf> {
     for name in [
         "session.jsonl",
@@ -433,6 +396,7 @@ fn session_log_file(dir: &Path) -> Option<PathBuf> {
     None
 }
 
+#[cfg(test)]
 fn read_session_meta(path: &Path, id: &str, fallback_cwd: &str) -> (String, String, i64) {
     let updated_at = file_mtime_millis(path);
     let Some(name) = path.file_name().and_then(|item| item.to_str()) else {
@@ -482,6 +446,7 @@ fn read_session_meta(path: &Path, id: &str, fallback_cwd: &str) -> (String, Stri
     )
 }
 
+#[cfg(test)]
 fn user_text(value: &Value) -> Option<String> {
     if let Some(s) = first_string(value, &["text", "content"]) {
         return Some(s);
@@ -609,6 +574,22 @@ mod tests {
             encode_cwd(r"D:\idea_jidian_projects\agent-dock"),
             "--D--idea_jidian_projects-agent-dock--"
         );
+    }
+
+    #[test]
+    fn lists_one_fixed_session_per_project() {
+        let rows = list_sessions(r"D:\idea_jidian_projects\agent-dock").unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, "deepseek");
+        assert_eq!(rows[0].title, "deepseek");
+        assert_eq!(rows[0].tool_id, ToolId::Dsh);
+        assert_eq!(rows[0].rename_kind, RenameKind::Overlay);
+    }
+
+    #[test]
+    fn refuses_to_delete_the_fixed_session() {
+        let err = delete_session(r"D:\tmp", "deepseek").unwrap_err();
+        assert!(err.contains("不能删除"));
     }
 
     #[test]

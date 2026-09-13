@@ -249,6 +249,17 @@ export interface GrokAccountList {
   accounts: GrokAccount[]
 }
 
+export interface DshBalance {
+  ok: boolean
+  available: boolean | null
+  currency: string | null
+  totalBalance: number | null
+  grantedBalance: number | null
+  toppedUpBalance: number | null
+  fetchedAt: string
+  message: string | null
+}
+
 export interface GrokUsage {
   ok: boolean
   usedPercent: number | null

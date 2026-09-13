@@ -32,6 +32,7 @@ import {
   resizeSidebar,
   toggleDocRail
 } from './lib/layout'
+import { DSH_FIXED_SESSION_ID, DSH_FIXED_SESSION_TITLE, isFixedDshSession } from './lib/dsh'
 import { isDshWeb, liveOfProject } from './lib/livePty'
 import {
   activeLive,
@@ -249,6 +250,10 @@ function askCloseAll(projectId?: string) {
 }
 
 function askDeleteSession(sessionId: string, toolId: ToolId) {
+  if (isFixedDshSession(toolId, sessionId)) {
+    showToast('DeepSeek 入口不能删除')
+    return
+  }
   if (isPendingSessionId(sessionId)) {
     showToast('这个会话还在写入磁盘，关掉终端即可')
     return
@@ -337,6 +342,7 @@ async function onConfirm() {
 }
 
 function startRename(payload: { sessionId: string; toolId: ToolId }) {
+  if (isFixedDshSession(payload.toolId, payload.sessionId)) return
   const session = findVisibleSession(payload.sessionId, payload.toolId)
   renamingId.value = payload.sessionId
   store.renamingSessionId = payload.sessionId
@@ -378,11 +384,12 @@ async function openSession(sessionId?: string, toolId?: ToolId) {
   if (store.sessionToolFilter !== 'all' && store.sessionToolFilter !== tool) {
     await setSessionToolFilter(tool)
   }
-  const session = sessionId ? store.sessions.find((item) => item.id === sessionId && item.toolId === tool) : undefined
+  const requestedId = tool === 'dsh' ? DSH_FIXED_SESSION_ID : sessionId
+  const session = requestedId ? store.sessions.find((item) => item.id === requestedId && item.toolId === tool) : undefined
   const target = resolveOpenTarget(store.live, {
     projectId: project.id,
     toolId: tool,
-    sessionId: sessionId ?? null,
+    sessionId: requestedId ?? null,
     sessionUpdatedAt: session?.updatedAt
   })
   if (target.action === 'switch' || target.action === 'bind-and-switch') {
@@ -409,7 +416,7 @@ async function openSession(sessionId?: string, toolId?: ToolId) {
       projectId: project.id,
       toolId: tool,
       sessionId: target.sessionId,
-      title: session?.title ?? '新会话',
+      title: session?.title ?? (tool === 'dsh' ? DSH_FIXED_SESSION_TITLE : '新会话'),
       cols: 120,
       rows: 32,
       uiTheme: resolvedTheme(

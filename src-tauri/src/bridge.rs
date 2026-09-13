@@ -264,7 +264,7 @@ impl AppServer {
                 "clientInfo": {
                     "name": "agent-dock",
                     "title": "Agent Dock",
-                    "version": "0.1.0"
+                    "version": "0.1.1"
                 }
             }),
             INIT_TIMEOUT,

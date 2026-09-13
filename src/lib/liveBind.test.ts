@@ -96,6 +96,40 @@ test('does not rebind a session already owned by another live pty', () => {
   assert.deepEqual(binds, [])
 })
 
+test('DeepSeek reuses the project web instead of opening another session', () => {
+  const liveDsh = live({
+    ptyId: 'w1',
+    toolId: 'dsh',
+    sessionId: 'session-old',
+    key: 'a|dsh|web',
+    title: 'DeepSeek Web'
+  })
+  assert.deepEqual(
+    resolveOpenTarget([liveDsh], { projectId: 'a', toolId: 'dsh', sessionId: 'deepseek' }),
+    { action: 'bind-and-switch', ptyId: 'w1', sessionId: 'deepseek' }
+  )
+  assert.deepEqual(
+    resolveOpenTarget(
+      [live({ ...liveDsh, sessionId: 'deepseek', key: 'a|dsh|deepseek' })],
+      { projectId: 'a', toolId: 'dsh', sessionId: null }
+    ),
+    { action: 'switch', ptyId: 'w1' }
+  )
+  assert.deepEqual(resolveOpenTarget([], { projectId: 'a', toolId: 'dsh', sessionId: null }), {
+    action: 'open',
+    sessionId: 'deepseek'
+  })
+})
+
+test('DeepSeek does not sprout a pending row beside the fixed session', () => {
+  const rows = pendingSessionRows(
+    [live({ ptyId: 'w1', toolId: 'dsh', sessionId: null, title: 'DeepSeek Web' })],
+    [session({ id: 'deepseek', toolId: 'dsh', title: 'deepseek' })],
+    'a'
+  )
+  assert.deepEqual(rows, [])
+})
+
 test('clicking a live session switches instead of opening a second pty', () => {
   const target = resolveOpenTarget(
     [live({ ptyId: 'p1', sessionId: 's1', key: 'a|grokbuild|s1' })],

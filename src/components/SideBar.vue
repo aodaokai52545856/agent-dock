@@ -2,6 +2,7 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { relativeTime } from '../lib/format'
 import { clampOverlayBox, endPaneAnim, layout, sidebarHeadCompact, sidebarPaneWidth, sidebarToolFilterUsesMark, toggleProjects } from '../lib/layout'
+import { isFixedDshSession } from '../lib/dsh'
 import { isPendingSessionId } from '../lib/liveBind'
 import { liveDotForPty, liveDotTitle, projectLiveDot, type LiveDotKind } from '../lib/livePulse'
 import { isCurrentSession, liveOfProject } from '../lib/livePty'
@@ -187,16 +188,28 @@ function menuPending() {
   return menu.value ? isPending(menu.value.sessionId) : false
 }
 
+function menuFixedDsh() {
+  return Boolean(menu.value && isFixedDshSession(menu.value.toolId, menu.value.sessionId))
+}
+
+function menuCanRename() {
+  return Boolean(menu.value && !menuPending() && !menuFixedDsh())
+}
+
+function menuCanDelete() {
+  return Boolean(menu.value && !menuPending() && !menuFixedDsh())
+}
+
 function menuCanCite() {
   return Boolean(menu.value && !menuPending() && (menu.value.toolId === 'grokbuild' || menu.value.toolId === 'kimi'))
 }
 
 function activateMenu(index: number) {
-  if (index === 0) renameSession()
+  if (index === 0 && menuCanRename()) renameSession()
   if (index === 1 && menuCanCite()) citeSession()
   if (index === 2 && menuLive()) closeSession()
   if (index === 3 && menuCanCloseAll()) closeAllSessions()
-  if (index === 4 && !menuPending()) deleteSession()
+  if (index === 4 && menuCanDelete()) deleteSession()
 }
 
 function citeSession() {
@@ -293,7 +306,7 @@ function onKey(event: KeyboardEvent) {
   }
   if (event.key === 'F2') {
     event.preventDefault()
-    renameSession()
+    if (menuCanRename()) renameSession()
   }
 }
 
@@ -555,6 +568,7 @@ onUnmounted(() => {
           role="menuitem"
           class="ad-menu-item"
           :class="{ 'is-focus': menu.focus === 0 }"
+          :disabled="!menuCanRename()"
           @mouseenter="menu.focus = 0"
           @click="renameSession"
         >
@@ -602,7 +616,7 @@ onUnmounted(() => {
           role="menuitem"
           class="ad-menu-item ad-menu-item--danger"
           :class="{ 'is-focus': menu.focus === 4 }"
-          :disabled="menuPending()"
+          :disabled="!menuCanDelete()"
           @mouseenter="menu.focus = 4"
           @click="deleteSession"
         >

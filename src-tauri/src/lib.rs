@@ -2,6 +2,7 @@ mod bridge;
 mod clipboard;
 mod ccswitch;
 mod cursor_dev;
+mod dsh_balance;
 mod dsh_credentials;
 mod dsh_embed;
 mod dsh_keys;
@@ -30,6 +31,7 @@ use std::path::Path;
 use std::sync::Arc;
 use tauri::webview::PageLoadEvent;
 use tauri::{AppHandle, Emitter, Manager, State};
+use dsh_balance::DshBalance;
 use grok_accounts::GrokAccountList;
 use grok_spend::GrokSpend;
 use grok_usage::GrokUsage;
@@ -428,6 +430,13 @@ fn dsh_rename_key(
 }
 
 #[tauri::command]
+async fn dsh_balance(app: AppHandle, project_id: Option<String>) -> Result<DshBalance, String> {
+    tauri::async_runtime::spawn_blocking(move || crate::dsh_balance::fetch(&app, project_id.as_deref()))
+        .await
+        .map_err(|err| format!("读取 DeepSeek 余额失败：{err}"))
+}
+
+#[tauri::command]
 fn remember_ccswitch_path(app: AppHandle, path: String) -> Result<AppState, String> {
     let mut state = state::load_state(&app)?;
     ccswitch::remember_path(&mut state.settings, &path)?;
@@ -549,6 +558,9 @@ fn list_sessions_inner(app: &AppHandle, project_id: String, tool_id: ToolId) -> 
     match tools::list_sessions(tool_id, &project.path, &state.settings) {
         Ok(mut sessions) => {
             for row in &mut sessions {
+                if tool_id == ToolId::Dsh {
+                    continue;
+                }
                 if let Some(overlay) = state::overlay_title(&state.title_overlays, tool_id.as_str(), &row.id)
                 {
                     row.title = overlay.to_string();
@@ -877,6 +889,7 @@ pub fn run() {
             dsh_switch_key,
             dsh_delete_key,
             dsh_rename_key,
+            dsh_balance,
             open_external,
             list_grok_accounts,
             grok_usage,

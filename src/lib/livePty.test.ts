@@ -134,15 +134,15 @@ test('isCurrentSession follows the active PTY, not just a live background sessio
   )
 })
 
-test('isCurrentSession keeps a pending DeepSeek row selected while it is the active PTY', () => {
-  const pending = pty({ ptyId: 'n', projectId: 'aitools', title: '新会话', sessionId: null, toolId: 'dsh' })
-  const focused = focusedFromLive(pending)
-  assert.equal(focused?.sessionId, '__pending:n')
+test('isCurrentSession keeps the fixed DeepSeek row selected while its web is open', () => {
+  const liveDsh = pty({ ptyId: 'n', projectId: 'aitools', title: 'DeepSeek Web', sessionId: null, toolId: 'dsh' })
+  const focused = focusedFromLive(liveDsh)
+  assert.equal(focused?.sessionId, 'deepseek')
   assert.equal(
-    isCurrentSession('__pending:n', 'dsh', {
-      activePtyId: pending.ptyId,
+    isCurrentSession('deepseek', 'dsh', {
+      activePtyId: liveDsh.ptyId,
       focused,
-      live: pending
+      live: liveDsh
     }),
     true
   )

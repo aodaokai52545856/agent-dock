@@ -540,7 +540,7 @@ function onPanelKey(event: KeyboardEvent) {
   width: 520px;
   padding: 12px;
   border-radius: 12px;
-  background: var(--ad-raised);
+  background: var(--ad-float-inset-solid);
   border: 1px solid var(--ad-border);
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
   z-index: 2;

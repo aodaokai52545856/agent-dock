@@ -1,9 +1,12 @@
 import assert from 'node:assert/strict'
 import {
+  DSH_FIXED_SESSION_ID,
+  DSH_FIXED_SESSION_TITLE,
   DSH_KEY_NAME,
   DSH_PLATFORM_URL,
   DSH_WEB_CONFLICT_MARK,
   isDshWebConflict,
+  isFixedDshSession,
   maskSecret,
   sourceLabel
 } from './dsh.ts'
@@ -36,6 +39,14 @@ test('conflict toast is recognized and does not look like a missing key', () => 
   assert.equal(isDshWebConflict('dsh web 启动超时，没有给出页面地址。'), false)
   assert.ok(!foreign.includes('API Key'))
   assert.ok(foreign.includes('不会结束你自己开的进程'))
+})
+
+test('each project has one fixed DeepSeek session that cannot be created or deleted', () => {
+  assert.equal(DSH_FIXED_SESSION_ID, 'deepseek')
+  assert.equal(DSH_FIXED_SESSION_TITLE, 'deepseek')
+  assert.equal(isFixedDshSession('dsh', 'deepseek'), true)
+  assert.equal(isFixedDshSession('dsh', 'session-abc'), false)
+  assert.equal(isFixedDshSession('grokbuild', 'deepseek'), false)
 })
 
 test('frontend never treats masked value as the secret', () => {

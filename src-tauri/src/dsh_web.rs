@@ -89,9 +89,15 @@ impl Hub {
         app: &AppHandle,
         state: &AppState,
         project_id: &str,
-        session_id: Option<String>,
+        _session_id: Option<String>,
         title: String,
     ) -> Result<PtyOpened, String> {
+        let session_id = Some(tools::dsh::FIXED_SESSION_ID.to_string());
+        let title = if title.trim().is_empty() {
+            tools::dsh::FIXED_SESSION_TITLE.to_string()
+        } else {
+            title
+        };
         if self.shutting_down.load(Ordering::SeqCst) {
             return Err("Agent Dock 正在关闭，无法打开 DeepSeek Web。".into());
         }
@@ -99,17 +105,13 @@ impl Hub {
             let mut sessions = lock_sessions(&self.sessions);
             reap(&mut sessions);
             if let Some(existing) = sessions.values_mut().find(|item| item.project_id == project_id) {
-                if session_id.is_some() {
-                    existing.session_id = session_id.clone();
-                }
-                if !title.trim().is_empty() {
-                    existing.title = title.clone();
-                }
+                existing.session_id = session_id.clone();
+                existing.title = title.clone();
                 return Ok(PtyOpened {
                     pty_id: existing.id.clone(),
                     key: existing.key.clone(),
                     reused: true,
-                    session_id: session_id.clone().or_else(|| existing.session_id.clone()),
+                    session_id: session_id.clone(),
                     title: existing.title.clone(),
                     opened_at: existing.opened_at,
                     kind: "web".into(),

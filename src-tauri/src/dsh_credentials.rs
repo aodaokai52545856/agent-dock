@@ -85,21 +85,9 @@ pub fn describe(
     project_dir: Option<&Path>,
 ) -> DshKeyStatus {
     let credentials_path = dsh_home.join(CREDENTIALS_FILE);
-    let env_value = process_key.map(str::trim).filter(|item| !item.is_empty());
-    let file_value = read_file_key(&credentials_path).ok().flatten();
-    let project_value = project_dir.and_then(|dir| read_dotenv_key(&dir.join(".env")));
-    let user_env_value = read_dotenv_key(&dsh_home.join(USER_ENV_FILE));
-
-    let (source, value) = if let Some(value) = env_value {
-        ("env", value.to_string())
-    } else if let Some(value) = file_value {
-        ("file", value)
-    } else if let Some(value) = project_value {
-        ("project-env", value)
-    } else if let Some(value) = user_env_value {
-        ("user-env", value)
-    } else {
-        ("none", String::new())
+    let (source, value) = match resolve_key(dsh_home, process_key, project_dir) {
+        Some(item) => (item.source, item.value),
+        None => ("none", String::new()),
     };
 
     DshKeyStatus {
@@ -111,6 +99,45 @@ pub fn describe(
         credentials_path: credentials_path.display().to_string(),
         env_blocks: source == "env",
     }
+}
+
+pub fn live_secret(project_dir: Option<&Path>) -> Option<String> {
+    let home = dirs::home_dir();
+    let dsh_home = resolve_dsh_home(std::env::var(DSH_HOME_ENV).ok().as_deref(), home.as_deref());
+    resolve_key(&dsh_home, std::env::var(KEY_NAME).ok().as_deref(), project_dir).map(|item| item.value)
+}
+
+struct ResolvedKey {
+    source: &'static str,
+    value: String,
+}
+
+fn resolve_key(dsh_home: &Path, process_key: Option<&str>, project_dir: Option<&Path>) -> Option<ResolvedKey> {
+    if let Some(value) = process_key.map(str::trim).filter(|item| !item.is_empty()) {
+        return Some(ResolvedKey {
+            source: "env",
+            value: value.to_string(),
+        });
+    }
+    if let Some(value) = read_file_key(&dsh_home.join(CREDENTIALS_FILE)).ok().flatten() {
+        return Some(ResolvedKey {
+            source: "file",
+            value,
+        });
+    }
+    if let Some(value) = project_dir.and_then(|dir| read_dotenv_key(&dir.join(".env"))) {
+        return Some(ResolvedKey {
+            source: "project-env",
+            value,
+        });
+    }
+    if let Some(value) = read_dotenv_key(&dsh_home.join(USER_ENV_FILE)) {
+        return Some(ResolvedKey {
+            source: "user-env",
+            value,
+        });
+    }
+    None
 }
 
 pub fn set_key(dsh_home: &Path, key: &str) -> Result<DshKeyStatus, String> {
@@ -279,6 +306,17 @@ mod tests {
         assert_eq!(status.source, "env");
         assert!(status.env_blocks);
         assert_eq!(status.masked, mask_secret("from-process"));
+    }
+
+    #[test]
+    fn resolve_key_returns_file_secret() {
+        let root = tempfile::tempdir().unwrap();
+        let dsh = root.path().join(".dsh");
+        fs::create_dir_all(&dsh).unwrap();
+        set_key(&dsh, "from-file").unwrap();
+        let resolved = resolve_key(&dsh, None, None).unwrap();
+        assert_eq!(resolved.source, "file");
+        assert_eq!(resolved.value, "from-file");
     }
 
     #[test]

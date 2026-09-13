@@ -8,6 +8,7 @@ import type {
   CcswitchProbe,
   CodexProbe,
   CodexThreadList,
+  DshBalance,
   DshKeyBundle,
   DshKeyStatus,
   CursorDevResult,
@@ -439,6 +440,22 @@ export async function dshDeleteKey(id: string, projectPath?: string | null): Pro
 
 export async function dshRenameKey(id: string, name: string, projectPath?: string | null): Promise<DshKeyBundle> {
   return invoke('dsh_rename_key', { id, name, projectPath: projectPath ?? null })
+}
+
+const previewBalance = (): DshBalance => ({
+  ok: true,
+  available: true,
+  currency: 'CNY',
+  totalBalance: 110,
+  grantedBalance: 10,
+  toppedUpBalance: 100,
+  fetchedAt: new Date().toISOString(),
+  message: null
+})
+
+export async function dshBalance(projectId?: string | null): Promise<DshBalance> {
+  if (!isTauri) return previewBalance()
+  return invoke('dsh_balance', { projectId: projectId || null })
 }
 
 export async function openExternal(url: string): Promise<void> {

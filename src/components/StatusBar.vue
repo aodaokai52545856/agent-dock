@@ -8,12 +8,19 @@ import {
   shouldShowGrokUsage,
   usageTone
 } from '../lib/grokUsage'
+import {
+  DSH_BALANCE_INTERVAL_MS,
+  balanceTone,
+  formatBalanceLine,
+  formatBalanceTooltip,
+  shouldShowDshBalance
+} from '../lib/dshBalance'
 import SpendPanel from './SpendPanel.vue'
 import { SPEND_PANEL_WIDTH, formatSpendLine, resolveSpendRange, type SpendPreset } from '../lib/grokSpend'
 import { groupLiveByProject, toolTint } from '../lib/livePty'
 import { currentPipeline, jumpToLive, selectedProject, store } from '../lib/store'
 import { GATE_LABEL, toolLabel } from '../lib/types'
-import type { GrokSpend, GrokUsage } from '../lib/types'
+import type { DshBalance, GrokSpend, GrokUsage } from '../lib/types'
 
 defineProps<{
   docsOpen?: boolean
@@ -29,12 +36,19 @@ const usage = ref<GrokUsage | null>(null)
 const usageLoading = ref(false)
 const spend = ref<GrokSpend | null>(null)
 const spendLoading = ref(false)
+const dshBalance = ref<DshBalance | null>(null)
+const dshLoading = ref(false)
 let usageTimer = 0
+let dshTimer = 0
 let usageSeq = 0
 let spendSeq = 0
+let dshSeq = 0
 
 const showGrokUsage = computed(() =>
   shouldShowGrokUsage(store.sessionToolFilter, store.selectedTool, store.appMode)
+)
+const showDshBalance = computed(() =>
+  shouldShowDshBalance(store.sessionToolFilter, store.selectedTool, store.appMode)
 )
 
 const usageText = computed(() => {
@@ -48,6 +62,15 @@ const usageTitle = computed(() => {
 })
 
 const usageClass = computed(() => usageTone(usage.value?.ok ? usage.value.remainingPercent : null))
+const dshText = computed(() => {
+  if (dshBalance.value) return formatBalanceLine(dshBalance.value)
+  return dshLoading.value ? 'DeepSeek 余额…' : 'DeepSeek 余额'
+})
+const dshTitle = computed(() => {
+  if (dshBalance.value) return formatBalanceTooltip(dshBalance.value)
+  return dshLoading.value ? '正在读取 DeepSeek 余额' : '点击读取 DeepSeek 余额'
+})
+const dshClass = computed(() => balanceTone(dshBalance.value))
 const spendText = computed(() => formatSpendLine(spend.value, spendLoading.value))
 const initialRange = resolveSpendRange('today')
 const spendPreset = ref<SpendPreset>('today')
@@ -154,6 +177,34 @@ function onKey(event: KeyboardEvent) {
   }
 }
 
+async function loadDshBalance() {
+  if (!showDshBalance.value) return
+  const seq = ++dshSeq
+  const had = Boolean(dshBalance.value)
+  if (!had) dshLoading.value = true
+  try {
+    const next = await api.dshBalance(store.selectedProjectId || null)
+    if (seq !== dshSeq) return
+    if (next.ok || !dshBalance.value) dshBalance.value = next
+  } catch (err) {
+    if (seq !== dshSeq) return
+    if (!dshBalance.value) {
+      dshBalance.value = {
+        ok: false,
+        available: null,
+        currency: null,
+        totalBalance: null,
+        grantedBalance: null,
+        toppedUpBalance: null,
+        fetchedAt: new Date().toISOString(),
+        message: err instanceof Error ? err.message : '读取 DeepSeek 余额失败，点击重试'
+      }
+    }
+  } finally {
+    if (seq === dshSeq) dshLoading.value = false
+  }
+}
+
 async function loadUsage() {
   if (!showGrokUsage.value) return
   const seq = ++usageSeq
@@ -230,6 +281,13 @@ function stopUsageTimer() {
   }
 }
 
+function stopDshTimer() {
+  if (dshTimer) {
+    window.clearInterval(dshTimer)
+    dshTimer = 0
+  }
+}
+
 watch(
   [showGrokUsage, () => store.selectedProjectId, () => store.grokAuthRev],
   ([show]) => {
@@ -254,6 +312,24 @@ watch(
   { immediate: true }
 )
 
+watch(
+  [showDshBalance, () => store.selectedProjectId, () => store.dshKeyRev],
+  ([show]) => {
+    stopDshTimer()
+    dshSeq += 1
+    dshBalance.value = null
+    if (!show) {
+      dshLoading.value = false
+      return
+    }
+    void loadDshBalance()
+    dshTimer = window.setInterval(() => {
+      void loadDshBalance()
+    }, DSH_BALANCE_INTERVAL_MS)
+  },
+  { immediate: true }
+)
+
 onMounted(() => {
   window.addEventListener('click', onDocClick)
   window.addEventListener('keydown', onKey)
@@ -263,7 +339,9 @@ onMounted(() => {
 onUnmounted(() => {
   usageSeq += 1
   spendSeq += 1
+  dshSeq += 1
   stopUsageTimer()
+  stopDshTimer()
   window.removeEventListener('click', onDocClick)
   window.removeEventListener('keydown', onKey)
   window.removeEventListener('resize', onResize)
@@ -336,6 +414,17 @@ watch(liveCount, (n) => {
       @click="loadUsage"
     >
       {{ usageText }}
+    </button>
+    <button
+      v-if="showDshBalance"
+      type="button"
+      class="usage"
+      :class="dshClass"
+      :title="dshTitle"
+      :disabled="dshLoading && !dshBalance"
+      @click="loadDshBalance"
+    >
+      {{ dshText }}
     </button>
     <div v-if="showGrokUsage" class="live-wrap">
       <button
@@ -518,5 +607,8 @@ watch(liveCount, (n) => {
 .spend-panel {
   max-height: min(92vh, 760px);
   overflow: auto;
+  background: var(--ad-float-solid);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
 }
 </style>

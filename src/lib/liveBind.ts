@@ -1,3 +1,4 @@
+import { DSH_FIXED_SESSION_ID } from './dsh.ts'
 import type { LivePtyInfo, SessionRow, ToolId } from './types'
 
 export const PENDING_SESSION_PREFIX = '__pending:'
@@ -104,6 +105,14 @@ export function resolveOpenTarget(
   }
 
   const same = live.filter((item) => sameProjectTool(item, projectId, toolId))
+  if (toolId === 'dsh') {
+    const existing = same[0]
+    if (existing) {
+      if (existing.sessionId === DSH_FIXED_SESSION_ID) return { action: 'switch', ptyId: existing.ptyId }
+      return { action: 'bind-and-switch', ptyId: existing.ptyId, sessionId: DSH_FIXED_SESSION_ID }
+    }
+    return { action: 'open', sessionId: DSH_FIXED_SESSION_ID }
+  }
   if (sessionId) {
     const exact = same.find((item) => item.sessionId === sessionId)
     if (exact) return { action: 'switch', ptyId: exact.ptyId }
@@ -148,6 +157,7 @@ export function pendingSessionRows(
 ): SessionRow[] {
   return live
     .filter((item) => item.projectId === projectId && item.alive !== false)
+    .filter((item) => item.toolId !== 'dsh')
     .filter(
       (item) =>
         !item.sessionId ||

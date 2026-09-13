@@ -2,6 +2,12 @@ export const DSH_PLATFORM_URL = 'https://platform.deepseek.com'
 export const DSH_DOCS_URL = 'https://deepseek-harness.github.io/deepseek-harness/'
 export const DSH_KEY_NAME = 'DEEPSEEK_API_KEY'
 export const DSH_WEB_CONFLICT_MARK = 'DeepSeek Web 进程冲突'
+export const DSH_FIXED_SESSION_ID = 'deepseek'
+export const DSH_FIXED_SESSION_TITLE = 'deepseek'
+
+export function isFixedDshSession(toolId: string, sessionId: string) {
+  return toolId === 'dsh' && sessionId === DSH_FIXED_SESSION_ID
+}
 
 export function isDshWebConflict(message: string) {
   return message.includes(DSH_WEB_CONFLICT_MARK)

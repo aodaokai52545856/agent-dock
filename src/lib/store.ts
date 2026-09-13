@@ -1,5 +1,6 @@
 import { computed, reactive } from 'vue'
 import * as api from './api'
+import { DSH_FIXED_SESSION_ID, DSH_FIXED_SESSION_TITLE } from './dsh'
 import {
   isPendingSessionId,
   keepLiveTitle,
@@ -166,6 +167,7 @@ export const store = reactive({
   toast: '' as string,
   toastTimer: 0,
   grokAuthRev: 0,
+  dshKeyRev: 0,
   appMode: 'console' as AppMode,
   bridgePaneMode: 'edit' as 'edit' | 'run',
   bridgeSelectedNodeId: '',
@@ -205,6 +207,9 @@ export function findLiveForSession(sessionId: string, toolId: ToolId, projectId 
   if (isPendingSessionId(sessionId)) {
     const ptyId = ptyIdFromPending(sessionId)
     return store.live.find((item) => item.ptyId === ptyId && item.alive !== false) ?? null
+  }
+  if (toolId === 'dsh') {
+    return store.live.find((item) => item.projectId === projectId && item.toolId === 'dsh' && item.alive !== false) ?? null
   }
   return (
     store.live.find(
@@ -302,6 +307,10 @@ export function noteGrokAccountChange() {
   store.grokAuthRev += 1
 }
 
+export function noteDshKeyChange() {
+  store.dshKeyRev += 1
+}
+
 export function showToast(message: string) {
   store.toast = message
   window.clearTimeout(store.toastTimer)
@@ -336,6 +345,14 @@ export async function boot() {
     ]
     store.selectedProjectId = 'preview-aitools'
     previewSessions['preview-aitools'] = [
+      {
+        toolId: 'dsh',
+        id: DSH_FIXED_SESSION_ID,
+        title: DSH_FIXED_SESSION_TITLE,
+        cwd: '',
+        updatedAt: now - 60000,
+        renameKind: 'overlay'
+      },
       {
         toolId: 'grokbuild',
         id: 's1',

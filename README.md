@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <img alt="version" src="https://img.shields.io/badge/version-0.1.0-111111?style=flat-square">
+  <img alt="version" src="https://img.shields.io/badge/version-0.1.1-111111?style=flat-square">
   <img alt="platform" src="https://img.shields.io/badge/Windows%20%7C%20macOS%20%7C%20Linux-0d0d0d?style=flat-square">
   <img alt="stack" src="https://img.shields.io/badge/Tauri%202%20%2B%20Vue%203%20%2B%20Rust-141414?style=flat-square">
   <img alt="license" src="https://img.shields.io/badge/license-Apache%202.0-3d9a6a?style=flat-square">
@@ -61,7 +61,7 @@ Agent Dock 是一个 **frameless 深色桌面启动器**：
 
 - **文档栏**：Grok / Kimi 会话写出的 plan / spec / doc，可预览 Markdown，也可引用对话片段
 - **Grok 多账号**：切换账号会关掉旧的 Grok 终端，避免混用身份
-- **用量与花费**：状态栏 / 面板读取 Grok 额度与 token 花费
+- **用量与花费**：状态栏 / 面板读取 Grok 额度与 token 花费；DeepSeek 显示剩余人民币
 - **CLI 版本**：探测、升级、卸载本机工具；可安装并启动 CC Switch
 - **DeepSeek 密钥**：在 Dock 里管理 `.credentials.yaml`，不把明文写进仓库
 - **外观**：浅色 / 深色 / 跟随系统，强调色、字体、对比度、侧栏半透明、窗口透明度与毛玻璃
@@ -113,7 +113,7 @@ npm run tauri:dev
 
 **必须在对应系统上打包**，不能从 Windows 打出 `.dmg` / `.AppImage`。打好的安装包把界面打进二进制，不再监听开发端口。产物落到 `release/`。
 
-版本号读 `package.json` 的 `version`，产物文件名带这个版本，例如当前 `0.1.0` 会打出 `AgentDock-0.1.0-Setup.exe`。
+版本号读 `package.json` 的 `version`，产物文件名带这个版本，例如当前 `0.1.1` 会打出 `AgentDock-0.1.1-Setup.exe`。
 
 ```bash
 npm run pack          # 当前系统
