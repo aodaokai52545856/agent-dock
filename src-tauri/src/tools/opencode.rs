@@ -35,9 +35,7 @@ pub fn list_sessions(cwd: &str, settings: &AppSettings) -> Result<Vec<SessionRow
         ));
     }
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let parsed: Vec<OpenCodeSession> = serde_json::from_str(stdout.trim()).map_err(|err| {
-        format!("OpenCode 返回的 session 列表不是 JSON：{err}。请升级 OpenCode 后重试。")
-    })?;
+    let parsed = parse_session_list_json(&stdout)?;
     let mut rows: Vec<SessionRow> = parsed
         .into_iter()
         .filter(|item| {
@@ -130,6 +128,27 @@ fn output_with_timeout(mut cmd: Command, timeout: Duration) -> Result<std::proce
     }
 }
 
+fn parse_session_list_json(text: &str) -> Result<Vec<OpenCodeSession>, String> {
+    let trimmed = text.trim();
+    // OpenCode 1.18+ prints nothing and exits 0 when the project has no sessions.
+    if trimmed.is_empty() {
+        return Ok(Vec::new());
+    }
+    serde_json::from_str(trimmed).or_else(|_| {
+        let start = trimmed.find('[').ok_or_else(|| json_error(trimmed))?;
+        let end = trimmed.rfind(']').ok_or_else(|| json_error(trimmed))?;
+        if end < start {
+            return Err(json_error(trimmed));
+        }
+        serde_json::from_str(&trimmed[start..=end]).map_err(|_| json_error(trimmed))
+    })
+}
+
+fn json_error(sample: &str) -> String {
+    let preview = sample.chars().take(80).collect::<String>();
+    format!("OpenCode 返回的 session 列表不是 JSON。请升级 OpenCode 后重试。 {preview}")
+}
+
 fn trim_detail(stderr: &str) -> String {
     let line = stderr.lines().find(|l| !l.trim().is_empty()).unwrap_or("").trim();
     if line.is_empty() {
@@ -149,5 +168,22 @@ mod tests {
             delete_args("ses_abc"),
             ["session", "delete", "ses_abc"]
         );
+    }
+
+    #[test]
+    fn empty_stdout_means_no_sessions() {
+        assert!(parse_session_list_json("").unwrap().is_empty());
+        assert!(parse_session_list_json("  \n").unwrap().is_empty());
+    }
+
+    #[test]
+    fn parses_pretty_json_array() {
+        let json = r#"[
+  {"id":"ses_1","title":"Fix layout","directory":"D:\\idea_jidian_projects\\agent-dock"}
+]"#;
+        let rows = parse_session_list_json(json).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, "ses_1");
+        assert_eq!(rows[0].title, "Fix layout");
     }
 }
