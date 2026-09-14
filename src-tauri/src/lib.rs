@@ -545,16 +545,6 @@ fn list_sessions_inner(app: &AppHandle, project_id: String, tool_id: ToolId) -> 
         });
     }
     let probe = tools::probe_binary(tool_id, &state.settings);
-    if !probe.found {
-        return Ok(SessionListResult {
-            ok: false,
-            sessions: Vec::new(),
-            tool_found: false,
-            tool_path: None,
-            error_kind: Some("cli_missing".into()),
-            message: probe.message,
-        });
-    }
     match tools::list_sessions(tool_id, &project.path, &state.settings) {
         Ok(mut sessions) => {
             for row in &mut sessions {
@@ -566,22 +556,40 @@ fn list_sessions_inner(app: &AppHandle, project_id: String, tool_id: ToolId) -> 
                     row.title = overlay.to_string();
                 }
             }
+            if sessions.is_empty() && !probe.found {
+                return Ok(SessionListResult {
+                    ok: false,
+                    sessions: Vec::new(),
+                    tool_found: false,
+                    tool_path: probe.path,
+                    error_kind: Some("cli_missing".into()),
+                    message: probe.message,
+                });
+            }
             Ok(SessionListResult {
                 ok: true,
                 sessions,
-                tool_found: true,
+                tool_found: probe.found,
                 tool_path: probe.path,
                 error_kind: None,
-                message: None,
+                message: if probe.found { None } else { probe.message },
             })
         }
         Err(message) => Ok(SessionListResult {
             ok: false,
             sessions: Vec::new(),
-            tool_found: true,
+            tool_found: probe.found,
             tool_path: probe.path,
-            error_kind: Some("scan_failed".into()),
-            message: Some(message),
+            error_kind: Some(if probe.found {
+                "scan_failed".into()
+            } else {
+                "cli_missing".into()
+            }),
+            message: Some(if probe.found {
+                message
+            } else {
+                probe.message.unwrap_or(message)
+            }),
         }),
     }
 }

@@ -4,6 +4,14 @@ import { relativeTime } from '../lib/format'
 import { clampOverlayBox, endPaneAnim, layout, sidebarHeadCompact, sidebarPaneWidth, sidebarToolFilterUsesMark, toggleProjects } from '../lib/layout'
 import { isFixedDshSession } from '../lib/dsh'
 import { isPendingSessionId } from '../lib/liveBind'
+import {
+  SESSION_GROUP_COLLAPSE_KEY,
+  groupBodyHidden,
+  parseCollapsedGroups,
+  serializeCollapsedGroups,
+  shouldShowSessionGroupHead,
+  toggleCollapsedGroup
+} from '../lib/sessionGroups'
 import { liveDotForPty, liveDotTitle, projectLiveDot, type LiveDotKind } from '../lib/livePulse'
 import { isCurrentSession, liveOfProject } from '../lib/livePty'
 import { findLiveForSession, isSessionScanning, projectSessionRows, setSessionLiveOnly, setSessionToolFilter, store, visibleSessions } from '../lib/store'
@@ -39,6 +47,9 @@ const MENU_WIDTH = 228
 const MENU_HEIGHT = 226
 const filterOpen = ref(false)
 const filterFocus = ref(0)
+const collapsedGroups = ref(
+  parseCollapsedGroups(typeof localStorage === 'undefined' ? null : localStorage.getItem(SESSION_GROUP_COLLAPSE_KEY))
+)
 
 const toolFilterOptions = computed(() => [{ id: 'all' as const, label: '全部' }, ...TOOLS])
 const liveFilter = computed(() => store.sessionLiveOnly)
@@ -55,16 +66,18 @@ const filterUsesMark = computed(
 )
 
 const visibleTools = computed(() => {
-  const installed = TOOLS.filter((tool) => isToolInstalled(store.probes, tool.id))
   const listed = (id: ToolId) =>
     projectSessionRows.value.some((row) => row.toolId === id) ||
     Boolean(store.sessionErrors[id]) ||
     store.sessionLoading[id]
-  if (liveFilter.value) return installed.filter((tool) => listed(tool.id))
-  if (store.sessionToolFilter !== 'all' && installed.some((tool) => tool.id === store.sessionToolFilter)) {
-    return installed.filter((tool) => tool.id === store.sessionToolFilter)
+  const present = TOOLS.filter(
+    (tool) => isToolInstalled(store.probes, tool.id) || listed(tool.id)
+  )
+  if (liveFilter.value) return present.filter((tool) => listed(tool.id))
+  if (store.sessionToolFilter !== 'all' && TOOLS.some((tool) => tool.id === store.sessionToolFilter)) {
+    return TOOLS.filter((tool) => tool.id === store.sessionToolFilter)
   }
-  return installed.filter((tool) => listed(tool.id))
+  return present
 })
 
 const groups = computed(() =>
@@ -79,7 +92,24 @@ const groups = computed(() =>
     .filter((group) => !liveFilter.value || group.sessions.length)
 )
 
+const showGroupHeads = computed(() =>
+  shouldShowSessionGroupHead(visibleTools.value.length, liveFilter.value)
+)
+
 const liveCount = computed(() => liveOfProject(store.live, store.selectedProjectId).length)
+
+function isGroupCollapsed(id: ToolId) {
+  return collapsedGroups.value.has(id)
+}
+
+function hideGroupBody(id: ToolId) {
+  return groupBodyHidden(isGroupCollapsed(id), store.sessionQuery)
+}
+
+function toggleGroup(id: ToolId) {
+  collapsedGroups.value = toggleCollapsedGroup(collapsedGroups.value, id)
+  localStorage.setItem(SESSION_GROUP_COLLAPSE_KEY, serializeCollapsedGroups(collapsedGroups.value))
+}
 
 function onPaneTransitionEnd(event: TransitionEvent) {
   if (event.propertyName !== 'width') return
@@ -157,7 +187,7 @@ function filterHint(id: SessionToolFilter) {
 }
 
 function isFilterDisabled(id: SessionToolFilter) {
-  return Boolean(filterHint(id))
+  return filterHint(id) === '未安装'
 }
 
 function pickFilter(id: SessionToolFilter) {
@@ -527,10 +557,24 @@ onUnmounted(() => {
         <div v-else class="session-pane" :class="{ 'is-busy': store.sessionRefreshBusy }">
         <div class="groups">
           <section v-for="group in groups" :key="group.tool.id" class="group">
-            <p v-if="liveFilter || visibleTools.length > 1" class="group-title">
-              <span>{{ group.tool.label }}</span>
-            </p>
-            <div v-if="group.error" class="group-error">
+            <button
+              v-if="showGroupHeads"
+              type="button"
+              class="group-title"
+              :aria-expanded="!hideGroupBody(group.tool.id)"
+              :title="isGroupCollapsed(group.tool.id) ? '展开 ' + group.tool.label : '折叠 ' + group.tool.label"
+              @click="toggleGroup(group.tool.id)"
+            >
+              <svg class="fold-caret" :class="{ 'is-closed': isGroupCollapsed(group.tool.id) }" viewBox="0 0 16 16" aria-hidden="true">
+                <path d="M6 4.5 10 8l-4 3.5" />
+              </svg>
+              <span class="group-mark" aria-hidden="true">
+                <ToolMark :id="group.tool.id" />
+              </span>
+              <span class="group-label">{{ group.tool.label }}</span>
+              <span class="group-count">{{ group.sessions.length }}</span>
+            </button>
+            <div v-if="!hideGroupBody(group.tool.id) && group.error" class="group-error">
               <p>{{ group.error.message }}</p>
               <button
                 v-if="group.error.kind === 'cli_missing'"
@@ -541,7 +585,7 @@ onUnmounted(() => {
                 去检查安装
               </button>
             </div>
-            <ul v-else-if="group.sessions.length" class="sessions">
+            <ul v-else-if="!hideGroupBody(group.tool.id) && group.sessions.length" class="sessions">
               <li v-for="session in group.sessions" :key="session.id">
                 <div
                   class="row"
@@ -575,7 +619,7 @@ onUnmounted(() => {
                 </div>
               </li>
             </ul>
-            <p v-else class="muted group-empty">暂无会话</p>
+            <p v-else-if="!hideGroupBody(group.tool.id)" class="muted group-empty">暂无会话</p>
           </section>
         </div>
           <div v-if="store.sessionRefreshBusy" class="session-mask" role="status" aria-live="polite">
@@ -1174,10 +1218,43 @@ onUnmounted(() => {
 .group-title {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin: 0 12px 6px;
+  gap: 6px;
+  width: calc(100% - 16px);
+  height: 24px;
+  margin: 0 8px 4px;
+  padding: 0 4px;
+  border-radius: var(--ad-radius-control);
   font-size: 11px;
   line-height: 20px;
+  color: var(--ad-faint);
+}
+
+.group-title:hover {
+  color: var(--ad-text);
+  background: var(--ad-hover);
+}
+
+.group-title .fold-caret {
+  width: 10px;
+  height: 10px;
+}
+
+.group-mark {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+
+.group-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.group-count {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
   color: var(--ad-faint);
 }
 

@@ -339,14 +339,10 @@ export function isToolInstalled(probes: ToolProbeMap | null | undefined, id: Too
 }
 
 export function toolsToScanForFilter(
-  filter: SessionToolFilter,
-  probes: ToolProbeMap | null | undefined
+  _filter: SessionToolFilter,
+  _probes: ToolProbeMap | null | undefined
 ): ToolId[] {
-  const installed = TOOLS.filter((tool) => isToolInstalled(probes, tool.id)).map((tool) => tool.id)
-  if (filter !== 'all' && TOOLS.some((tool) => tool.id === filter)) {
-    return installed.includes(filter) ? [filter] : []
-  }
-  return installed
+  return TOOLS.map((tool) => tool.id)
 }
 
 export type SessionFilterAvail = {
@@ -361,6 +357,7 @@ export function sessionFilterBlock(
   avail?: SessionFilterAvail
 ): 'missing' | 'empty' | null {
   if (id === 'all') return null
+  if (avail?.hasSessions) return null
   if (!isToolInstalled(probes, id)) return 'missing'
   if (!avail) return null
   if (avail.scanning || avail.hasError) return null
@@ -373,7 +370,8 @@ export function clampSessionToolFilter(
   probes: ToolProbeMap | null | undefined,
   avail?: SessionFilterAvail
 ): SessionToolFilter {
-  if (filter === 'all' || sessionFilterBlock(filter, probes, avail)) return 'all'
+  if (filter === 'all') return 'all'
+  if (sessionFilterBlock(filter, probes, avail) === 'missing') return 'all'
   return filter
 }
 

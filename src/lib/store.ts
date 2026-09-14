@@ -42,7 +42,6 @@ import type {
 import {
   TOOLS,
   clampSessionToolFilter,
-  isToolInstalled,
   parseSessionToolFilter,
   toolsToScanForFilter
 } from './types'
@@ -560,12 +559,6 @@ async function refreshSessionsNow(opts?: { silent?: boolean }) {
   store.sessionError = ''
   store.sessionErrorKind = ''
   store.sessionStatus = 'ready'
-  if (store.probes) {
-    store.sessions = store.sessions.filter((item) => isToolInstalled(store.probes, item.toolId))
-    for (const tool of TOOLS) {
-      if (!isToolInstalled(store.probes, tool.id)) delete store.sessionErrors[tool.id]
-    }
-  }
   if (!opts?.silent) store.sessionRefreshBusy = true
   try {
     for (const toolId of tools) {
@@ -756,9 +749,6 @@ function clampCurrentToolFilter() {
 
 export function setToolProbes(probes: ToolProbeMap) {
   store.probes = probes
-  const next = clampSessionToolFilter(store.sessionToolFilter, probes)
-  store.sessionToolFilter = next
-  store.settings.sessionToolFilter = next
 }
 
 export async function setSessionToolFilter(id: SessionToolFilter) {

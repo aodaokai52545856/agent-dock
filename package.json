@@ -26,7 +26,7 @@
     "test:cite": "node --experimental-strip-types src/lib/sessionCite.test.ts && node --experimental-strip-types src/lib/markdown.test.ts",
     "test:ccswitch": "node --experimental-strip-types src/lib/ccswitch.test.ts",
     "test:dsh": "node --experimental-strip-types src/lib/dsh.test.ts && node --experimental-strip-types src/lib/dshGlass.test.ts && node --experimental-strip-types src/lib/dshEmbed.test.ts",
-    "test:live": "node --experimental-strip-types src/lib/livePty.test.ts && node --experimental-strip-types src/lib/liveBind.test.ts && node --experimental-strip-types src/lib/livePulse.test.ts && node --experimental-strip-types src/lib/types.test.ts && node --experimental-strip-types src/lib/toolVersions.test.ts",
+    "test:live": "node --experimental-strip-types src/lib/livePty.test.ts && node --experimental-strip-types src/lib/liveBind.test.ts && node --experimental-strip-types src/lib/livePulse.test.ts && node --experimental-strip-types src/lib/types.test.ts && node --experimental-strip-types src/lib/toolVersions.test.ts && node --experimental-strip-types src/lib/sessionGroups.test.ts",
     "spike:app-server": "node scripts/spike_app_server.mjs"
   },
   "dependencies": {
