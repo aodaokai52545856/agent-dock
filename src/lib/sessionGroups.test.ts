@@ -3,6 +3,7 @@ import {
   groupBodyHidden,
   parseCollapsedGroups,
   serializeCollapsedGroups,
+  sessionLiveFilterLabel,
   shouldShowSessionGroupHead,
   toggleCollapsedGroup
 } from './sessionGroups.ts'
@@ -37,4 +38,9 @@ test('group heads only show in the all-tools list', () => {
   assert.equal(shouldShowSessionGroupHead(1), false)
   assert.equal(shouldShowSessionGroupHead(2), true)
   assert.equal(shouldShowSessionGroupHead(1, true), true)
+})
+
+test('live filter switch labels all sessions when off', () => {
+  assert.equal(sessionLiveFilterLabel(false), '全部会话')
+  assert.equal(sessionLiveFilterLabel(true), '已开对话')
 })

@@ -9,6 +9,7 @@ import {
   groupBodyHidden,
   parseCollapsedGroups,
   serializeCollapsedGroups,
+  sessionLiveFilterLabel,
   shouldShowSessionGroupHead,
   toggleCollapsedGroup
 } from '../lib/sessionGroups'
@@ -53,6 +54,7 @@ const collapsedGroups = ref(
 
 const toolFilterOptions = computed(() => [{ id: 'all' as const, label: '全部' }, ...TOOLS])
 const liveFilter = computed(() => store.sessionLiveOnly)
+const liveFilterLabel = computed(() => sessionLiveFilterLabel(liveFilter.value))
 const compactHead = computed(() => sidebarHeadCompact(layout.sidebarWidth))
 const filterLabel = computed(
   () => toolFilterOptions.value.find((option) => option.id === store.sessionToolFilter)?.label ?? '全部'
@@ -511,12 +513,17 @@ onUnmounted(() => {
             <button
               type="button"
               class="live-filter"
-              :class="{ 'is-active': liveFilter }"
-              :aria-pressed="liveFilter"
-              aria-label="已开对话"
+              :class="{ 'is-on': liveFilter }"
+              role="switch"
+              :aria-checked="liveFilter"
+              :aria-label="liveFilterLabel"
+              :title="liveFilterLabel"
               @click="pickLiveFilter"
             >
-              已开对话
+              <span class="live-filter-switch" aria-hidden="true">
+                <span class="live-filter-thumb" />
+              </span>
+              <span class="live-filter-label">{{ liveFilterLabel }}</span>
               <span v-if="liveCount" class="live-filter-count">{{ liveCount }}</span>
             </button>
           </div>
@@ -843,9 +850,9 @@ onUnmounted(() => {
 .live-filter {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
   height: 28px;
-  padding: 0 8px;
+  padding: 0 8px 0 6px;
   border-radius: var(--ad-radius-control);
   color: var(--ad-muted);
   font-size: 12px;
@@ -858,9 +865,44 @@ onUnmounted(() => {
   background: var(--ad-hover);
 }
 
-.live-filter.is-active {
+.live-filter.is-on {
   color: var(--ad-text);
-  background: var(--ad-hover);
+}
+
+.live-filter-switch {
+  width: 28px;
+  height: 16px;
+  padding: 2px;
+  border-radius: 999px;
+  background: var(--ad-faint);
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+}
+
+.live-filter.is-on .live-filter-switch {
+  background: var(--ad-success);
+}
+
+.live-filter-thumb {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #fff;
+  transform: translateX(0);
+  transition: transform var(--ad-transition);
+}
+
+.live-filter.is-on .live-filter-thumb {
+  transform: translateX(12px);
+}
+
+.live-filter-label {
+  white-space: nowrap;
+}
+
+.block-head.is-compact .live-filter-label {
+  display: none;
 }
 
 .live-filter-count {

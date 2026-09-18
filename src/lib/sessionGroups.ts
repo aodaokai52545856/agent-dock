@@ -34,3 +34,7 @@ export function groupBodyHidden(collapsed: boolean, query = '') {
 export function shouldShowSessionGroupHead(groupCount: number, liveOnly = false) {
   return liveOnly || groupCount > 1
 }
+
+export function sessionLiveFilterLabel(liveOnly: boolean) {
+  return liveOnly ? '已开对话' : '全部会话'
+}
