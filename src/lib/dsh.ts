@@ -1,9 +1,35 @@
+import type { DshKeyBundle, DshKeyMeta } from './types'
+
 export const DSH_PLATFORM_URL = 'https://platform.deepseek.com'
 export const DSH_DOCS_URL = 'https://deepseek-harness.github.io/deepseek-harness/'
 export const DSH_KEY_NAME = 'DEEPSEEK_API_KEY'
 export const DSH_WEB_CONFLICT_MARK = 'DeepSeek Web 进程冲突'
 export const DSH_FIXED_SESSION_ID = 'deepseek'
 export const DSH_FIXED_SESSION_TITLE = 'deepseek'
+export const DSH_LIVE_KEY_ID = '__live__'
+
+export function displayDshKeys(bundle: Pick<DshKeyBundle, 'status' | 'keys'>): DshKeyMeta[] {
+  if (bundle.keys.length) return bundle.keys
+  if (!bundle.status.configured || !bundle.status.masked) return []
+  return [
+    {
+      id: DSH_LIVE_KEY_ID,
+      name: '当前正在使用',
+      masked: bundle.status.masked,
+      updatedAt: '',
+      active: true,
+      managed: false
+    }
+  ]
+}
+
+export function showDshKeyEmpty(keys: DshKeyMeta[], error: string): boolean {
+  return keys.length === 0 && !error.trim()
+}
+
+export function isManagedDshKey(item: DshKeyMeta): boolean {
+  return item.managed !== false && item.id !== DSH_LIVE_KEY_ID
+}
 
 export function isFixedDshSession(toolId: string, sessionId: string) {
   return toolId === 'dsh' && sessionId === DSH_FIXED_SESSION_ID

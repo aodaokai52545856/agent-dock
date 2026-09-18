@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import * as api from '../lib/api'
-import { DSH_PLATFORM_URL } from '../lib/dsh'
+import { DSH_PLATFORM_URL, displayDshKeys, isManagedDshKey, showDshKeyEmpty } from '../lib/dsh'
 import { noteDshKeyChange, selectedProject } from '../lib/store'
 import type { DshKeyBundle, DshKeyMeta } from '../lib/types'
 
@@ -23,13 +23,16 @@ const data = ref<DshKeyBundle>({
     credentialsPath: '',
     envBlocks: false
   },
-  keys: []
+  keys: [],
+  vaultError: null
 })
 const nameDraft = ref('')
 const keyDraft = ref('')
 const busy = ref('')
 const error = ref('')
 const removing = ref<DshKeyMeta | null>(null)
+const rows = computed(() => displayDshKeys(data.value))
+const showEmpty = computed(() => showDshKeyEmpty(rows.value, error.value))
 
 watch(
   () => props.open,
@@ -47,13 +50,24 @@ function projectPath() {
   return selectedProject.value?.path
 }
 
+function applyBundle(bundle: DshKeyBundle) {
+  data.value = bundle
+  error.value = bundle.vaultError ?? ''
+}
+
 async function reload() {
   busy.value = 'load'
   error.value = ''
   try {
-    data.value = await api.dshListKeys(projectPath())
+    applyBundle(await api.dshListKeys(projectPath()))
   } catch (err) {
     error.value = err instanceof Error ? err.message : String(err)
+    try {
+      const status = await api.dshKeyStatus(projectPath())
+      applyBundle({ status, keys: [], vaultError: error.value })
+    } catch {
+      // keep the empty bundle; the decrypt/load error is already shown
+    }
   } finally {
     busy.value = ''
   }
@@ -73,7 +87,7 @@ async function addKey() {
   busy.value = 'save'
   error.value = ''
   try {
-    data.value = await api.dshAddKey(name, key, projectPath())
+    applyBundle(await api.dshAddKey(name, key, projectPath()))
     noteDshKeyChange()
     nameDraft.value = ''
     keyDraft.value = ''
@@ -85,11 +99,11 @@ async function addKey() {
 }
 
 async function switchTo(item: DshKeyMeta) {
-  if (item.active || busy.value) return
+  if (item.active || busy.value || !isManagedDshKey(item)) return
   busy.value = 'switch'
   error.value = ''
   try {
-    data.value = await api.dshSwitchKey(item.id, projectPath())
+    applyBundle(await api.dshSwitchKey(item.id, projectPath()))
     noteDshKeyChange()
   } catch (err) {
     error.value = err instanceof Error ? err.message : String(err)
@@ -100,11 +114,11 @@ async function switchTo(item: DshKeyMeta) {
 
 async function removeKey() {
   const item = removing.value
-  if (!item) return
+  if (!item || !isManagedDshKey(item)) return
   busy.value = 'delete'
   error.value = ''
   try {
-    data.value = await api.dshDeleteKey(item.id, projectPath())
+    applyBundle(await api.dshDeleteKey(item.id, projectPath()))
     noteDshKeyChange()
     removing.value = null
   } catch (err) {
@@ -152,11 +166,11 @@ function openPlatform() {
       <p v-if="data.status.envBlocks" class="field-error">系统环境变量里已有 Key，会盖过这里的切换。</p>
 
       <section>
-        <p class="kicker">已保存 {{ data.keys.length ? `(${data.keys.length})` : '' }}</p>
+        <p class="kicker">已保存 {{ rows.length ? `(${rows.length})` : '' }}</p>
         <p v-if="busy === 'load'" class="muted">正在读取…</p>
-        <p v-else-if="!data.keys.length" class="muted">还没有 Key。添加后会出现在这份列表里，可切换、删除。</p>
-        <ul v-else class="list">
-          <li v-for="item in data.keys" :key="item.id" class="item" :class="{ 'item--active': item.active }">
+        <p v-else-if="showEmpty" class="muted">还没有 Key。添加后会出现在这份列表里，可切换、删除。</p>
+        <ul v-else-if="rows.length" class="list">
+          <li v-for="item in rows" :key="item.id" class="item" :class="{ 'item--active': item.active }">
             <div>
               <div class="item-name">
                 {{ item.name }}
@@ -165,10 +179,22 @@ function openPlatform() {
               <div class="item-email">{{ item.masked }}</div>
             </div>
             <div class="item-ops">
-              <button type="button" class="link" :disabled="!!busy || item.active" @click="switchTo(item)">
+              <button
+                type="button"
+                class="link"
+                :disabled="!!busy || item.active || !isManagedDshKey(item)"
+                @click="switchTo(item)"
+              >
                 {{ busy === 'switch' ? '切换中…' : '切换' }}
               </button>
-              <button type="button" class="link link-danger" :disabled="!!busy" @click="removing = item">删除</button>
+              <button
+                type="button"
+                class="link link-danger"
+                :disabled="!!busy || !isManagedDshKey(item)"
+                @click="removing = item"
+              >
+                删除
+              </button>
             </div>
           </li>
         </ul>

@@ -3,11 +3,15 @@ import {
   DSH_FIXED_SESSION_ID,
   DSH_FIXED_SESSION_TITLE,
   DSH_KEY_NAME,
+  DSH_LIVE_KEY_ID,
   DSH_PLATFORM_URL,
   DSH_WEB_CONFLICT_MARK,
+  displayDshKeys,
   isDshWebConflict,
   isFixedDshSession,
+  isManagedDshKey,
   maskSecret,
+  showDshKeyEmpty,
   sourceLabel
 } from './dsh.ts'
 
@@ -53,4 +57,56 @@ test('frontend never treats masked value as the secret', () => {
   const masked = maskSecret('sk-work-abcdefghijk')
   assert.notEqual(masked, 'sk-work-abcdefghijk')
   assert.ok(!masked.includes('work-abcdef'))
+})
+
+const idleStatus = {
+  configured: false,
+  writable: true,
+  source: 'none',
+  masked: '',
+  dshHome: '~/.dsh',
+  credentialsPath: '~/.dsh/.credentials.yaml',
+  envBlocks: false
+}
+
+test('display keys fall back to live harness key when vault list is empty but configured', () => {
+  const rows = displayDshKeys({
+    status: { ...idleStatus, configured: true, source: 'file', masked: 'sk-5…6c44' },
+    keys: [],
+    vaultError: '无法用 Windows 用户凭据解密 Key。请确认是同一台电脑、同一个 Windows 用户。'
+  })
+  assert.equal(rows.length, 1)
+  assert.equal(rows[0].id, DSH_LIVE_KEY_ID)
+  assert.equal(rows[0].name, '当前正在使用')
+  assert.equal(rows[0].masked, 'sk-5…6c44')
+  assert.equal(rows[0].active, true)
+  assert.equal(rows[0].managed, false)
+  assert.equal(isManagedDshKey(rows[0]), false)
+})
+
+test('empty copy is hidden when a live key or vault error exists', () => {
+  const live = displayDshKeys({
+    status: { ...idleStatus, configured: true, source: 'file', masked: 'sk-5…6c44' },
+    keys: []
+  })
+  assert.equal(showDshKeyEmpty(live, ''), false)
+  assert.equal(showDshKeyEmpty([], '无法用 Windows 用户凭据解密 Key。'), false)
+  assert.equal(showDshKeyEmpty([], ''), true)
+})
+
+test('vault keys stay as-is and remain managed', () => {
+  const work = {
+    id: 'a',
+    name: '工作号',
+    masked: 'sk-ab…wxyz',
+    updatedAt: '',
+    active: true,
+    managed: true
+  }
+  const rows = displayDshKeys({
+    status: { ...idleStatus, configured: true, source: 'file', masked: 'sk-ab…wxyz' },
+    keys: [work]
+  })
+  assert.deepEqual(rows, [work])
+  assert.equal(isManagedDshKey(work), true)
 })

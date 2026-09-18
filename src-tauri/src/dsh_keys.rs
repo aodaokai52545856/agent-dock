@@ -7,6 +7,8 @@ use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager};
 use uuid::Uuid;
 
+pub const LIVE_KEY_ID: &str = "__live__";
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DshKeyMeta {
@@ -15,6 +17,7 @@ pub struct DshKeyMeta {
     pub masked: String,
     pub updated_at: String,
     pub active: bool,
+    pub managed: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -22,6 +25,8 @@ pub struct DshKeyMeta {
 pub struct DshKeyBundle {
     pub status: DshKeyStatus,
     pub keys: Vec<DshKeyMeta>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vault_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -50,14 +55,14 @@ pub fn active_secret(app: &AppHandle) -> Option<String> {
 }
 
 pub fn list(app: &AppHandle, project_dir: Option<&Path>) -> Result<DshKeyBundle, String> {
-    let vault = load_vault(app)?;
-    Ok(bundle(vault, project_dir))
+    let status = dsh_credentials::live_status(project_dir);
+    Ok(list_from(load_vault(app), status))
 }
 
 pub fn add(app: &AppHandle, name: &str, secret: &str, project_dir: Option<&Path>) -> Result<DshKeyBundle, String> {
     let name = normalize_name(name)?;
     let secret = validate_secret(secret)?;
-    let mut vault = load_vault(app)?;
+    let mut vault = vault_or_empty(load_vault(app));
     let id = Uuid::new_v4().to_string();
     vault.keys.push(StoredKey {
         id: id.clone(),
@@ -113,21 +118,63 @@ pub fn rename(app: &AppHandle, id: &str, name: &str, project_dir: Option<&Path>)
 }
 
 fn bundle(vault: Vault, project_dir: Option<&Path>) -> DshKeyBundle {
-    let active = vault.active_id.clone();
-    DshKeyBundle {
-        status: dsh_credentials::live_status(project_dir),
-        keys: vault
-            .keys
-            .into_iter()
-            .map(|item| DshKeyMeta {
-                active: active.as_deref() == Some(item.id.as_str()),
-                masked: dsh_credentials::mask_secret(&item.secret),
-                id: item.id,
-                name: item.name,
-                updated_at: item.updated_at,
-            })
-            .collect(),
+    list_from(Ok(vault), dsh_credentials::live_status(project_dir))
+}
+
+fn empty_vault() -> Vault {
+    Vault {
+        version: 1,
+        active_id: None,
+        keys: Vec::new(),
     }
+}
+
+fn vault_or_empty(result: Result<Vault, String>) -> Vault {
+    result.unwrap_or_else(|_| empty_vault())
+}
+
+fn list_from(vault: Result<Vault, String>, status: DshKeyStatus) -> DshKeyBundle {
+    let (vault, vault_error) = match vault {
+        Ok(vault) => (vault, None),
+        Err(err) => (empty_vault(), Some(err)),
+    };
+    let active = vault.active_id.clone();
+    let mut keys: Vec<DshKeyMeta> = vault
+        .keys
+        .into_iter()
+        .map(|item| DshKeyMeta {
+            active: active.as_deref() == Some(item.id.as_str()),
+            masked: dsh_credentials::mask_secret(&item.secret),
+            id: item.id,
+            name: item.name,
+            updated_at: item.updated_at,
+            managed: true,
+        })
+        .collect();
+    if keys.is_empty() {
+        if let Some(live) = live_row(&status) {
+            keys.push(live);
+        }
+    }
+    DshKeyBundle {
+        status,
+        keys,
+        vault_error,
+    }
+}
+
+fn live_row(status: &DshKeyStatus) -> Option<DshKeyMeta> {
+    if !status.configured || status.masked.is_empty() {
+        return None;
+    }
+    Some(DshKeyMeta {
+        id: LIVE_KEY_ID.into(),
+        name: "当前正在使用".into(),
+        masked: status.masked.clone(),
+        updated_at: String::new(),
+        active: true,
+        managed: false,
+    })
 }
 
 fn apply_active(vault: &Vault) -> Result<(), String> {
@@ -182,11 +229,7 @@ fn validate_secret(secret: &str) -> Result<&str, String> {
 fn load_vault(app: &AppHandle) -> Result<Vault, String> {
     let path = vault_path(app)?;
     if !path.exists() {
-        return Ok(Vault {
-            version: 1,
-            active_id: None,
-            keys: Vec::new(),
-        });
+        return Ok(empty_vault());
     }
     let sealed: SealedFile =
         serde_json::from_str(&fs::read_to_string(&path).map_err(|err| format!("无法读取保险箱：{err}"))?)
@@ -228,24 +271,41 @@ fn save_vault(app: &AppHandle, vault: &Vault) -> Result<(), String> {
 
 fn resolve_or_create_master(app: &AppHandle) -> Result<[u8; secret_box::MASTER_LEN], String> {
     let path = vault_path(app)?;
-    if path.exists() {
-        let sealed: SealedFile =
-            serde_json::from_str(&fs::read_to_string(&path).map_err(|err| format!("无法读取保险箱：{err}"))?)
-                .map_err(|_| "保险箱文件损坏。".to_string())?;
-        let wrapped = sealed
+    let existing = if path.exists() {
+        fs::read_to_string(&path)
+            .ok()
+            .and_then(|text| serde_json::from_str(&text).ok())
+    } else {
+        None
+    };
+    master_for_save(existing.as_ref(), &master_path(app)?)
+}
+
+fn master_for_save(
+    existing: Option<&SealedFile>,
+    master_file: &Path,
+) -> Result<[u8; secret_box::MASTER_LEN], String> {
+    if let Some(sealed) = existing {
+        if let Ok(wrapped) = sealed
             .wrapped_key
             .as_deref()
             .map(secret_box::decode)
-            .transpose()?;
-        return secret_box::unwrap_master(&sealed.protect, wrapped.as_deref(), &master_path(app)?);
+            .transpose()
+        {
+            if let Ok(master) = secret_box::unwrap_master(&sealed.protect, wrapped.as_deref(), master_file)
+            {
+                return Ok(master);
+            }
+        }
     }
     #[cfg(windows)]
     {
+        let _ = master_file;
         return secret_box::random_master();
     }
     #[cfg(not(windows))]
     {
-        secret_box::ensure_master_file(&master_path(app)?)
+        secret_box::ensure_master_file(master_file)
     }
 }
 
@@ -330,5 +390,79 @@ mod tests {
         assert!(validate_secret("").is_err());
         assert!(validate_secret("sk x").is_err());
         assert!(validate_secret("sk-ok").is_ok());
+    }
+
+    fn file_status(masked: &str) -> DshKeyStatus {
+        DshKeyStatus {
+            configured: !masked.is_empty(),
+            writable: true,
+            source: if masked.is_empty() { "none".into() } else { "file".into() },
+            masked: masked.into(),
+            dsh_home: "/tmp/.dsh".into(),
+            credentials_path: "/tmp/.dsh/.credentials.yaml".into(),
+            env_blocks: false,
+        }
+    }
+
+    #[test]
+    fn vault_error_still_shows_live_harness_key() {
+        let err = "无法用 Windows 用户凭据解密 Key。请确认是同一台电脑、同一个 Windows 用户。";
+        let bundle = list_from(Err(err.into()), file_status("sk-a…mnop"));
+        assert_eq!(bundle.keys.len(), 1);
+        assert_eq!(bundle.keys[0].id, LIVE_KEY_ID);
+        assert_eq!(bundle.keys[0].name, "当前正在使用");
+        assert_eq!(bundle.keys[0].masked, "sk-a…mnop");
+        assert!(bundle.keys[0].active);
+        assert!(!bundle.keys[0].managed);
+        assert_eq!(bundle.vault_error.as_deref(), Some(err));
+        assert!(bundle.status.configured);
+    }
+
+    #[test]
+    fn vault_error_without_live_key_is_empty_list_not_failure() {
+        let bundle = list_from(Err("decrypt fail".into()), file_status(""));
+        assert!(bundle.keys.is_empty());
+        assert_eq!(bundle.vault_error.as_deref(), Some("decrypt fail"));
+        assert!(!bundle.status.configured);
+    }
+
+    #[test]
+    fn empty_vault_with_live_key_shows_harness_row() {
+        let bundle = list_from(Ok(empty_vault()), file_status("sk-a…mnop"));
+        assert_eq!(bundle.keys.len(), 1);
+        assert_eq!(bundle.keys[0].id, LIVE_KEY_ID);
+        assert!(!bundle.keys[0].managed);
+        assert!(bundle.vault_error.is_none());
+    }
+
+    #[test]
+    fn vault_keys_are_managed_and_hide_live_row() {
+        let bundle = list_from(Ok(sample_vault()), file_status("sk-a…mnop"));
+        assert_eq!(bundle.keys.len(), 2);
+        assert!(bundle.keys.iter().all(|item| item.managed));
+        assert!(bundle.vault_error.is_none());
+        assert!(bundle.keys[0].active);
+    }
+
+    #[test]
+    fn unreadable_vault_becomes_empty_for_write() {
+        let vault = vault_or_empty(Err("无法用 Windows 用户凭据解密 Key。".into()));
+        assert!(vault.keys.is_empty());
+        assert!(vault.active_id.is_none());
+    }
+
+    #[test]
+    fn fresh_master_when_existing_sealed_cannot_open() {
+        let sealed = SealedFile {
+            version: 1,
+            protect: "file".into(),
+            wrapped_key: None,
+            nonce: secret_box::encode(&[0; 12]),
+            ciphertext: secret_box::encode(&[1, 2, 3]),
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let master_file = dir.path().join("missing.key");
+        let master = master_for_save(Some(&sealed), &master_file).unwrap();
+        assert_eq!(master.len(), secret_box::MASTER_LEN);
     }
 }
