@@ -34,6 +34,24 @@ fn project_dir_names(cwd: &str) -> Vec<String> {
     names
 }
 
+pub fn find_session_file(cwd: &str, session_id: &str) -> Option<PathBuf> {
+    find_session_file_in(&claude_home(), cwd, session_id)
+}
+
+pub fn find_session_file_in(home: &Path, cwd: &str, session_id: &str) -> Option<PathBuf> {
+    let id = session_id.trim();
+    if id.is_empty() {
+        return None;
+    }
+    for name in project_dir_names(cwd) {
+        let path = home.join("projects").join(name).join(format!("{id}.jsonl"));
+        if path.is_file() {
+            return Some(path);
+        }
+    }
+    None
+}
+
 pub fn list_sessions(cwd: &str) -> Result<Vec<SessionRow>, String> {
     list_sessions_in(&claude_home(), cwd)
 }
@@ -407,11 +425,13 @@ mod tests {
         .unwrap();
         fs::write(dir.join("agent-skip.jsonl"), "{}\n").unwrap();
         let rows = list_sessions_in(&root, cwd).unwrap();
+        let found = find_session_file_in(&root, cwd, "abc-123");
         fs::remove_dir_all(&root).ok();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].id, "abc-123");
         assert_eq!(rows[0].tool_id, ToolId::Claude);
         assert!(rows[0].title.contains("Fix the login form"));
+        assert_eq!(found.as_deref(), Some(dir.join("abc-123.jsonl").as_path()));
     }
 
     #[test]

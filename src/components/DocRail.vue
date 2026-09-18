@@ -32,8 +32,7 @@ const railSession = computed(() => {
       item.projectId === store.selectedProjectId &&
       item.alive &&
       item.sessionId &&
-      !isPendingSessionId(item.sessionId) &&
-      (item.toolId === 'grokbuild' || item.toolId === 'kimi')
+      !isPendingSessionId(item.sessionId)
   )
   if (live?.sessionId) {
     return { toolId: live.toolId, sessionId: live.sessionId, title: live.title }
@@ -55,7 +54,7 @@ async function loadDocs() {
     error.value = ''
     return
   }
-  if (session.toolId === 'opencode') {
+  if (session.toolId === 'dsh') {
     docs.value = []
     status.value = 'empty'
     error.value = ''
@@ -120,11 +119,11 @@ function openCite() {
 
 const emptyCopy = computed(() => {
   if (!selectedProject.value) return '先选一个项目。'
-  if (!railSession.value && !activeLive.value) return '打开 Grok 或 Kimi 会话后，这里会列出这次写过的文档。'
-  if (railSession.value?.toolId === 'opencode') {
-    return 'OpenCode 会话没有可预览文档，但仍可作为引用目标。'
+  if (!railSession.value && !activeLive.value) return '打开会话后，这里会列出这次写出的 Markdown 和最后总结。'
+  if (railSession.value?.toolId === 'dsh') {
+    return 'DeepSeek Web 会话没有可预览文档。'
   }
-  return '这次会话还没有写出 Markdown 文档。'
+  return '这次会话还没有写出 Markdown，也还没有可展示的总结。'
 })
 </script>
 
@@ -156,11 +155,13 @@ const emptyCopy = computed(() => {
         <li v-for="doc in docs" :key="doc.path">
           <button type="button" class="doc" @click="emit('open', doc)">
             <span class="doc-top">
-              <span class="ad-tag">{{ kindLabel(doc.kind) }}</span>
+              <span class="ad-tag" :class="{ 'is-summary': doc.kind === 'summary' }">{{ kindLabel(doc.kind) }}</span>
               <span class="doc-time">{{ relativeTime(doc.updatedAt) }}</span>
             </span>
             <span class="doc-title" :title="doc.title">{{ doc.title }}</span>
-            <span class="doc-path" :title="doc.relPath || doc.path">{{ doc.relPath || '会话文件' }}</span>
+            <span class="doc-path" :title="doc.relPath || doc.path">{{
+              doc.kind === 'summary' ? '来自会话记录' : doc.relPath || '会话文件'
+            }}</span>
           </button>
         </li>
       </ul>
@@ -275,6 +276,11 @@ const emptyCopy = computed(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.ad-tag.is-summary {
+  color: var(--ad-text);
+  background: var(--ad-selected);
 }
 
 .doc-path,

@@ -35,6 +35,18 @@ impl ToolId {
         }
     }
 
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "opencode" => Some(Self::Opencode),
+            "grokbuild" => Some(Self::Grokbuild),
+            "kimi" => Some(Self::Kimi),
+            "claude" => Some(Self::Claude),
+            "pi" => Some(Self::Pi),
+            "dsh" => Some(Self::Dsh),
+            _ => None,
+        }
+    }
+
     pub fn display_name(self) -> &'static str {
         match self {
             ToolId::Opencode => "OpenCode",
@@ -292,6 +304,14 @@ pub fn find_grok_session_dir(cwd: &str, session_id: &str) -> Option<PathBuf> {
 
 pub fn find_kimi_session_dir(session_id: &str) -> Option<PathBuf> {
     kimi::find_session_dir(session_id)
+}
+
+pub fn claude_home() -> PathBuf {
+    claude::claude_home()
+}
+
+pub fn find_claude_session_file(cwd: &str, session_id: &str) -> Option<PathBuf> {
+    claude::find_session_file(cwd, session_id)
 }
 
 #[cfg(test)]

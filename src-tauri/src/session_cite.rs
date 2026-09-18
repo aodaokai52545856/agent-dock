@@ -5,7 +5,7 @@ use serde::Serialize;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fs;
-use std::io::{Read, Seek};
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use tauri::AppHandle;
 
@@ -14,6 +14,8 @@ const DOC_BYTE_CAP: u64 = 1_500_000;
 const MAX_DOCS: usize = 80;
 const MAX_TURNS: usize = 80;
 const MAX_TURN_CHARS: usize = 20_000;
+const MIN_SUMMARY_CHARS: usize = 16;
+const SUMMARY_PREFIX: &str = "agent-dock:summary:";
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -82,7 +84,8 @@ fn list_session_docs_for(
         return Err("请先打开会话".into());
     }
     match tool_id {
-        ToolId::Opencode | ToolId::Claude | ToolId::Pi | ToolId::Dsh => Ok(Vec::new()),
+        ToolId::Opencode | ToolId::Pi | ToolId::Dsh => Ok(Vec::new()),
+        ToolId::Claude => Ok(collect_claude_docs(&project.path, session_id)),
         ToolId::Grokbuild => {
             let dir = tools::find_grok_session_dir(&project.path, session_id).ok_or_else(|| {
                 "没有找到这个 Grok 会话的本地目录，无法列出文档。".to_string()
@@ -92,7 +95,7 @@ fn list_session_docs_for(
         ToolId::Kimi => {
             let dir = tools::find_kimi_session_dir(session_id)
                 .ok_or_else(|| "没有找到这个 Kimi 会话的本地目录，无法列出文档。".to_string())?;
-            Ok(collect_kimi_docs(&dir, &project.path))
+            Ok(collect_kimi_docs(&dir, session_id, &project.path))
         }
     }
 }
@@ -107,7 +110,13 @@ fn list_session_turns_for(
         return Err("请先打开会话".into());
     }
     match tool_id {
-        ToolId::Opencode | ToolId::Claude | ToolId::Pi | ToolId::Dsh => Ok(Vec::new()),
+        ToolId::Opencode | ToolId::Pi | ToolId::Dsh => Ok(Vec::new()),
+        ToolId::Claude => {
+            let path = tools::find_claude_session_file(&project.path, session_id)
+                .ok_or_else(|| "没有找到这个 Claude 会话的本地记录。".to_string())?;
+            let text = read_text_capped_tail(&path, JSONL_BYTE_CAP).unwrap_or_default();
+            Ok(parse_claude_turns(&text))
+        }
         ToolId::Grokbuild => {
             let dir = tools::find_grok_session_dir(&project.path, session_id).ok_or_else(|| {
                 "没有找到这个 Grok 会话的本地目录，无法读取对话。".to_string()
@@ -126,6 +135,9 @@ fn list_session_turns_for(
 }
 
 fn read_session_doc_for(project: &Project, path: &str) -> Result<SessionDocBody, String> {
+    if let Some((tool_id, session_id)) = parse_summary_ref(path) {
+        return read_session_summary(project, tool_id, &session_id);
+    }
     let raw = PathBuf::from(path.trim());
     if path.trim().is_empty() {
         return Err("文档路径无效".into());
@@ -152,25 +164,58 @@ fn read_session_doc_for(project: &Project, path: &str) -> Result<SessionDocBody,
 fn collect_grok_docs(session_dir: &Path, session_id: &str, project_cwd: &str) -> Vec<SessionDoc> {
     let mut docs: HashMap<String, SessionDoc> = HashMap::new();
     push_doc(&mut docs, session_dir.join("plan.md"), project_cwd, "grokbuild");
-    // Prefer hunk_records over updates.jsonl. The latter is a full event stream
-    // (often 8–17MB) and must not be parsed on the 15s rail refresh.
     if let Some(text) = read_text_capped(&session_dir.join("hunk_records.jsonl"), JSONL_BYTE_CAP) {
         collect_hunk_md(&text, session_id, project_cwd, session_dir, &mut docs);
     }
-    finish_docs(docs)
+    let history = read_text_capped_tail(&session_dir.join("chat_history.jsonl"), JSONL_BYTE_CAP);
+    if let Some(text) = history.as_deref() {
+        collect_grok_tool_md(text, project_cwd, session_dir, &mut docs);
+    }
+    let summary = history.and_then(|text| last_assistant_from_turns(&parse_grok_turns(&text)));
+    with_summary(
+        finish_docs(docs),
+        ToolId::Grokbuild,
+        session_id,
+        summary,
+        file_mtime_millis(&session_dir.join("chat_history.jsonl")),
+    )
 }
 
-fn collect_kimi_docs(session_dir: &Path, project_cwd: &str) -> Vec<SessionDoc> {
+fn collect_kimi_docs(session_dir: &Path, session_id: &str, project_cwd: &str) -> Vec<SessionDoc> {
     let mut docs: HashMap<String, SessionDoc> = HashMap::new();
     let plans = session_dir.join("agents").join("main").join("plans");
     collect_md_dir(&plans, project_cwd, "kimi", &mut docs);
     let versions = session_dir.join("agents").join("main").join("plan");
     collect_md_tree(&versions, project_cwd, "kimi", &mut docs);
     let wire = session_dir.join("agents").join("main").join("wire.jsonl");
-    if let Some(text) = read_text_capped(&wire, JSONL_BYTE_CAP) {
-        collect_kimi_wire_md(&text, project_cwd, session_dir, &mut docs);
+    let wire_text = read_text_capped_tail(&wire, JSONL_BYTE_CAP);
+    if let Some(text) = wire_text.as_deref() {
+        collect_kimi_wire_md(text, project_cwd, session_dir, &mut docs);
     }
-    finish_docs(docs)
+    let summary = wire_text.and_then(|text| last_assistant_from_turns(&parse_kimi_turns(&text)));
+    with_summary(
+        finish_docs(docs),
+        ToolId::Kimi,
+        session_id,
+        summary,
+        file_mtime_millis(&wire),
+    )
+}
+
+fn collect_claude_docs(project_cwd: &str, session_id: &str) -> Vec<SessionDoc> {
+    let Some(path) = tools::find_claude_session_file(project_cwd, session_id) else {
+        return Vec::new();
+    };
+    let text = read_text_capped_tail(&path, JSONL_BYTE_CAP).unwrap_or_default();
+    let mut docs: HashMap<String, SessionDoc> = HashMap::new();
+    let summary = extract_claude_jsonl(&text, project_cwd, &mut docs);
+    with_summary(
+        finish_docs(docs),
+        ToolId::Claude,
+        session_id,
+        summary,
+        file_mtime_millis(&path),
+    )
 }
 
 fn collect_md_dir(dir: &Path, project_cwd: &str, source: &str, docs: &mut HashMap<String, SessionDoc>) {
@@ -235,6 +280,54 @@ fn collect_hunk_md(
         }
         push_doc(docs, file, project_cwd, "grokbuild");
     }
+}
+
+fn collect_grok_tool_md(
+    text: &str,
+    project_cwd: &str,
+    session_dir: &Path,
+    docs: &mut HashMap<String, SessionDoc>,
+) {
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() || !line.contains("tool_calls") {
+            continue;
+        }
+        let value: Value = match serde_json::from_str(line) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        if value.get("type").and_then(|v| v.as_str()) != Some("assistant") {
+            continue;
+        }
+        let Some(calls) = value.get("tool_calls").and_then(|v| v.as_array()) else {
+            continue;
+        };
+        for call in calls {
+            let name = call.get("name").and_then(|v| v.as_str()).unwrap_or("");
+            if !is_write_tool(name) {
+                continue;
+            }
+            let args = parse_tool_args(call.get("arguments").unwrap_or(&Value::Null));
+            let Some(path) = first_string(&args, &["file_path", "path", "target_file", "filePath"]) else {
+                continue;
+            };
+            if !is_markdown_path(&path) {
+                continue;
+            }
+            let file = PathBuf::from(&path);
+            if path_under_session_or_project(&file, session_dir, project_cwd) {
+                push_doc(docs, file, project_cwd, "grokbuild");
+            }
+        }
+    }
+}
+
+fn parse_tool_args(value: &Value) -> Value {
+    if let Some(s) = value.as_str() {
+        return serde_json::from_str(s).unwrap_or(Value::Null);
+    }
+    value.clone()
 }
 
 fn collect_kimi_wire_md(
@@ -379,7 +472,219 @@ fn path_allowed(path: &Path, project: &Project) -> bool {
     let mut roots = vec![normalize_path(&project.path)];
     roots.push(normalize_path(&tools::grok_home().to_string_lossy()));
     roots.push(normalize_path(&tools::kimi_home().to_string_lossy()));
+    roots.push(normalize_path(&tools::claude_home().to_string_lossy()));
     roots.into_iter().any(|root| file == root || file.starts_with(&(root + "/")))
+}
+
+fn summary_ref(tool_id: ToolId, session_id: &str) -> String {
+    format!("{SUMMARY_PREFIX}{}/{session_id}", tool_id.as_str())
+}
+
+fn parse_summary_ref(path: &str) -> Option<(ToolId, String)> {
+    let rest = path.strip_prefix(SUMMARY_PREFIX)?;
+    let (tool, session) = rest.split_once('/')?;
+    let tool = ToolId::parse(tool)?;
+    let session = session.trim();
+    if session.is_empty() {
+        return None;
+    }
+    Some((tool, session.to_string()))
+}
+
+fn with_summary(
+    mut docs: Vec<SessionDoc>,
+    tool_id: ToolId,
+    session_id: &str,
+    summary: Option<String>,
+    updated_at: i64,
+) -> Vec<SessionDoc> {
+    if summary
+        .as_deref()
+        .map(|text| text.trim().chars().count() >= MIN_SUMMARY_CHARS)
+        .unwrap_or(false)
+    {
+        docs.insert(
+            0,
+            SessionDoc {
+                kind: "summary".into(),
+                title: "本轮总结".into(),
+                path: summary_ref(tool_id, session_id),
+                rel_path: None,
+                updated_at,
+                source: tool_id.as_str().into(),
+            },
+        );
+        docs.truncate(MAX_DOCS);
+    }
+    docs
+}
+
+fn last_assistant_from_turns(turns: &[SessionTurn]) -> Option<String> {
+    turns
+        .iter()
+        .rev()
+        .find(|turn| turn.role == "assistant" && turn.text.trim().chars().count() >= MIN_SUMMARY_CHARS)
+        .map(|turn| turn.text.clone())
+}
+
+fn read_session_summary(project: &Project, tool_id: ToolId, session_id: &str) -> Result<SessionDocBody, String> {
+    let text = match tool_id {
+        ToolId::Grokbuild => {
+            let dir = tools::find_grok_session_dir(&project.path, session_id)
+                .ok_or_else(|| "没有找到这个 Grok 会话的本地目录。".to_string())?;
+            let raw = read_text_capped_tail(&dir.join("chat_history.jsonl"), JSONL_BYTE_CAP).unwrap_or_default();
+            last_assistant_from_turns(&parse_grok_turns(&raw))
+        }
+        ToolId::Kimi => {
+            let dir = tools::find_kimi_session_dir(session_id)
+                .ok_or_else(|| "没有找到这个 Kimi 会话的本地目录。".to_string())?;
+            let wire = dir.join("agents").join("main").join("wire.jsonl");
+            let raw = read_text_capped_tail(&wire, JSONL_BYTE_CAP).unwrap_or_default();
+            last_assistant_from_turns(&parse_kimi_turns(&raw))
+        }
+        ToolId::Claude => {
+            let path = tools::find_claude_session_file(&project.path, session_id)
+                .ok_or_else(|| "没有找到这个 Claude 会话的本地记录。".to_string())?;
+            let raw = read_text_capped_tail(&path, JSONL_BYTE_CAP).unwrap_or_default();
+            extract_claude_jsonl(&raw, &project.path, &mut HashMap::new())
+        }
+        ToolId::Opencode | ToolId::Pi | ToolId::Dsh => None,
+    }
+    .ok_or_else(|| "这次会话还没有可展示的总结。".to_string())?;
+    Ok(SessionDocBody {
+        path: summary_ref(tool_id, session_id),
+        title: "本轮总结".into(),
+        rel_path: None,
+        text,
+    })
+}
+
+fn is_write_tool(name: &str) -> bool {
+    matches!(
+        name.to_ascii_lowercase().as_str(),
+        "write" | "edit" | "create" | "write_file" | "edit_file" | "search_replace" | "str_replace"
+    )
+}
+
+fn extract_claude_jsonl(
+    text: &str,
+    project_cwd: &str,
+    docs: &mut HashMap<String, SessionDoc>,
+) -> Option<String> {
+    let mut last_summary = None;
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let value: Value = match serde_json::from_str(line) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        if value.get("type").and_then(|v| v.as_str()) != Some("assistant") {
+            continue;
+        }
+        let message = value.get("message").unwrap_or(&value);
+        take_claude_content(
+            message.get("content").unwrap_or(&Value::Null),
+            project_cwd,
+            docs,
+            &mut last_summary,
+        );
+    }
+    last_summary
+}
+
+fn take_claude_content(
+    content: &Value,
+    project_cwd: &str,
+    docs: &mut HashMap<String, SessionDoc>,
+    last_summary: &mut Option<String>,
+) {
+    if let Some(s) = content.as_str() {
+        if s.trim().chars().count() >= MIN_SUMMARY_CHARS {
+            *last_summary = Some(s.to_string());
+        }
+        return;
+    }
+    let Some(items) = content.as_array() else {
+        return;
+    };
+    for item in items {
+        let kind = item.get("type").and_then(|v| v.as_str()).unwrap_or("");
+        if kind == "text" {
+            if let Some(s) = item.get("text").and_then(|v| v.as_str()) {
+                if s.trim().chars().count() >= MIN_SUMMARY_CHARS {
+                    *last_summary = Some(s.to_string());
+                }
+            }
+            continue;
+        }
+        if kind != "tool_use" {
+            continue;
+        }
+        let name = item.get("name").and_then(|v| v.as_str()).unwrap_or("");
+        if !is_write_tool(name) {
+            continue;
+        }
+        let input = item.get("input").unwrap_or(&Value::Null);
+        let Some(path) = first_string(input, &["file_path", "path", "target_file", "filePath"]) else {
+            continue;
+        };
+        if !is_markdown_path(&path) {
+            continue;
+        }
+        let file = PathBuf::from(&path);
+        if path_under_session_or_project(&file, Path::new(project_cwd), project_cwd) {
+            push_doc(docs, file, project_cwd, "claude");
+        }
+    }
+}
+
+pub(crate) fn parse_claude_turns(text: &str) -> Vec<SessionTurn> {
+    let mut turns = Vec::new();
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let value: Value = match serde_json::from_str(line) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let kind = value.get("type").and_then(|v| v.as_str()).unwrap_or("");
+        let message = value.get("message").unwrap_or(&value);
+        if kind == "user" {
+            if let Some(body) = claude_plain_text(message.get("content").unwrap_or(&Value::Null)) {
+                if let Some(text) = clean_user_text(&body) {
+                    push_turn(&mut turns, "user", text);
+                }
+            }
+        } else if kind == "assistant" {
+            if let Some(body) = claude_plain_text(message.get("content").unwrap_or(&Value::Null)) {
+                push_turn(&mut turns, "assistant", body);
+            }
+        }
+        if turns.len() >= MAX_TURNS {
+            break;
+        }
+    }
+    turns
+}
+
+fn read_text_capped_tail(path: &Path, max_bytes: u64) -> Option<String> {
+    let mut file = fs::File::open(path).ok()?;
+    let len = file.metadata().ok()?.len();
+    if len <= max_bytes {
+        let mut text = String::new();
+        file.read_to_string(&mut text).ok()?;
+        return Some(text);
+    }
+    file.seek(SeekFrom::End(-(max_bytes as i64))).ok()?;
+    let mut buf = vec![0u8; max_bytes as usize];
+    let n = file.read(&mut buf).ok()?;
+    let raw = String::from_utf8_lossy(&buf[..n]);
+    Some(raw.split_once('\n').map(|(_, rest)| rest.to_string()).unwrap_or_else(|| raw.into_owned()))
 }
 
 fn read_text_capped(path: &Path, max_bytes: u64) -> Option<String> {
@@ -546,6 +851,27 @@ fn push_turn(turns: &mut Vec<SessionTurn>, role: &str, text: String) {
     });
 }
 
+fn claude_plain_text(content: &Value) -> Option<String> {
+    if let Some(s) = content.as_str() {
+        let t = s.trim();
+        return (!t.is_empty()).then(|| s.to_string());
+    }
+    let items = content.as_array()?;
+    let mut parts = Vec::new();
+    for item in items {
+        if item.get("type").and_then(|v| v.as_str()) != Some("text") {
+            continue;
+        }
+        if let Some(s) = item.get("text").and_then(|v| v.as_str()) {
+            if !s.trim().is_empty() {
+                parts.push(s.to_string());
+            }
+        }
+    }
+    let joined = parts.join("\n");
+    (!joined.trim().is_empty()).then_some(joined)
+}
+
 fn json_text(value: &Value) -> Option<String> {
     if let Some(s) = value.as_str() {
         let t = s.trim();
@@ -692,6 +1018,44 @@ mod tests {
     }
 
     #[test]
+    fn grok_docs_from_chat_history_write_and_search_replace() {
+        let dir = tempdir().unwrap();
+        let project_root = dir.path().join("proj");
+        let session = dir.path().join("session");
+        fs::create_dir_all(&project_root).unwrap();
+        fs::create_dir_all(&session).unwrap();
+        let notes = project_root.join("notes.md");
+        let guide = project_root.join("guide.md");
+        fs::write(&notes, "# notes\n").unwrap();
+        fs::write(&guide, "# guide\n").unwrap();
+        let write_line = serde_json::json!({
+            "type": "assistant",
+            "content": "writing",
+            "tool_calls": [{
+                "name": "write",
+                "arguments": serde_json::json!({ "file_path": notes }).to_string()
+            }]
+        });
+        let edit_line = serde_json::json!({
+            "type": "assistant",
+            "content": "editing",
+            "tool_calls": [{
+                "name": "search_replace",
+                "arguments": serde_json::json!({ "file_path": guide }).to_string()
+            }]
+        });
+        fs::write(
+            session.join("chat_history.jsonl"),
+            format!("{write_line}\n{edit_line}\n"),
+        )
+        .unwrap();
+        let docs = collect_grok_docs(&session, "sid-2", &project_root.to_string_lossy());
+        let titles: Vec<_> = docs.iter().map(|d| d.title.as_str()).collect();
+        assert!(titles.contains(&"notes"));
+        assert!(titles.contains(&"guide"));
+    }
+
+    #[test]
     fn kimi_docs_from_plans_dir_and_wire() {
         let dir = tempdir().unwrap();
         let project_root = dir.path().join("proj");
@@ -723,7 +1087,7 @@ mod tests {
         )
         .unwrap();
 
-        let docs = collect_kimi_docs(&session, &project_root.to_string_lossy());
+        let docs = collect_kimi_docs(&session, "sid-kimi", &project_root.to_string_lossy());
         let titles: Vec<_> = docs.iter().map(|d| d.title.as_str()).collect();
         assert!(titles.contains(&"batgirl-kid-flash-hawkeye"));
         assert!(titles.contains(&"v1"));
@@ -746,5 +1110,43 @@ mod tests {
     fn parse_time_from_hunk_is_optional() {
         let ts = parse_time_value(&Value::String("2026-08-12T01:38:47.527606400Z".into()));
         assert!(ts.is_some());
+    }
+
+    #[test]
+    fn claude_jsonl_collects_written_markdown_and_last_summary() {
+        let dir = tempdir().unwrap();
+        let project_root = dir.path().join("proj");
+        fs::create_dir_all(&project_root).unwrap();
+        let md = project_root.join("notes.md");
+        fs::write(&md, "# notes\n").unwrap();
+        let path = md.to_string_lossy().replace('\\', "/");
+        let text = format!(
+            "{}\n{}\n{}\n",
+            r#"{"type":"user","message":{"content":[{"type":"text","text":"write the notes"}]}}"#,
+            format!(
+                r#"{{"type":"assistant","message":{{"content":[{{"type":"tool_use","name":"Write","input":{{"file_path":"{path}"}}}}]}}}}"#
+            ),
+            r#"{"type":"assistant","message":{"content":[{"type":"text","text":"Install steps are now in notes.md for the next run."}]}}"#
+        );
+        let mut docs = HashMap::new();
+        let summary = extract_claude_jsonl(&text, &project_root.to_string_lossy(), &mut docs);
+        assert!(summary.as_deref().unwrap().contains("Install steps"));
+        let rows = with_summary(finish_docs(docs), ToolId::Claude, "sess-1", summary, 9);
+        assert_eq!(rows[0].kind, "summary");
+        assert_eq!(rows[0].title, "本轮总结");
+        assert!(rows.iter().any(|doc| doc.title == "notes"));
+        let (tool, sid) = parse_summary_ref(&rows[0].path).unwrap();
+        assert_eq!(tool, ToolId::Claude);
+        assert_eq!(sid, "sess-1");
+    }
+
+    #[test]
+    fn grok_last_assistant_is_used_as_summary() {
+        let text = r#"
+{"type":"user","content":[{"type":"text","text":"<user_query>\n修圆角\n</user_query>"}]}
+{"type":"assistant","content":"已经把窗口圆角和浅色对比改到现有 token。"}
+"#;
+        let summary = last_assistant_from_turns(&parse_grok_turns(text)).unwrap();
+        assert!(summary.contains("窗口圆角"));
     }
 }

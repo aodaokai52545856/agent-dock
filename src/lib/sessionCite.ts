@@ -3,6 +3,9 @@ import type { ToolId } from './types'
 function toolName(toolId: ToolId) {
   if (toolId === 'grokbuild') return 'Grok'
   if (toolId === 'kimi') return 'Kimi'
+  if (toolId === 'claude') return 'Claude Code'
+  if (toolId === 'pi') return 'Pi'
+  if (toolId === 'dsh') return 'DeepSeek'
   return 'OpenCode'
 }
 
@@ -37,5 +40,6 @@ export function wrapBracketedPaste(text: string) {
 export function kindLabel(kind: string) {
   if (kind === 'plan') return 'Plan'
   if (kind === 'spec') return 'Spec'
+  if (kind === 'summary') return '总结'
   return '文档'
 }
