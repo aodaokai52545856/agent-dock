@@ -1,3 +1,4 @@
+mod app_update;
 mod bridge;
 mod clipboard;
 mod ccswitch;
@@ -37,6 +38,7 @@ use grok_spend::GrokSpend;
 use grok_usage::GrokUsage;
 use session_cite::{SessionDoc, SessionDocBody, SessionTurn};
 use tools::update::{ToolVersionInfo, UpgradeResult};
+use app_update::{AppUpdateInfo, AppUpgradeResult};
 use tools::{BinaryProbe, SessionRow, ToolId};
 use uuid::Uuid;
 
@@ -203,6 +205,32 @@ fn clipboard_read() -> Result<String, String> {
 #[tauri::command]
 fn app_version() -> String {
     tools::update::app_version()
+}
+
+#[tauri::command]
+async fn check_app_update(app: AppHandle, proxy_url: Option<String>) -> Result<AppUpdateInfo, String> {
+    let state = state::load_state(&app)?;
+    let proxy = proxy_url
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or(state.settings.default_proxy_url);
+    tauri::async_runtime::spawn_blocking(move || app_update::check_app_update(Some(proxy.as_str())))
+        .await
+        .map_err(|err| format!("检查 Agent Dock 版本失败：{err}"))?
+}
+
+#[tauri::command]
+async fn upgrade_app(app: AppHandle, proxy_url: Option<String>) -> Result<AppUpgradeResult, String> {
+    let state = state::load_state(&app)?;
+    let proxy = proxy_url
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or(state.settings.default_proxy_url);
+    let result = tauri::async_runtime::spawn_blocking(move || app_update::upgrade_app(Some(proxy.as_str())))
+        .await
+        .map_err(|err| format!("更新 Agent Dock 失败：{err}"))??;
+    if result.restart {
+        app_update::schedule_exit(app);
+    }
+    Ok(result)
 }
 
 #[tauri::command]
@@ -882,6 +910,8 @@ pub fn run() {
             set_window_frost,
             probe_tools,
             app_version,
+            check_app_update,
+            upgrade_app,
             host_platform,
             list_tool_versions,
             upgrade_tool,

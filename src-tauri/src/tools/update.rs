@@ -672,6 +672,25 @@ fn http_get_bytes_once(url: &str, proxy: &[(String, String)]) -> Result<Vec<u8>,
     Ok(out)
 }
 
+pub(crate) fn http_download_file(url: &str, proxy: &[(String, String)], dest: &Path) -> Result<u64, String> {
+    match http_download_file_once(url, proxy, dest) {
+        Ok(size) => Ok(size),
+        Err(err) if !proxy.is_empty() => {
+            let _ = fs::remove_file(dest);
+            http_download_file_once(url, &[], dest).map_err(|_| err)
+        }
+        Err(err) => Err(err),
+    }
+}
+
+fn http_download_file_once(url: &str, proxy: &[(String, String)], dest: &Path) -> Result<u64, String> {
+    let hash = http_download_sha256_once(url, proxy, dest)?;
+    let _ = hash;
+    fs::metadata(dest)
+        .map(|meta| meta.len())
+        .map_err(|err| format!("无法读取下载文件：{err}"))
+}
+
 fn http_download_sha256(url: &str, proxy: &[(String, String)], dest: &Path) -> Result<String, String> {
     match http_download_sha256_once(url, proxy, dest) {
         Ok(hash) => Ok(hash),
@@ -731,7 +750,7 @@ fn http_download_sha256_once(
     Ok(hex_lower(hasher.finalize().as_slice()))
 }
 
-fn http_get_text(url: &str, proxy: &[(String, String)]) -> Result<String, String> {
+pub(crate) fn http_get_text(url: &str, proxy: &[(String, String)]) -> Result<String, String> {
     let bytes = http_get_bytes(url, proxy)?;
     String::from_utf8(bytes)
         .map(|text| text.trim().to_string())
@@ -1094,7 +1113,7 @@ fn find_npm() -> Option<PathBuf> {
         .find_map(platform::which_cmd)
 }
 
-fn proxy_pairs(url: &str) -> Vec<(String, String)> {
+pub(crate) fn proxy_pairs(url: &str) -> Vec<(String, String)> {
     let url = url.trim();
     if url.is_empty() {
         return Vec::new();

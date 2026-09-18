@@ -110,7 +110,7 @@ export interface SessionListResult {
   message?: string | null
 }
 
-export type SessionDocKind = 'plan' | 'spec' | 'doc'
+export type SessionDocKind = 'plan' | 'spec' | 'doc' | 'summary'
 
 export interface SessionDoc {
   kind: SessionDocKind | string
@@ -210,6 +210,22 @@ export interface UpgradeResult {
   localVersion: string
 }
 
+export interface AppUpdateInfo {
+  localVersion: string
+  latestVersion: string
+  compare: string
+  kind: string
+  kindLabel: string
+  assetName: string
+  htmlUrl: string
+}
+
+export interface AppUpgradeResult {
+  ok: boolean
+  log: string
+  restart: boolean
+}
+
 export interface DshKeyStatus {
   configured: boolean
   writable: boolean
@@ -226,11 +242,13 @@ export interface DshKeyMeta {
   masked: string
   updatedAt: string
   active: boolean
+  managed?: boolean
 }
 
 export interface DshKeyBundle {
   status: DshKeyStatus
   keys: DshKeyMeta[]
+  vaultError?: string | null
 }
 
 export interface GrokAccount {

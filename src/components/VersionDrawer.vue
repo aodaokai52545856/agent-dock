@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import * as api from '../lib/api'
-import type { ToolId, ToolVersionInfo } from '../lib/types'
+import type { AppUpdateInfo, ToolId, ToolVersionInfo } from '../lib/types'
 import { TOOL_OFFICIAL_URLS, toolLabel } from '../lib/types'
 import {
   isVersionChecking,
@@ -10,7 +10,7 @@ import {
   patchVersionRow,
   seedVersionRows
 } from '../lib/toolVersions'
-import { store } from '../lib/store'
+import { showToast, store } from '../lib/store'
 import ConfirmDialog from './ConfirmDialog.vue'
 
 const props = defineProps<{
@@ -44,7 +44,20 @@ dsh web
 # 单次任务
 dsh --profile headless "任务"`
 
+const idleAppUpdate = (): AppUpdateInfo => ({
+  localVersion: '',
+  latestVersion: '-',
+  compare: '未检测',
+  kind: '',
+  kindLabel: '',
+  assetName: '',
+  htmlUrl: ''
+})
+
 const appVer = ref('')
+const appUpdate = ref<AppUpdateInfo>(idleAppUpdate())
+const checkingApp = ref(false)
+const upgradingApp = ref(false)
 const versions = ref<ToolVersionInfo[]>(seedVersionRows())
 const checkingAll = ref(false)
 const checkingId = ref<ToolId | ''>('')
@@ -61,11 +74,15 @@ const pendingUninstall = ref<ToolVersionInfo | null>(null)
 const busy = computed(
   () =>
     checkingAll.value ||
+    checkingApp.value ||
+    upgradingApp.value ||
     !!checkingId.value ||
     !!upgrading.value ||
     upgradingAll.value ||
     !!uninstalling.value
 )
+
+const appUpdatable = computed(() => appUpdate.value.compare === '可更新')
 
 const updatable = computed(() =>
   versions.value.filter((row) => row.compare === '可更新' && canStart(row))
@@ -81,7 +98,10 @@ watch(
     commandsOpen.value = false
     pendingUninstall.value = null
     checkingAll.value = false
+    checkingApp.value = false
+    upgradingApp.value = false
     checkingId.value = ''
+    appUpdate.value = idleAppUpdate()
     versions.value = seedVersionRows()
     proxyUrl.value = store.settings.defaultProxyUrl || ''
     void loadAppVersion()
@@ -100,16 +120,74 @@ function proxyArg() {
   return proxyUrl.value.trim() || undefined
 }
 
+async function checkApp(force = false) {
+  if (!force && busy.value) return
+  checkingApp.value = true
+  versionError.value = ''
+  appUpdate.value = { ...appUpdate.value, compare: '检测中', latestVersion: '检测中' }
+  try {
+    const next = await api.checkAppUpdate(proxyArg())
+    appUpdate.value = next
+    appVer.value = next.localVersion || appVer.value
+  } catch (err) {
+    versionError.value = err instanceof Error ? err.message : String(err)
+    appUpdate.value = {
+      ...appUpdate.value,
+      latestVersion: '查询失败',
+      compare: '无法对比'
+    }
+  } finally {
+    checkingApp.value = false
+  }
+}
+
+async function upgradeApp() {
+  if (busy.value || !appUpdatable.value) return
+  upgradingApp.value = true
+  versionError.value = ''
+  upgradeLog.value = ''
+  try {
+    const result = await api.upgradeApp(proxyArg())
+    upgradeLog.value = result.log.trim() || (result.ok ? 'Agent Dock 更新完成。' : 'Agent Dock 更新失败。')
+    if (!result.ok) versionError.value = 'Agent Dock 更新失败'
+    if (result.restart) {
+      showToast('安装包已启动，客户端即将退出以完成更新')
+    } else {
+      await checkApp(true)
+    }
+  } catch (err) {
+    versionError.value = err instanceof Error ? err.message : String(err)
+    upgradeLog.value = versionError.value
+  } finally {
+    upgradingApp.value = false
+  }
+}
+
 async function checkVersions(force = false) {
   if (!force && busy.value) return
   checkingAll.value = true
   versionError.value = ''
   versions.value = versions.value.map(markVersionChecking)
+  appUpdate.value = { ...appUpdate.value, compare: '检测中', latestVersion: '检测中' }
   try {
-    versions.value = mergeVersionRows(await api.listToolVersions(proxyArg()))
+    const [tools, dock] = await Promise.all([
+      api.listToolVersions(proxyArg()),
+      api.checkAppUpdate(proxyArg()).catch((err) => {
+        versionError.value = err instanceof Error ? err.message : String(err)
+        return null
+      })
+    ])
+    versions.value = mergeVersionRows(tools)
+    if (dock) {
+      appUpdate.value = dock
+      appVer.value = dock.localVersion || appVer.value
+    } else if (!appUpdate.value.latestVersion || appUpdate.value.latestVersion === '检测中') {
+      appUpdate.value = { ...appUpdate.value, latestVersion: '查询失败', compare: '无法对比' }
+    }
   } catch (err) {
     versionError.value = err instanceof Error ? err.message : String(err)
     versions.value = mergeVersionRows([])
+    appUpdate.value = { ...appUpdate.value, latestVersion: '查询失败', compare: '无法对比' }
   } finally {
     checkingAll.value = false
   }
@@ -318,22 +396,16 @@ async function copyCommands() {
   <div v-if="open" class="ad-mask" @click.self="emit('close')">
     <div class="ad-dialog dialog" role="dialog" aria-modal="true" aria-label="版本">
       <header>
-        <div>
-          <h2>版本</h2>
-          <p class="app-ver">Agent Dock <strong>{{ appVer || '…' }}</strong></p>
-        </div>
+        <h2>版本</h2>
         <button type="button" class="btn btn-ghost btn-small" @click="emit('close')">关闭</button>
       </header>
 
-      <label class="field">
-        <span>下载代理</span>
-        <input v-model="proxyUrl" type="text" placeholder="留空则直连，例如 http://127.0.0.1:7890" />
-      </label>
-      <p class="hint">安装和升级时写入 HTTPS_PROXY。卸载只删除可执行文件，会话和配置会保留。</p>
-
-      <div class="toolbar">
-        <p class="hint">打开后不会自动检测。请点全部检测，或在某一项上单独检测。DeepSeek 要 Node、dsh、dsh web 都通过才算安装成功。</p>
-        <div class="toolbar-actions">
+      <div class="command">
+        <label class="proxy">
+          <span>代理</span>
+          <input v-model="proxyUrl" type="text" placeholder="留空则直连，例如 http://127.0.0.1:7890" />
+        </label>
+        <div class="command-actions">
           <button type="button" class="btn btn-ghost btn-small" :disabled="busy" @click="checkVersions()">
             {{ checkingAll ? '检测中…' : '全部检测' }}
           </button>
@@ -347,13 +419,53 @@ async function copyCommands() {
           </button>
         </div>
       </div>
-      <p v-if="!api.isTauri" class="hint">浏览器预览无法检查本机 CLI，请在桌面端使用。</p>
+      <p class="lede">检测和安装走上面的代理。卸载只删命令行，会话和配置会留着。DeepSeek 要 Node、dsh、dsh web 都通过才算装好。</p>
+      <p v-if="!api.isTauri" class="lede">浏览器预览无法检查本机 CLI，请在桌面端使用。</p>
       <p v-if="versionError" class="field-error">{{ versionError }}</p>
 
+      <p class="kicker">本机客户端</p>
+      <article class="plate">
+        <div class="plate-head">
+          <div>
+            <h3>Agent Dock</h3>
+            <p class="kind">{{ appUpdate.kindLabel || '按当前安装包类型更新' }}</p>
+          </div>
+          <span :class="['ad-tag', compareClass(appUpdate.compare)]">{{ appUpdate.compare }}</span>
+        </div>
+        <div class="meters">
+          <div class="meter">
+            <span>当前</span>
+            <strong>{{ displayVer(appVer || appUpdate.localVersion) }}</strong>
+          </div>
+          <div class="meter">
+            <span>最新</span>
+            <strong>{{ displayVer(appUpdate.latestVersion) }}</strong>
+          </div>
+          <div class="plate-actions">
+            <button type="button" class="btn btn-ghost btn-small" :disabled="busy" @click="checkApp()">
+              {{ checkingApp || appUpdate.compare === '检测中' ? '检测中…' : '检测' }}
+            </button>
+            <button
+              type="button"
+              class="btn btn-primary btn-small"
+              :disabled="busy || !appUpdatable"
+              :title="appUpdatable ? '下载与当前客户端同类的安装包并更新' : '先检测，有新版本后再更新'"
+              @click="upgradeApp"
+            >
+              {{ upgradingApp ? '更新中…' : '更新' }}
+            </button>
+          </div>
+        </div>
+      </article>
+
+      <p class="kicker">命令行</p>
       <ul class="tools">
-        <li v-for="row in versions" :key="row.toolId" class="tool">
-          <div class="tool-top">
-            <div class="tool-name">{{ toolLabel(row.toolId) }}</div>
+        <li v-for="row in versions" :key="row.toolId" class="plate">
+          <div class="plate-head">
+            <div>
+              <h3>{{ toolLabel(row.toolId) }}</h3>
+              <button type="button" class="kind kind-btn" @click="openOfficial(row.toolId)">官方地址</button>
+            </div>
             <span :class="['ad-tag', compareClass(row.compare)]">{{ row.compare }}</span>
           </div>
           <div v-if="row.path" class="tool-path" :title="row.path">{{ row.path }}</div>
@@ -364,17 +476,20 @@ async function copyCommands() {
               <span>{{ item.detail }}</span>
             </li>
           </ul>
-          <button type="button" class="official" @click="openOfficial(row.toolId)">
-            官方地址
-          </button>
-          <div class="tool-meta">
-            <div>当前 <strong>{{ displayVer(row.localVersion) }}</strong></div>
-            <div>最新 <strong>{{ displayVer(row.latestVersion) }}</strong></div>
+          <div class="meters">
+            <div class="meter">
+              <span>当前</span>
+              <strong>{{ displayVer(row.localVersion) }}</strong>
+            </div>
+            <div class="meter">
+              <span>最新</span>
+              <strong>{{ displayVer(row.latestVersion) }}</strong>
+            </div>
           </div>
-          <div class="tool-actions">
+          <div class="plate-actions">
             <button
               type="button"
-              class="btn btn-ghost"
+              class="btn btn-ghost btn-small"
               :disabled="busy"
               :title="isRowChecking(row) ? '正在检测' : '只检测这一项'"
               @click="checkOne(row.toolId)"
@@ -383,7 +498,7 @@ async function copyCommands() {
             </button>
             <button
               type="button"
-              class="btn btn-ghost"
+              class="btn btn-ghost btn-small"
               :disabled="busy || !canStart(row)"
               :title="actionTitle(row)"
               @click="upgrade(row)"
@@ -393,7 +508,7 @@ async function copyCommands() {
             <button
               v-if="isInstalled(row)"
               type="button"
-              class="btn btn-ghost btn-uninstall"
+              class="btn btn-ghost btn-small btn-uninstall"
               :disabled="busy"
               title="卸载本机命令行，保留会话和配置"
               @click="askUninstall(row)"
@@ -437,7 +552,7 @@ async function copyCommands() {
 
 header {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 16px;
   margin-bottom: 16px;
@@ -449,101 +564,138 @@ h2 {
   line-height: 24px;
 }
 
-.app-ver {
-  margin: 4px 0 0;
-  color: var(--ad-muted);
-  font-size: 12px;
-  line-height: 20px;
-}
-
-.app-ver strong {
-  color: var(--ad-text);
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-}
-
-.field {
+.command {
   display: flex;
-  flex-direction: column;
-  gap: 6px;
+  align-items: center;
+  gap: 12px;
   margin-bottom: 8px;
-  font-size: 13px;
+}
+
+.proxy {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
+  font-size: 12px;
   color: var(--ad-muted);
 }
 
-.field input {
+.proxy input {
+  flex: 1;
+  min-width: 0;
   height: 32px;
   padding: 0 10px;
-  border-radius: 8px;
-  border: 1px solid var(--ad-border);
-  background: var(--ad-harbor);
-  color: var(--ad-text);
 }
 
-.official {
-  align-self: flex-start;
-  margin: 4px 0 8px;
-  padding: 0;
-  color: var(--ad-muted);
-  font-size: 12px;
-  text-decoration: underline;
-  text-underline-offset: 2px;
-}
-
-.official:hover {
-  color: var(--ad-text);
-}
-
-.toolbar {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 12px;
-}
-
-.toolbar-actions {
+.command-actions {
   display: flex;
   gap: 8px;
   flex-shrink: 0;
 }
 
-.hint {
-  margin: 0;
+.lede {
+  margin: 0 0 16px;
   font-size: 12px;
-  line-height: 20px;
+  line-height: 18px;
   color: var(--ad-muted);
 }
 
-.tools {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 12px;
-  margin: 0 0 16px;
-  padding: 0;
-  list-style: none;
+.kicker {
+  margin: 0 0 8px;
+  font-size: 11px;
+  line-height: 16px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ad-faint);
 }
 
-.tool {
+.plate {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  min-height: 196px;
-  padding: 16px;
+  gap: 12px;
+  padding: 14px 16px;
   background: var(--ad-hover);
   border: 1px solid var(--ad-border);
   border-radius: var(--ad-radius-card);
 }
 
-.tool-top {
+.dialog > .plate {
+  margin-bottom: 20px;
+}
+
+.plate-head {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 8px;
 }
 
-.tool-name {
+h3 {
+  margin: 0;
+  font-size: 14px;
+  line-height: 20px;
   font-weight: 600;
+}
+
+.kind,
+.kind-btn {
+  margin: 2px 0 0;
+  padding: 0;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--ad-muted);
+}
+
+.kind-btn:hover {
+  color: var(--ad-text);
+}
+
+.meters {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  gap: 16px;
+  align-items: end;
+}
+
+.tools .meters {
+  grid-template-columns: 1fr 1fr;
+  margin-top: auto;
+}
+
+.meter {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.meter span {
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--ad-muted);
+}
+
+.meter strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ad-text);
+  font-family: var(--ad-mono);
+  font-size: 15px;
+  line-height: 22px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.plate-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.tools .plate-actions {
+  margin-top: 4px;
 }
 
 .tool-path {
@@ -586,36 +738,16 @@ h2 {
   text-overflow: ellipsis;
 }
 
-.tool-meta {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  font-size: 12px;
-  line-height: 20px;
-  color: var(--ad-muted);
-}
-
-.tool-meta strong {
-  color: var(--ad-text);
-  font-family: var(--ad-mono);
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-}
-
-.tool-actions {
-  display: flex;
-  gap: 8px;
-  margin-top: auto;
-}
-
-.tool-actions .btn {
-  flex: 1;
-  width: auto;
+.tools {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin: 0 0 16px;
+  padding: 0;
+  list-style: none;
 }
 
 .btn-uninstall {
-  flex: 0 0 auto;
-  min-width: 72px;
   color: var(--ad-error);
   border-color: color-mix(in srgb, var(--ad-error) 40%, var(--ad-border));
 }
@@ -669,5 +801,18 @@ h2 {
   font-size: 12px;
   line-height: 18px;
   white-space: pre-wrap;
+}
+
+@media (max-width: 720px) {
+  .command,
+  .meters {
+    grid-template-columns: 1fr;
+    display: flex;
+    flex-wrap: wrap;
+  }
+
+  .tools {
+    grid-template-columns: 1fr;
+  }
 }
 </style>

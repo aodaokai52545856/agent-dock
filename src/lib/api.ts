@@ -3,6 +3,8 @@ import { previewSpend } from './grokSpend'
 import type {
   AppSettings,
   AppState,
+  AppUpdateInfo,
+  AppUpgradeResult,
   CcswitchInstallResult,
   CcswitchLatest,
   CcswitchProbe,
@@ -114,10 +116,19 @@ export async function listSessions(projectId: string, toolId: ToolId): Promise<S
 }
 
 function previewDocs(toolId: ToolId): SessionDoc[] {
-  if (toolId === 'opencode') return []
+  if (toolId === 'opencode' || toolId === 'dsh') return []
   const now = Date.now()
+  const summary: SessionDoc = {
+    kind: 'summary',
+    title: '本轮总结',
+    path: `agent-dock:summary:${toolId}/preview`,
+    relPath: null,
+    updatedAt: now - 30000,
+    source: toolId
+  }
   if (toolId === 'kimi') {
     return [
+      summary,
       {
         kind: 'plan',
         title: '写状态栏文案',
@@ -129,6 +140,7 @@ function previewDocs(toolId: ToolId): SessionDoc[] {
     ]
   }
   return [
+    summary,
     {
       kind: 'plan',
       title: 'Plan',
@@ -149,6 +161,14 @@ function previewDocs(toolId: ToolId): SessionDoc[] {
 }
 
 function previewDocBody(path: string): SessionDocBody {
+  if (path.startsWith('agent-dock:summary:')) {
+    return {
+      path,
+      title: '本轮总结',
+      relPath: null,
+      text: '已经把浅色对比和文档栏识别改好。Markdown 文件会出现在右侧，最后一轮说明也会单独列出。\n'
+    }
+  }
   if (path.endsWith('cite-rail.md')) {
     return {
       path,
@@ -307,8 +327,28 @@ export async function listLivePtys(): Promise<LivePtyInfo[]> {
 }
 
 export async function appVersion(): Promise<string> {
-  if (!isTauri) return '0.1.0'
+  if (!isTauri) return '0.1.2'
   return invoke('app_version')
+}
+
+export async function checkAppUpdate(proxyUrl?: string): Promise<AppUpdateInfo> {
+  if (!isTauri) {
+    return {
+      localVersion: '0.1.2',
+      latestVersion: '0.1.2',
+      compare: '已是最新',
+      kind: 'win-setup',
+      kindLabel: 'Windows 安装包',
+      assetName: 'AgentDock-0.1.2-Setup.exe',
+      htmlUrl: 'https://github.com/aodaokai52545856/agent-dock/releases/tag/v0.1.2'
+    }
+  }
+  return invoke('check_app_update', { proxyUrl: proxyUrl || null })
+}
+
+export async function upgradeApp(proxyUrl?: string): Promise<AppUpgradeResult> {
+  if (!isTauri) return { ok: false, log: '浏览器预览无法更新桌面客户端。', restart: false }
+  return invoke('upgrade_app', { proxyUrl: proxyUrl || null })
 }
 
 export async function hostPlatform(): Promise<'macos' | 'windows' | 'linux'> {
@@ -411,8 +451,8 @@ const emptyDshBundle = (): DshKeyBundle => ({
   keys: isTauri
     ? []
     : [
-        { id: 'preview-work', name: '工作号', masked: 'sk-ab…wxyz', updatedAt: '', active: true },
-        { id: 'preview-home', name: '个人号', masked: 'sk-cd…1234', updatedAt: '', active: false }
+        { id: 'preview-work', name: '工作号', masked: 'sk-ab…wxyz', updatedAt: '', active: true, managed: true },
+        { id: 'preview-home', name: '个人号', masked: 'sk-cd…1234', updatedAt: '', active: false, managed: true }
       ]
 })
 
