@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
-import { afterOutcome, applyManualVerdict, resumeManual, startRun } from './engine.ts'
+import { afterOutcome, applyManualVerdict, cancelRun, resumeManual, startRun } from './engine.ts'
 import { ROLE_CONTRACTS } from './roles.ts'
-import { FLOW_END, type FlowDef } from './types.ts'
+import { FLOW_END, FLOW_START, type FlowDef } from './types.ts'
 
 function test(name: string, fn: () => void) {
   fn()
@@ -52,6 +52,22 @@ function chain(mode: 'auto' | 'manual', gate: 'none' | 'passFail' = 'none'): Flo
     draftTask: '修闸门'
   }
 }
+
+test('startRun follows the start terminal when wired', () => {
+  const flow = chain('auto')
+  flow.edges.unshift({
+    id: 'e-start',
+    from: FLOW_START,
+    to: 'n-b',
+    mode: 'auto',
+    transform: 'roleWrap',
+    gate: 'none'
+  })
+  const started = startRun(flow, 'proj', '修闸门')
+  assert.equal(started.event.type, 'execute')
+  if (started.event.type !== 'execute') return
+  assert.equal(started.event.nodeId, 'n-b')
+})
 
 test('startRun executes the first node', () => {
   const flow = chain('auto')
@@ -263,4 +279,73 @@ test('max steps melts the loop', () => {
   const next = afterOutcome(flow, started.run, { ok: true, text: 'ok', verdict: 'pass' })
   assert.equal(next.event.type, 'fail')
   assert.match(next.run.lastError, /上限/)
+})
+
+test('loop edge returns until the cap then takes the exit', () => {
+  const flow: FlowDef = {
+    id: 'f-loop',
+    name: '循环',
+    nodes: [
+      {
+        id: 'n-dev',
+        title: '开发者',
+        role: 'developer',
+        roleContract: ROLE_CONTRACTS.developer,
+        channel: { kind: 'cursorSdk', agentId: '' }
+      },
+      {
+        id: 'n-rev',
+        title: '审查者',
+        role: 'reviewer',
+        roleContract: ROLE_CONTRACTS.reviewer,
+        channel: {
+          kind: 'codexApp',
+          threadIds: [],
+          targetKind: 'uncommittedChanges',
+          commitSha: '',
+          baseBranch: 'main',
+          customInstructions: ''
+        }
+      }
+    ],
+    edges: [
+      { id: 'e-s', from: FLOW_START, to: 'n-dev', mode: 'auto', transform: 'roleWrap', gate: 'none' },
+      { id: 'e-f', from: 'n-dev', to: 'n-rev', mode: 'auto', transform: 'roleWrap', gate: 'none' },
+      { id: 'e-loop', from: 'n-rev', to: 'n-dev', mode: 'auto', transform: 'roleWrap', gate: 'loop', maxLoops: 2 },
+      { id: 'e-end', from: 'n-rev', to: FLOW_END, mode: 'auto', transform: 'roleWrap', gate: 'none' }
+    ],
+    maxRetries: 2,
+    maxSteps: 20,
+    slice: 1,
+    draftTask: '修闸门'
+  }
+  let result = startRun(flow, 'proj', '修闸门')
+  assert.equal(result.event.type, 'execute')
+  if (result.event.type !== 'execute') return
+  assert.equal(result.event.nodeId, 'n-dev')
+  result = afterOutcome(flow, result.run, { ok: true, text: '写了' })
+  assert.equal(result.event.type, 'execute')
+  if (result.event.type !== 'execute') return
+  assert.equal(result.event.nodeId, 'n-rev')
+  result = afterOutcome(flow, result.run, { ok: true, text: '审了' })
+  assert.equal(result.event.type, 'execute')
+  if (result.event.type !== 'execute') return
+  assert.equal(result.event.nodeId, 'n-dev')
+  result = afterOutcome(flow, result.run, { ok: true, text: '又写' })
+  result = afterOutcome(flow, result.run, { ok: true, text: '再审' })
+  assert.equal(result.event.type, 'execute')
+  if (result.event.type !== 'execute') return
+  assert.equal(result.event.nodeId, 'n-dev')
+  result = afterOutcome(flow, result.run, { ok: true, text: '第三写' })
+  result = afterOutcome(flow, result.run, { ok: true, text: '第三审' })
+  assert.equal(result.event.type, 'complete')
+})
+
+test('cancelRun stops a working step', () => {
+  const flow = chain('auto')
+  const started = startRun(flow, 'proj', '修闸门')
+  const stopped = cancelRun(started.run)
+  assert.equal(stopped.status, 'canceled')
+  assert.equal(stopped.steps[0]?.status, 'canceled')
+  assert.match(stopped.lastError, /停止/)
 })

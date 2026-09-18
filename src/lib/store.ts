@@ -177,6 +177,7 @@ export const store = reactive({
   appMode: 'console' as AppMode,
   bridgePaneMode: 'edit' as 'edit' | 'run',
   bridgeSelectedNodeId: '',
+  bridgeSelectedEdgeId: '',
   customRoles: [] as RoleDef[],
   projectFlows: {} as Record<string, ProjectFlows>,
   runs: {} as Record<string, FlowRun | null>,
@@ -669,7 +670,7 @@ export async function selectProject(id: string) {
   await refreshSessions()
 }
 
-export async function jumpToLive(ptyId: string) {
+export async function jumpToLive(ptyId: string, opts?: { keepMode?: boolean }) {
   const item = store.live.find((row) => row.ptyId === ptyId && row.alive !== false)
   if (!item) {
     showToast('这个终端已经关闭')
@@ -677,7 +678,7 @@ export async function jumpToLive(ptyId: string) {
   }
   rememberActivePty()
   rememberPty(lastPtyByProject, item.projectId, item.ptyId)
-  if (store.appMode !== 'console') setAppMode('console')
+  if (store.appMode !== 'console' && !opts?.keepMode) setAppMode('console')
   if (store.selectedProjectId !== item.projectId) {
     await selectProject(item.projectId)
   }

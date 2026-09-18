@@ -2,6 +2,7 @@ import { envelopeFromOutcome, initialEnvelope, transformEnvelope } from './envel
 import { makeId } from './ids.ts'
 import {
   FLOW_END,
+  FLOW_START,
   type AdapterOutcome,
   type EngineResult,
   type Envelope,
@@ -16,7 +17,8 @@ function cloneRun(run: FlowRun): FlowRun {
     ...run,
     steps: run.steps.map((step) => ({ ...step, envelope: step.envelope ? { ...step.envelope } : undefined })),
     lastEnvelope: run.lastEnvelope ? { ...run.lastEnvelope } : null,
-    pendingHandoff: run.pendingHandoff ? { ...run.pendingHandoff } : null
+    pendingHandoff: run.pendingHandoff ? { ...run.pendingHandoff } : null,
+    loopCounts: { ...(run.loopCounts || {}) }
   }
 }
 
@@ -24,8 +26,23 @@ function findNode(flow: FlowDef, id: string) {
   return flow.nodes.find((item) => item.id === id) ?? null
 }
 
-function outgoing(flow: FlowDef, nodeId: string): FlowEdge | null {
-  return flow.edges.find((edge) => edge.from === nodeId) ?? null
+export function entryNode(flow: FlowDef, nodeId?: string) {
+  if (nodeId) return findNode(flow, nodeId)
+  const fromStart = flow.edges.find((edge) => edge.from === FLOW_START)
+  if (fromStart?.to && fromStart.to !== FLOW_END) return findNode(flow, fromStart.to)
+  return flow.nodes[0] ?? null
+}
+
+function outgoingAll(flow: FlowDef, nodeId: string) {
+  return flow.edges.filter((edge) => edge.from === nodeId)
+}
+
+function takeLoop(run: FlowRun, edge: FlowEdge) {
+  const cap = Math.min(20, Math.max(1, edge.maxLoops || 3))
+  const used = run.loopCounts[edge.id] || 0
+  if (used >= cap) return false
+  run.loopCounts[edge.id] = used + 1
+  return true
 }
 
 function fail(run: FlowRun, error: string): EngineResult {
@@ -77,6 +94,7 @@ export function createRun(projectId: string, flow: FlowDef, task: string): FlowR
     lastEnvelope: null,
     pendingHandoff: null,
     retryCount: 0,
+    loopCounts: {},
     stepCount: 0,
     lastError: '',
     cursorAgentId: '',
@@ -87,8 +105,8 @@ export function createRun(projectId: string, flow: FlowDef, task: string): FlowR
 
 export function startRun(flow: FlowDef, projectId: string, task: string, nodeId?: string): EngineResult {
   const run = createRun(projectId, flow, task)
-  const first = (nodeId && findNode(flow, nodeId)) || flow.nodes[0]
-  if (!first) return fail(run, '流程里还没有节点')
+  const first = entryNode(flow, nodeId)
+  if (!first) return fail(run, '流程里还没有节点，或开始还没连到第一个角色')
   const envelope = initialEnvelope(run, first)
   run.lastEnvelope = envelope
   run.status = 'running'
@@ -121,17 +139,21 @@ function goTo(flow: FlowDef, run: FlowRun, edge: FlowEdge, envelope: Envelope, t
 }
 
 export function followEdge(flow: FlowDef, run: FlowRun, envelope: Envelope): EngineResult {
-  const edge = outgoing(flow, run.currentNodeId)
+  const outs = outgoingAll(flow, run.currentNodeId)
+  if (!outs.length) return complete(run)
+  const loop = outs.find((edge) => edge.gate === 'loop')
+  const forward = outs.find((edge) => edge.gate !== 'loop') || null
+  const edge = forward || loop
   if (!edge) return complete(run)
 
   const verdict = envelope.verdict ?? 'unknown'
-  if (edge.gate === 'passFail') {
+  if (forward?.gate === 'passFail') {
     if (verdict === 'pass') {
-      return goTo(flow, run, edge, envelope, edge.to, 'auto')
+      return goTo(flow, run, forward, envelope, forward.to, 'auto')
     }
     if (verdict === 'unknown') {
-      const target = edge.to && edge.to !== FLOW_END ? edge.to : edge.backTo || FLOW_END
-      const nextEnvelope = transformEnvelope(edge, envelope, flow, target)
+      const target = loop?.to || forward.backTo || (forward.to !== FLOW_END ? forward.to : FLOW_END)
+      const nextEnvelope = transformEnvelope(forward, envelope, flow, target)
       run.status = 'waiting'
       run.pendingHandoff = nextEnvelope
       const last = run.steps[run.steps.length - 1]
@@ -139,18 +161,24 @@ export function followEdge(flow: FlowDef, run: FlowRun, envelope: Envelope): Eng
       run.lastError = '官方审查结论是文本，未能读出 PASS/FAIL。请人工标记或手动桥接。'
       return { run, event: { type: 'waitManual', envelope: nextEnvelope } }
     }
-    const maxRetries = flow.maxRetries || 0
-    if (run.retryCount >= maxRetries) {
-      return fail(run, `已返工 ${run.retryCount} 次仍未通过，下一片保持锁定`)
-    }
-    if (edge.backTo) {
+    if (loop && takeLoop(run, loop)) {
       run.retryCount += 1
-      return goTo(flow, run, { ...edge, transform: 'roleWrap' }, envelope, edge.backTo, 'auto')
+      return goTo(flow, run, { ...loop, transform: 'roleWrap' }, envelope, loop.to, 'auto')
     }
-    return fail(run, '审查未通过')
+    const maxRetries = flow.maxRetries || 0
+    if (forward.backTo && run.retryCount < maxRetries) {
+      run.retryCount += 1
+      return goTo(flow, run, { ...forward, transform: 'roleWrap' }, envelope, forward.backTo, 'auto')
+    }
+    if (loop) return fail(run, `已循环 ${loop.maxLoops || 3} 次仍未通过，下一片保持锁定`)
+    return fail(run, run.retryCount ? `已返工 ${run.retryCount} 次仍未通过，下一片保持锁定` : '审查未通过')
   }
 
-  return goTo(flow, run, edge, envelope, edge.to)
+  if (loop && takeLoop(run, loop)) {
+    return goTo(flow, run, loop, envelope, loop.to)
+  }
+  if (forward) return goTo(flow, run, forward, envelope, forward.to)
+  return complete(run)
 }
 
 export function afterOutcome(flow: FlowDef, run: FlowRun, outcome: AdapterOutcome): EngineResult {
@@ -211,4 +239,18 @@ export function applyManualVerdict(flow: FlowDef, run: FlowRun, verdict: 'pass' 
 
 export function isRunBusy(run: FlowRun | null | undefined) {
   return run?.status === 'running'
+}
+
+export function cancelRun(run: FlowRun): FlowRun {
+  const next = cloneRun(run)
+  next.status = 'canceled'
+  next.lastError = '已停止'
+  next.pendingHandoff = null
+  const current = next.steps[next.steps.length - 1]
+  if (current && (current.status === 'working' || current.status === 'input-required')) {
+    current.status = 'canceled'
+    current.error = '已停止'
+    current.endedAt = Date.now()
+  }
+  return next
 }

@@ -1,19 +1,29 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import FlowChart from './FlowChart.vue'
 import FlowNodeCard from './FlowNodeCard.vue'
 import HandoffPanel from './HandoffPanel.vue'
 import {
   addRoleNode,
   advanceSlice,
+  clearSelection,
   markVerdict,
   persistCurrent,
   refreshGit,
   registerCustomRole,
+  disconnectEdge,
+  setEdgeBackTo,
+  setEdgeGate,
+  setEdgeMaxLoops,
+  setEdgeMode,
   setPaneMode,
-  startSelectedFlow
+  startSelectedFlow,
+  stopSelectedFlow
 } from '../lib/flow/runtime.ts'
-import { allRoles } from '../lib/flow/roles.ts'
+import { describeChannel } from '../lib/flow/channels.ts'
+import { flowInspectorKind, flowInspectorTitle } from '../lib/flow/inspector.ts'
+import { allRoles, roleLabel } from '../lib/flow/roles.ts'
+import { FLOW_END, FLOW_START, type RunStep } from '../lib/flow/types.ts'
 import { probeNote } from '../lib/pipeline'
 import {
   currentFlow,
@@ -30,21 +40,59 @@ const waiting = computed(() => currentRun.value?.status === 'waiting')
 const nextLocked = computed(() => currentPipeline.value?.gate !== 'passed')
 const editing = computed(() => store.bridgePaneMode === 'edit')
 const selectedNode = computed(
-  () => currentFlow.value?.nodes.find((item) => item.id === store.bridgeSelectedNodeId) ?? currentFlow.value?.nodes[0] ?? null
+  () => currentFlow.value?.nodes.find((item) => item.id === store.bridgeSelectedNodeId) ?? null
 )
+const selectedEdge = computed(
+  () => currentFlow.value?.edges.find((item) => item.id === store.bridgeSelectedEdgeId) ?? null
+)
+const activeNode = computed(
+  () => currentFlow.value?.nodes.find((item) => item.id === currentRun.value?.currentNodeId) ?? null
+)
+const failedNodeId = computed(() => {
+  const steps = currentRun.value?.steps || []
+  return [...steps].reverse().find((step) => step.status === 'failed')?.nodeId || ''
+})
 
 const newRole = ref('')
 const roles = computed(() => allRoles(store.customRoles))
+const inspectorKind = computed(() =>
+  flowInspectorKind(store.bridgePaneMode, store.bridgeSelectedNodeId, store.bridgeSelectedEdgeId)
+)
+const inspectorTitle = computed(() => flowInspectorTitle(inspectorKind.value))
 
 const stageHint = computed(() => {
-  if (editing.value) return '点角色放到图上。一对一：开发完成后审查，未通过回到开发者。'
+  if (editing.value) {
+    return '开发接到审查，再从审查拉回开发，即成循环。点循环线可改最大次数。'
+  }
   const run = currentRun.value
   if (run?.status === 'running') return '正在执行当前节点，图上高亮的是正在跑的角色。'
   if (run?.status === 'waiting') return '停在人工干预：改信封后再写入下一窗口。'
   if (run?.status === 'completed') return '本片已走完，可进入下一片。'
   if (run?.status === 'failed') return '未通过或失败，可标记结论或回到编排改图。'
+  if (run?.status === 'canceled') return '本片已停止，可改图后重新运行。'
   return '填写本轮任务后运行。运行中可以在这里看预览并插手。'
 })
+
+function nodeTitle(nodeId: string) {
+  const node = currentFlow.value?.nodes.find((item) => item.id === nodeId)
+  return node?.title || (node ? roleLabel(node.role) : nodeId)
+}
+
+function stepStatus(step: RunStep) {
+  if (step.status === 'working') return '进行中'
+  if (step.status === 'completed') return '完成'
+  if (step.status === 'failed') return '失败'
+  if (step.status === 'canceled') return '已停止'
+  if (step.status === 'input-required') return '待桥接'
+  return step.status
+}
+
+function stepDuration(step: RunStep) {
+  const end = step.endedAt || Date.now()
+  const ms = Math.max(0, end - step.startedAt)
+  if (ms < 1000) return `${ms} ms`
+  return `${Math.round(ms / 1000)} s`
+}
 
 function addRole(id: string) {
   addRoleNode(id)
@@ -65,6 +113,45 @@ function goRun() {
 function goEdit() {
   setPaneMode('edit')
 }
+
+function onPaletteDrag(roleId: string, event: DragEvent) {
+  event.dataTransfer?.setData('application/x-agent-dock-role', roleId)
+  if (event.dataTransfer) event.dataTransfer.effectAllowed = 'copy'
+}
+
+function edgeFromLabel(edge: { from: string }) {
+  if (edge.from === FLOW_START) return '开始'
+  const node = currentFlow.value?.nodes.find((item) => item.id === edge.from)
+  return node?.title || (node ? roleLabel(node.role) : '节点')
+}
+
+function edgeToLabel(edge: { to: string }) {
+  if (edge.to === FLOW_END) return '结束'
+  const node = currentFlow.value?.nodes.find((item) => item.id === edge.to)
+  return node?.title || (node ? roleLabel(node.role) : '节点')
+}
+
+function onGate(edgeId: string, value: string) {
+  const backTo = currentFlow.value?.nodes[0]?.id
+  if (value === 'loop') setEdgeGate(edgeId, 'loop')
+  else if (value === 'passFail') setEdgeGate(edgeId, 'passFail', backTo)
+  else setEdgeGate(edgeId, 'none')
+}
+
+function onMaxLoops(edgeId: string, event: Event) {
+  setEdgeMaxLoops(edgeId, Number((event.target as HTMLInputElement).value))
+}
+
+function onKey(event: KeyboardEvent) {
+  if (event.key !== 'Escape') return
+  if (!editing.value) return
+  const target = event.target as HTMLElement | null
+  if (target?.closest('input, textarea, select, [contenteditable="true"]')) return
+  clearSelection()
+}
+
+onMounted(() => window.addEventListener('keydown', onKey))
+onUnmounted(() => window.removeEventListener('keydown', onKey))
 </script>
 
 <template>
@@ -83,6 +170,14 @@ function goEdit() {
           <h1>{{ currentFlow.name }}</h1>
           <p class="stage-hint">{{ stageHint }}</p>
         </div>
+        <button
+          v-if="!editing && (busy || waiting)"
+          type="button"
+          class="soft-btn"
+          @click="stopSelectedFlow"
+        >
+          停止本片
+        </button>
         <p class="badge" :data-gate="currentPipeline.gate">{{ GATE_LABEL[currentPipeline.gate] }}</p>
       </header>
 
@@ -90,31 +185,90 @@ function goEdit() {
         控制台里这个项目还有打开的终端。审查或自动改文件时，不要同时写同一棵树。
       </p>
 
-      <div class="board" :class="{ 'board--run': !editing }">
+      <div class="board">
         <div class="board-chart">
-          <FlowChart :flow="currentFlow" :readonly="!editing && busy" />
-
-          <div v-if="editing" class="palette">
-            <span class="palette-label">角色库</span>
-            <button v-for="role in roles" :key="role.id" type="button" class="chip" @click="addRole(role.id)">
-              {{ role.label }}
-            </button>
-            <label class="new-role">
-              <input v-model="newRole" maxlength="16" placeholder="新角色名" @keydown.enter="submitNewRole" />
-              <button type="button" class="chip" :disabled="!newRole.trim()" @click="submitNewRole">添加</button>
-            </label>
-          </div>
-        </div>
-
-        <div class="board-side">
+          <div class="chart-wrap">
+            <FlowChart :flow="currentFlow" :readonly="!editing" />
+            <aside
+              v-if="inspectorKind"
+              class="ad-drawer inspector"
+              :aria-label="inspectorTitle"
+              @click.stop
+              @pointerdown.stop
+            >
+              <header class="inspector-head">
+                <p class="side-kicker">{{ inspectorTitle }}</p>
+                <button
+                  v-if="inspectorKind !== 'run'"
+                  type="button"
+                  class="text-btn"
+                  @click="clearSelection"
+                >
+                  关闭
+                </button>
+              </header>
           <template v-if="editing">
-            <p class="side-kicker">节点</p>
-            <FlowNodeCard
-              v-if="selectedNode"
-              :node="selectedNode"
-              :can-remove="currentFlow.nodes.length > 1"
-            />
-            <p v-else class="muted">点图上的框，在这里改通道和合同。</p>
+            <template v-if="selectedEdge">
+              <article class="edge-card">
+                <p class="hint">
+                  {{ edgeFromLabel(selectedEdge) }}
+                  →
+                  {{ edgeToLabel(selectedEdge) }}
+                </p>
+                <label class="field">
+                  <span>完成后</span>
+                  <select
+                    :value="selectedEdge.mode"
+                    @change="setEdgeMode(selectedEdge.id, ($event.target as HTMLSelectElement).value as 'auto' | 'manual')"
+                  >
+                    <option value="auto">自动</option>
+                    <option value="manual">手动桥接</option>
+                  </select>
+                </label>
+                <label class="field">
+                  <span>闸</span>
+                  <select
+                    :value="selectedEdge.gate"
+                    @change="onGate(selectedEdge.id, ($event.target as HTMLSelectElement).value)"
+                  >
+                    <option value="none">走下一节点</option>
+                    <option value="passFail">通过才结束，未通过返回</option>
+                    <option value="loop">循环回去</option>
+                  </select>
+                </label>
+                <label v-if="selectedEdge.gate === 'passFail'" class="field">
+                  <span>未通过回到</span>
+                  <select
+                    :value="selectedEdge.backTo || ''"
+                    @change="setEdgeBackTo(selectedEdge.id, ($event.target as HTMLSelectElement).value)"
+                  >
+                    <option v-for="node in currentFlow.nodes" :key="node.id" :value="node.id">
+                      {{ node.title || roleLabel(node.role) }}
+                    </option>
+                  </select>
+                </label>
+                <label v-if="selectedEdge.gate === 'loop'" class="field">
+                  <span>最大循环次数</span>
+                  <input
+                    type="number"
+                    min="1"
+                    max="20"
+                    :value="selectedEdge.maxLoops || 3"
+                    @change="onMaxLoops(selectedEdge.id, $event)"
+                  />
+                </label>
+                <p v-if="selectedEdge.gate === 'loop'" class="hint">
+                  用尽后走该节点的另一条线（通常接到「结束」）。没有另一条线则结束本片。
+                </p>
+                <button type="button" class="soft-btn" @click="disconnectEdge(selectedEdge.id)">删除这条连线</button>
+              </article>
+            </template>
+            <template v-else>
+              <FlowNodeCard
+                v-if="selectedNode"
+                :node="selectedNode"
+              />
+            </template>
           </template>
 
           <template v-else>
@@ -135,6 +289,15 @@ function goEdit() {
               <button type="button" class="btn btn-primary" :disabled="busy" @click="startSelectedFlow()">
                 {{ busy ? '运行中…' : '运行本片' }}
               </button>
+              <button
+                v-if="failedNodeId"
+                type="button"
+                class="soft-btn"
+                :disabled="busy"
+                @click="startSelectedFlow(failedNodeId)"
+              >
+                从失败节点重跑
+              </button>
               <button type="button" class="soft-btn" :disabled="busy" @click="markVerdict('pass')">标记通过</button>
               <button type="button" class="soft-btn" :disabled="busy" @click="markVerdict('fail')">标记未通过</button>
               <button type="button" class="soft-btn" :disabled="nextLocked || busy || waiting" @click="advanceSlice">
@@ -146,22 +309,23 @@ function goEdit() {
               已返工 {{ currentPipeline.retryCount }} / {{ currentPipeline.maxRetries }} 次
             </p>
 
-            <section v-if="currentPipeline.reviews.length" class="timeline">
-              <h2>审查记录</h2>
-              <article
-                v-for="(review, index) in currentPipeline.reviews"
-                :key="review.reviewThreadId || index"
-                class="review-card"
-                :data-verdict="review.verdict"
-              >
-                <div class="review-head">
-                  <h3>审查 {{ index + 1 }}</h3>
-                  <span class="verdict" :data-verdict="review.verdict">{{
-                    review.verdict === 'pass' ? '通过' : review.verdict === 'fail' ? '未通过' : '待判定'
-                  }}</span>
-                </div>
-                <pre class="review-text">{{ review.text || '（无审查原文）' }}</pre>
-              </article>
+            <section v-if="currentRun" class="activity">
+              <h2>活动</h2>
+              <p v-if="activeNode" class="meta">
+                当前：{{ activeNode.title || roleLabel(activeNode.role) }}
+                · {{ describeChannel(activeNode.channel, store.live) }}
+              </p>
+              <p v-if="currentRun.lastEnvelope?.done" class="envelope-preview">{{ currentRun.lastEnvelope.done }}</p>
+              <ol v-if="currentRun.steps.length" class="steps">
+                <li v-for="step in currentRun.steps" :key="step.id" :data-status="step.status">
+                  <div class="step-head">
+                    <strong>{{ nodeTitle(step.nodeId) }}</strong>
+                    <span>{{ stepStatus(step) }} · {{ stepDuration(step) }}</span>
+                  </div>
+                  <pre v-if="step.envelope?.done" class="review-text">{{ step.envelope.done }}</pre>
+                  <p v-if="step.error" class="error">{{ step.error }}</p>
+                </li>
+              </ol>
             </section>
 
             <div class="probe-row">
@@ -185,6 +349,26 @@ function goEdit() {
               <p v-else class="meta">还没有 git 摘要。</p>
             </article>
           </template>
+            </aside>
+          </div>
+          <div v-if="editing" class="palette">
+            <span class="palette-label">角色库</span>
+            <button
+              v-for="role in roles"
+              :key="role.id"
+              type="button"
+              class="chip"
+              draggable="true"
+              @click="addRole(role.id)"
+              @dragstart="onPaletteDrag(role.id, $event)"
+            >
+              {{ role.label }}
+            </button>
+            <label class="new-role">
+              <input v-model="newRole" maxlength="16" placeholder="新角色名" @keydown.enter="submitNewRole" />
+              <button type="button" class="chip" :disabled="!newRole.trim()" @click="submitNewRole">添加</button>
+            </label>
+          </div>
         </div>
       </div>
     </div>
@@ -196,20 +380,30 @@ function goEdit() {
   flex: 1;
   min-width: 0;
   min-height: 0;
-  overflow: auto;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
   background: var(--ad-editor);
 }
 
 .empty,
 .workbench {
-  max-width: 1200px;
-  margin: 0 auto;
-  padding: 20px 24px 64px;
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  padding: 16px 20px 16px;
+}
+
+.workbench {
+  display: flex;
+  flex-direction: column;
 }
 
 .empty {
   max-width: 560px;
+  margin: 0 auto;
   padding-top: 72px;
+  overflow: auto;
 }
 
 h1 {
@@ -231,7 +425,8 @@ h3 {
   display: flex;
   align-items: flex-start;
   gap: 16px;
-  margin-bottom: 16px;
+  margin-bottom: 12px;
+  flex-shrink: 0;
 }
 
 .modes {
@@ -298,6 +493,7 @@ h3 {
 }
 
 .banner {
+  flex-shrink: 0;
   margin: 0 0 16px;
   padding: 10px 12px;
   border-radius: 10px;
@@ -307,17 +503,64 @@ h3 {
 }
 
 .board {
-  display: grid;
-  grid-template-columns: minmax(0, 1.15fr) minmax(300px, 0.85fr);
-  gap: 20px;
-  align-items: start;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  min-width: 0;
 }
 
 .board-chart {
+  flex: 1;
   min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   border: 1px solid var(--ad-border);
   border-radius: 12px;
   background: var(--ad-harbor);
+}
+
+.chart-wrap {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.chart-wrap :deep(.chart) {
+  flex: 1;
+  min-height: 0;
+}
+
+.inspector {
+  bottom: auto;
+  width: min(380px, calc(100% - 24px));
+  max-height: calc(100% - 24px);
+  padding: 14px 16px 16px;
+  z-index: 6;
+}
+
+.inspector-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.inspector-head .side-kicker {
+  margin: 0;
+}
+
+.inspector :deep(.card),
+.inspector .edge-card {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
 }
 
 .palette {
@@ -327,6 +570,7 @@ h3 {
   align-items: center;
   padding: 10px 12px 12px;
   border-top: 1px solid var(--ad-border);
+  flex-shrink: 0;
 }
 
 .palette-label,
@@ -342,11 +586,25 @@ h3 {
   border: 1px solid var(--ad-border);
   color: var(--ad-muted);
   font-size: 12px;
+  cursor: grab;
 }
 
 .chip:hover:not(:disabled) {
   color: var(--ad-text);
   background: var(--ad-hover);
+}
+
+.edge-card {
+  padding: 12px 14px;
+  border: 1px solid var(--ad-border);
+  border-radius: 12px;
+  background: var(--ad-harbor);
+}
+
+.edge-card .hint {
+  margin: 0 0 10px;
+  font-size: 12px;
+  color: var(--ad-muted);
 }
 
 .new-role {
@@ -361,8 +619,57 @@ h3 {
   padding: 0 8px;
 }
 
-.board-side {
-  min-width: 0;
+.activity {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 16px 0;
+}
+
+.steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.steps li {
+  padding: 8px 10px;
+  border: 1px solid var(--ad-border);
+  border-left-width: 3px;
+  border-radius: 10px;
+  background: var(--ad-harbor);
+}
+
+.steps li[data-status='completed'] {
+  border-left-color: var(--ad-success);
+}
+
+.steps li[data-status='working'] {
+  border-left-color: var(--ad-warning);
+}
+
+.steps li[data-status='failed'],
+.steps li[data-status='canceled'] {
+  border-left-color: var(--ad-error);
+}
+
+.step-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.envelope-preview {
+  margin: 0;
+  max-height: 72px;
+  overflow: auto;
+  font-size: 12px;
+  color: var(--ad-muted);
+  white-space: pre-wrap;
 }
 
 .field {
@@ -498,12 +805,12 @@ textarea {
 }
 
 @media (max-width: 900px) {
-  .board {
-    grid-template-columns: 1fr;
-  }
-
   .stage {
     flex-wrap: wrap;
+  }
+
+  .inspector {
+    width: calc(100% - 24px);
   }
 }
 </style>

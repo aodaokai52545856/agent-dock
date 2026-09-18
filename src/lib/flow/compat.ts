@@ -5,7 +5,7 @@ import type { FlowDef, FlowRun, ProjectFlows } from './types.ts'
 export function gateFromRun(flow: FlowDef | null, run: FlowRun | null): GateStatus {
   if (!run || run.status === 'idle') return 'idle'
   if (run.status === 'waiting') return 'pendingReview'
-  if (run.status === 'failed') return 'failed'
+  if (run.status === 'failed' || run.status === 'canceled') return 'failed'
   if (run.status === 'completed') return 'passed'
   const node = flow?.nodes.find((item) => item.id === run.currentNodeId)
   if (node?.channel.kind === 'codexApp') return 'reviewing'

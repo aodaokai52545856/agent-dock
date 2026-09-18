@@ -10,9 +10,12 @@ import {
 } from '../lib/grokUsage'
 import {
   DSH_BALANCE_INTERVAL_MS,
+  DSH_PEAK_TICK_MS,
   balanceTone,
   formatBalanceLine,
   formatBalanceTooltip,
+  formatPeakTooltip,
+  peakCopy,
   shouldShowDshBalance
 } from '../lib/dshBalance'
 import SpendPanel from './SpendPanel.vue'
@@ -38,8 +41,10 @@ const spend = ref<GrokSpend | null>(null)
 const spendLoading = ref(false)
 const dshBalance = ref<DshBalance | null>(null)
 const dshLoading = ref(false)
+const peakNow = ref(Date.now())
 let usageTimer = 0
 let dshTimer = 0
+let peakTimer = 0
 let usageSeq = 0
 let spendSeq = 0
 let dshSeq = 0
@@ -71,6 +76,8 @@ const dshTitle = computed(() => {
   return dshLoading.value ? '正在读取 DeepSeek 余额' : '点击读取 DeepSeek 余额'
 })
 const dshClass = computed(() => balanceTone(dshBalance.value))
+const peak = computed(() => peakCopy(new Date(peakNow.value)))
+const peakTitle = computed(() => formatPeakTooltip(new Date(peakNow.value)))
 const spendText = computed(() => formatSpendLine(spend.value, spendLoading.value))
 const initialRange = resolveSpendRange('today')
 const spendPreset = ref<SpendPreset>('today')
@@ -162,7 +169,7 @@ function onSpendRange(next: { preset: SpendPreset; start: number; end: number; f
 
 async function onJump(ptyId: string) {
   closeLiveMenu()
-  await jumpToLive(ptyId)
+  await jumpToLive(ptyId, { keepMode: store.appMode === 'bridge' })
 }
 
 function onDocClick() {
@@ -288,6 +295,21 @@ function stopDshTimer() {
   }
 }
 
+function stopPeakTimer() {
+  if (peakTimer) {
+    window.clearInterval(peakTimer)
+    peakTimer = 0
+  }
+}
+
+function startPeakTimer() {
+  stopPeakTimer()
+  peakNow.value = Date.now()
+  peakTimer = window.setInterval(() => {
+    peakNow.value = Date.now()
+  }, DSH_PEAK_TICK_MS)
+}
+
 watch(
   [showGrokUsage, () => store.selectedProjectId, () => store.grokAuthRev],
   ([show]) => {
@@ -316,12 +338,14 @@ watch(
   [showDshBalance, () => store.selectedProjectId, () => store.dshKeyRev],
   ([show]) => {
     stopDshTimer()
+    stopPeakTimer()
     dshSeq += 1
     dshBalance.value = null
     if (!show) {
       dshLoading.value = false
       return
     }
+    startPeakTimer()
     void loadDshBalance()
     dshTimer = window.setInterval(() => {
       void loadDshBalance()
@@ -342,6 +366,7 @@ onUnmounted(() => {
   dshSeq += 1
   stopUsageTimer()
   stopDshTimer()
+  stopPeakTimer()
   window.removeEventListener('click', onDocClick)
   window.removeEventListener('keydown', onKey)
   window.removeEventListener('resize', onResize)
@@ -415,17 +440,26 @@ watch(liveCount, (n) => {
     >
       {{ usageText }}
     </button>
-    <button
-      v-if="showDshBalance"
-      type="button"
-      class="usage"
-      :class="dshClass"
-      :title="dshTitle"
-      :disabled="dshLoading && !dshBalance"
-      @click="loadDshBalance"
-    >
-      {{ dshText }}
-    </button>
+    <div v-if="showDshBalance" class="dsh-meter">
+      <button
+        type="button"
+        class="usage"
+        :class="dshClass"
+        :title="dshTitle"
+        :disabled="dshLoading && !dshBalance"
+        @click="loadDshBalance"
+      >
+        {{ dshText }}
+      </button>
+      <span
+        class="peak"
+        :class="peak.peak ? 'hot' : 'go'"
+        :title="peakTitle"
+      >
+        {{ peak.label }}
+        <strong>{{ peak.punch }}</strong>
+      </span>
+    </div>
     <div v-if="showGrokUsage" class="live-wrap">
       <button
         ref="spendBtn"
@@ -539,6 +573,40 @@ watch(liveCount, (n) => {
 .usage:disabled {
   cursor: default;
   opacity: 0.72;
+}
+
+.dsh-meter {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.peak {
+  height: 22px;
+  padding: 0 8px;
+  border-radius: var(--ad-radius-control);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  white-space: nowrap;
+  font-weight: 500;
+}
+
+.peak strong {
+  font-weight: 800;
+  letter-spacing: 0.02em;
+}
+
+.peak.hot {
+  color: var(--ad-error);
+  background: color-mix(in srgb, var(--ad-error) 14%, transparent);
+}
+
+.peak.go {
+  color: var(--ad-success);
+  background: color-mix(in srgb, var(--ad-success) 14%, transparent);
 }
 
 .live-wrap {

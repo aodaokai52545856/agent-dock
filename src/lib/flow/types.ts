@@ -1,8 +1,10 @@
 import type { GitSnapshot, ReviewTargetKind, ReviewVerdict, ToolId } from '../types.ts'
 
 export const FLOW_END = '__end__'
+export const FLOW_START = '__start__'
 export const MAX_STEPS_DEFAULT = 12
 export const MAX_RETRIES_DEFAULT = 2
+export const MAX_LOOPS_DEFAULT = 3
 export const PTY_WAIT_MS_DEFAULT = 8 * 60 * 1000
 export const ARTIFACT_CHAR_CAP = 200_000
 
@@ -40,7 +42,7 @@ export type ChannelBinding = CodexChannel | PtyChannel | CursorChannel | HumanCh
 
 export type EdgeMode = 'auto' | 'manual'
 export type EdgeTransform = 'roleWrap' | 'verbatim'
-export type EdgeGate = 'none' | 'passFail'
+export type EdgeGate = 'none' | 'passFail' | 'loop'
 
 export interface FlowNode {
   id: string
@@ -48,6 +50,8 @@ export interface FlowNode {
   role: RoleId
   roleContract: string
   channel: ChannelBinding
+  x?: number
+  y?: number
 }
 
 export interface FlowEdge {
@@ -58,6 +62,7 @@ export interface FlowEdge {
   transform: EdgeTransform
   gate: EdgeGate
   backTo?: string
+  maxLoops?: number
 }
 
 export type FlowTemplateId = 'dev-review' | 'codex-grok' | 'blank'
@@ -72,6 +77,10 @@ export interface FlowDef {
   maxSteps: number
   slice: number
   draftTask: string
+  startX?: number
+  startY?: number
+  endX?: number
+  endY?: number
 }
 
 export type ArtifactKind = 'text' | 'diff' | 'verdict' | 'file'
@@ -110,7 +119,7 @@ export interface RunStep {
   envelope?: Envelope
 }
 
-export type RunStatus = 'idle' | 'running' | 'waiting' | 'failed' | 'completed'
+export type RunStatus = 'idle' | 'running' | 'waiting' | 'failed' | 'completed' | 'canceled'
 
 export interface FlowRun {
   id: string
@@ -123,6 +132,7 @@ export interface FlowRun {
   lastEnvelope: Envelope | null
   pendingHandoff: Envelope | null
   retryCount: number
+  loopCounts: Record<string, number>
   stepCount: number
   lastError: string
   cursorAgentId: string

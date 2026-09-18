@@ -1,8 +1,10 @@
 import * as api from '../api.ts'
-import { showToast, store } from '../store.ts'
+import { appearanceFromSettings, resolvedTheme, systemPrefersLight } from '../appearance.ts'
+import { jumpToLive, rememberOpened, showToast, store, watchPendingSession } from '../store.ts'
 import { runChannel } from './adapters.ts'
-import { defaultChannel, firstCodexNode } from './channels.ts'
-import { afterOutcome, applyManualVerdict, isRunBusy, resumeManual, startRun } from './engine.ts'
+import { defaultChannel, firstCodexNode, validateFlowPtyBindings } from './channels.ts'
+import { connectForward, deleteEdge, placeNode, placeTerminal, withNodePoints } from './chartLayout.ts'
+import { afterOutcome, applyManualVerdict, cancelRun, isRunBusy, resumeManual, startRun } from './engine.ts'
 import { renderEnvelope } from './envelope.ts'
 import {
   appendNode,
@@ -15,7 +17,7 @@ import {
   ensureProjectFlows as ensureBundle
 } from './model.ts'
 import { addCustomRole as pushCustomRole, roleContract, roleLabel } from './roles.ts'
-import { createDevReviewFlow } from './templates.ts'
+import { flowFromTemplate } from './templates.ts'
 import type {
   EngineEvent,
   EngineResult,
@@ -23,6 +25,7 @@ import type {
   FlowDef,
   FlowNode,
   FlowRun,
+  FlowTemplateId,
   RoleId
 } from './types.ts'
 
@@ -141,6 +144,11 @@ export async function startSelectedFlow(nodeId?: string) {
     return
   }
   if (busyToast()) return
+  const bindError = validateFlowPtyBindings(flow, store.live, projectId)
+  if (bindError) {
+    showToast(bindError)
+    return
+  }
   store.bridgePaneMode = 'run'
   await refreshGit()
   const result = startRun(flow, projectId, flow.draftTask, nodeId)
@@ -214,6 +222,7 @@ export function selectFlow(flowId: string) {
   }
   row.selectedFlowId = flowId
   store.bridgeSelectedNodeId = flow.nodes[0]?.id || ''
+  store.bridgeSelectedEdgeId = ''
   persistFlows()
   setRun(null)
 }
@@ -228,24 +237,51 @@ export function setPaneMode(mode: 'edit' | 'run') {
 
 export function setSelectedNode(nodeId: string) {
   store.bridgeSelectedNodeId = nodeId
+  store.bridgeSelectedEdgeId = ''
+}
+
+export function setSelectedEdge(edgeId: string) {
+  store.bridgeSelectedEdgeId = edgeId
+  store.bridgeSelectedNodeId = ''
+}
+
+export function clearSelection() {
+  store.bridgeSelectedNodeId = ''
+  store.bridgeSelectedEdgeId = ''
 }
 
 export function createPairFlow() {
+  createFlowFromTemplate('dev-review')
+}
+
+export function createFlowFromTemplate(templateId: FlowTemplateId) {
   const row = bundle()
   if (!row) return
   if (isRunBusy(currentRun())) {
     showToast('这一片还在跑，先等它结束再新建')
     return
   }
-  const flow = createDevReviewFlow()
-  const count = row.flows.filter((item) => item.templateId === 'dev-review').length
-  if (count) flow.name = `开发 ↔ 审查 ${count + 1}`
+  const flow = flowFromTemplate(templateId)
+  const count = row.flows.filter((item) => item.templateId === templateId).length
+  if (count) flow.name = `${flow.name} ${count + 1}`
   row.flows.push(flow)
   row.selectedFlowId = flow.id
   store.bridgePaneMode = 'edit'
   store.bridgeSelectedNodeId = flow.nodes[0]?.id || ''
+  store.bridgeSelectedEdgeId = ''
   persistFlows()
   setRun(null)
+}
+
+export function stopSelectedFlow() {
+  const run = currentRun()
+  if (!run || (run.status !== 'running' && run.status !== 'waiting')) {
+    showToast('现在没有在跑的流程')
+    return
+  }
+  runSeq += 1
+  setRun(cancelRun(run))
+  showToast('已停止本片')
 }
 
 export function renameFlow(flowId: string, name: string) {
@@ -290,21 +326,147 @@ export function registerCustomRole(label: string) {
 }
 
 export function addRoleNode(role: RoleId) {
+  addRoleNodeAt(role)
+}
+
+export function addRoleNodeAt(role: RoleId, point?: { x: number; y: number }) {
   const flow = currentFlow()
   if (!flow) return
-  const next = appendNode(flow, createCustomNode(role, defaultChannel(role)))
+  const next = appendNode(flow, createCustomNode(role, defaultChannel(role), point))
   patchFlow(next)
-  store.bridgeSelectedNodeId = next.nodes[next.nodes.length - 1]?.id || ''
+  const id = next.nodes[next.nodes.length - 1]?.id || ''
+  store.bridgeSelectedNodeId = id
+  store.bridgeSelectedEdgeId = ''
+}
+
+export function moveFlowNode(nodeId: string, x: number, y: number) {
+  const flow = currentFlow()
+  if (!flow) return
+  patchFlow(placeNode(withNodePoints(flow), nodeId, x, y))
+}
+
+export function connectFlowNodes(fromId: string, toId: string) {
+  const flow = currentFlow()
+  if (!flow) return
+  patchFlow(connectForward(flow, fromId, toId))
+}
+
+export function disconnectEdge(edgeId: string) {
+  const flow = currentFlow()
+  if (!flow) return
+  patchFlow(deleteEdge(flow, edgeId))
+  if (store.bridgeSelectedEdgeId === edgeId) store.bridgeSelectedEdgeId = ''
+}
+
+export function moveTerminal(which: 'start' | 'end', x: number, y: number) {
+  const flow = currentFlow()
+  if (!flow) return
+  patchFlow(placeTerminal(flow, which, x, y))
+}
+
+export function setEdgeGate(edgeId: string, gate: 'none' | 'passFail' | 'loop', backTo?: string) {
+  const flow = currentFlow()
+  if (!flow) return
+  patchFlow({
+    ...flow,
+    edges: flow.edges.map((edge) => (
+      edge.id === edgeId
+        ? {
+            ...edge,
+            gate,
+            backTo: gate === 'passFail' ? backTo || edge.backTo : undefined,
+            maxLoops: gate === 'loop' ? edge.maxLoops || 3 : undefined
+          }
+        : edge
+    ))
+  })
+}
+
+export function setEdgeMaxLoops(edgeId: string, maxLoops: number) {
+  const flow = currentFlow()
+  if (!flow) return
+  const n = Math.min(20, Math.max(1, Math.round(maxLoops) || 3))
+  patchFlow({
+    ...flow,
+    edges: flow.edges.map((edge) => (edge.id === edgeId ? { ...edge, gate: 'loop', maxLoops: n } : edge))
+  })
+}
+
+export function setEdgeBackTo(edgeId: string, backTo: string) {
+  const flow = currentFlow()
+  if (!flow) return
+  patchFlow({
+    ...flow,
+    edges: flow.edges.map((edge) => (
+      edge.id === edgeId
+        ? { ...edge, gate: 'passFail', backTo: backTo || undefined }
+        : edge
+    ))
+  })
 }
 
 export function removeRoleNode(nodeId: string) {
   const flow = currentFlow()
   if (!flow) return
-  if (flow.nodes.length <= 1) {
-    showToast('至少留一个节点')
+  const next = removeNode(flow, nodeId)
+  patchFlow(next)
+  if (store.bridgeSelectedNodeId === nodeId) {
+    store.bridgeSelectedNodeId = next.nodes[0]?.id || ''
+    store.bridgeSelectedEdgeId = ''
+  }
+}
+
+export async function jumpBoundWindow(ptyId: string) {
+  await jumpToLive(ptyId, { keepMode: true })
+}
+
+export async function openWindowForNode(nodeId: string) {
+  const flow = currentFlow()
+  const node = flow?.nodes.find((item) => item.id === nodeId)
+  if (!node || node.channel.kind !== 'pty') return
+  const project = store.projects.find((item) => item.id === store.selectedProjectId)
+  if (!project) {
+    showToast('先选一个项目')
     return
   }
-  patchFlow(removeNode(flow, nodeId))
+  if (!api.isTauri) {
+    showToast('请在桌面端打开窗口')
+    return
+  }
+  try {
+    const opened = await api.ptyOpen({
+      projectId: project.id,
+      toolId: node.channel.toolId,
+      title: node.title || '新会话',
+      cols: 120,
+      rows: 32,
+      uiTheme: resolvedTheme(appearanceFromSettings(store.settings).theme, systemPrefersLight())
+    })
+    rememberOpened({
+      ptyId: opened.ptyId,
+      key: opened.key,
+      projectId: project.id,
+      toolId: node.channel.toolId,
+      sessionId: opened.sessionId ?? '',
+      title: opened.title,
+      alive: true,
+      openedAt: opened.openedAt ?? Date.now(),
+      kind: opened.kind ?? 'pty',
+      url: opened.url ?? null
+    })
+    if (!opened.sessionId) watchPendingSession(opened.ptyId)
+    updateNode(nodeId, {
+      channel: {
+        kind: 'pty',
+        toolId: node.channel.toolId,
+        ptyId: opened.ptyId,
+        sessionId: opened.sessionId || ''
+      }
+    })
+    showToast('已打开并绑定窗口')
+  } catch (err) {
+    showToast(err instanceof Error ? err.message : String(err))
+  }
 }
 
 export function updateNode(nodeId: string, patch: Partial<FlowNode>) {

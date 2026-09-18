@@ -3,7 +3,7 @@ import { isPtyBusy } from '../livePulse.ts'
 import { wrapBracketedPaste } from '../sessionCite.ts'
 import { combineVerdicts } from '../reviewVerdict.ts'
 import type { LivePtyInfo, SessionTurn, ToolId } from '../types.ts'
-import { channelSupportsAuto, resolvePty } from './channels.ts'
+import { channelSupportsAuto, preparePtyRun, ptyWaitTimeoutError } from './channels.ts'
 import { promptFromEnvelope, renderEnvelope } from './envelope.ts'
 import { detectNewAssistantTurn, turnIds } from './ptyWait.ts'
 import { PTY_WAIT_MS_DEFAULT, type AdapterOutcome, type Envelope, type FlowNode } from './types.ts'
@@ -86,6 +86,8 @@ async function runCodex(node: FlowNode, envelope: Envelope, ctx: AdapterContext)
 
 async function runPty(node: FlowNode, envelope: Envelope, ctx: AdapterContext): Promise<AdapterOutcome> {
   if (node.channel.kind !== 'pty') return { ok: false, text: '', error: '不是窗口节点' }
+  const ready = preparePtyRun(node, ctx.live, ctx.projectId, { send: ctx.send })
+  if (!ready.ok) return { ok: false, text: '', error: ready.error }
   const rendered = renderEnvelope(envelope, {
     transform: ctx.verbatim ? 'verbatim' : 'roleWrap',
     contract: node.roleContract
@@ -94,18 +96,13 @@ async function runPty(node: FlowNode, envelope: Envelope, ctx: AdapterContext): 
     await (ctx.sleep ?? sleep)(300)
     return { ok: true, text: '预览：窗口已收到接力。' }
   }
-  const live = resolvePty(node.channel, ctx.live, ctx.projectId)
-  if (!live) {
-    return { ok: false, text: '', error: '先打开目标窗口，才能把消息桥接进去' }
-  }
+  const { live, waitForTurn, sessionId } = ready
   const now = ctx.now ?? Date.now
   if (isPtyBusy(ctx.ptyDataAt[live.ptyId], now())) {
     await (ctx.sleep ?? sleep)(2800)
     if (!ctx.isCurrent()) return { ok: false, text: '', error: '已取消' }
   }
-  const waitForTurn = ctx.send || channelSupportsAuto(node.channel)
   let before: string[] = []
-  const sessionId = live.sessionId || node.channel.sessionId
   if (waitForTurn && sessionId) {
     try {
       const listed = await (ctx.listTurns
@@ -144,5 +141,5 @@ async function runPty(node: FlowNode, envelope: Envelope, ctx: AdapterContext): 
       /* keep polling */
     }
   }
-  return { ok: false, text: '', error: '等待窗口回复超时。可改成手动桥接，或在窗口里确认是否已发送。' }
+  return { ok: false, text: '', error: ptyWaitTimeoutError(live) }
 }

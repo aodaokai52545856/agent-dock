@@ -4,11 +4,13 @@ import { endPaneAnim, layout, sidebarPaneWidth, toggleProjects } from '../lib/la
 import { liveDotTitle, projectLiveDot, type LiveDotKind } from '../lib/livePulse'
 import { liveOfProject } from '../lib/livePty'
 import {
-  createPairFlow,
+  createFlowFromTemplate,
   deleteFlow,
   renameFlow,
   selectFlow
 } from '../lib/flow/runtime.ts'
+import { FLOW_TEMPLATES } from '../lib/flow/templates.ts'
+import { inspectPty } from '../lib/flow/channels.ts'
 import { currentFlow, currentRun, ensurePipeline, store } from '../lib/store'
 
 defineProps<{
@@ -49,6 +51,7 @@ const selectedFlowId = computed(() => store.projectFlows[store.selectedProjectId
 const renamingId = ref('')
 const renameDraft = ref('')
 const confirmDeleteId = ref('')
+const templateOpen = ref(false)
 
 function startRename(id: string, name: string) {
   renamingId.value = id
@@ -87,9 +90,28 @@ const runHint = computed(() => {
   if (run.status === 'running') return '运行中'
   if (run.status === 'waiting') return '待桥接'
   if (run.status === 'failed') return '失败'
+  if (run.status === 'canceled') return '已停止'
   if (run.status === 'completed') return '已完成'
   return ''
 })
+
+const flowHint = computed(() => {
+  const flow = currentFlow.value
+  if (!flow) return '一对一：开发者完成后交给审查者，未通过再回到开发者。'
+  const unbound = flow.nodes.filter((node) => (
+    node.channel.kind === 'pty' && !inspectPty(node.channel, store.live, store.selectedProjectId).ok
+  )).length
+  if (unbound) return `${unbound} 个窗口节点还没绑好。`
+  if (flow.nodes.length === 2 && flow.edges.some((edge) => edge.gate === 'passFail')) {
+    return '一对一：开发者完成后交给审查者，未通过再回到开发者。'
+  }
+  return `串行 ${flow.nodes.length} 个节点。`
+})
+
+function onCreate(id: (typeof FLOW_TEMPLATES)[number]['id']) {
+  templateOpen.value = false
+  createFlowFromTemplate(id)
+}
 </script>
 
 <template>
@@ -156,11 +178,30 @@ const runHint = computed(() => {
       <div class="block block--flows">
         <div class="block-head">
           <p class="kicker">已保存的流程</p>
-          <button type="button" class="text-btn" :disabled="!store.selectedProjectId" @click="createPairFlow">
-            新建
-          </button>
+          <div class="new-wrap">
+            <button
+              type="button"
+              class="text-btn"
+              :disabled="!store.selectedProjectId"
+              @click="templateOpen = !templateOpen"
+            >
+              新建
+            </button>
+            <div v-if="templateOpen" class="templates" role="menu">
+              <button
+                v-for="item in FLOW_TEMPLATES"
+                :key="item.id"
+                type="button"
+                class="template"
+                @click="onCreate(item.id)"
+              >
+                <strong>{{ item.name }}</strong>
+                <span>{{ item.hint }}</span>
+              </button>
+            </div>
+          </div>
         </div>
-        <p class="hint">一对一：开发者完成后交给审查者，未通过再回到开发者。</p>
+        <p class="hint">{{ flowHint }}</p>
         <ul v-if="flows.length" class="flows">
           <li v-for="item in flows" :key="item.id">
             <div class="flow" :class="{ 'flow--on': item.id === selectedFlowId }">
@@ -193,6 +234,9 @@ const runHint = computed(() => {
         </ul>
         <p v-else class="muted pad">还没有流程。点新建会放好「开发 ↔ 审查」。</p>
         <p v-if="currentFlow" class="meta pad">当前：{{ currentFlow.name }} · {{ currentFlow.nodes.length }} 个节点</p>
+        <p v-if="currentRun?.lastError && currentRun.status !== 'running'" class="meta pad run-error">
+          {{ currentRun.lastError }}
+        </p>
       </div>
     </div>
   </aside>
@@ -288,6 +332,47 @@ const runHint = computed(() => {
 
 .text-btn:hover:not(:disabled) {
   color: var(--ad-text);
+}
+
+.new-wrap {
+  position: relative;
+}
+
+.templates {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  z-index: 8;
+  width: 220px;
+  padding: 6px;
+  border: 1px solid var(--ad-border);
+  border-radius: 10px;
+  background: var(--ad-raised);
+  box-shadow: var(--ad-shadow-menu);
+}
+
+.template {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: 8px;
+  text-align: left;
+  border-radius: 8px;
+  color: var(--ad-text);
+}
+
+.template:hover {
+  background: var(--ad-hover);
+}
+
+.template span {
+  font-size: 11px;
+  color: var(--ad-muted);
+}
+
+.run-error {
+  color: var(--ad-error);
 }
 
 .projects {

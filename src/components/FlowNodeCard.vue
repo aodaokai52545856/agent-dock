@@ -1,9 +1,23 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { channelKindLabel, describeChannel, defaultChannel } from '../lib/flow/channels.ts'
-import { persistCurrent, removeRoleNode, toggleCodexThread, updateNode } from '../lib/flow/runtime.ts'
+import {
+  channelKindLabel,
+  describeChannel,
+  defaultChannel,
+  inspectPty,
+  ptyOccupant,
+  ptyWindowLabel
+} from '../lib/flow/channels.ts'
+import {
+  currentFlow,
+  jumpBoundWindow,
+  openWindowForNode,
+  removeRoleNode,
+  toggleCodexThread,
+  updateNode
+} from '../lib/flow/runtime.ts'
 import { allRoles, roleHint, roleLabel } from '../lib/flow/roles.ts'
-import type { ChannelKind, FlowNode, RoleId } from '../lib/flow/types.ts'
+import type { ChannelKind, CodexChannel, FlowNode, PtyChannel, RoleId } from '../lib/flow/types.ts'
 import { liveOfProject } from '../lib/livePty'
 import { refreshCodexThreads } from '../lib/pipeline'
 import { store } from '../lib/store'
@@ -12,7 +26,6 @@ import { toolLabel, type ReviewTargetKind, type ToolId } from '../lib/types'
 
 const props = defineProps<{
   node: FlowNode
-  canRemove: boolean
 }>()
 
 const roles = computed(() => allRoles(store.customRoles))
@@ -32,6 +45,18 @@ const liveWindows = computed(() =>
   })
 )
 
+const channelHint = computed(() => describeChannel(props.node.channel, store.live))
+const boundLive = computed(() => {
+  if (props.node.channel.kind !== 'pty') return null
+  const found = inspectPty(props.node.channel, store.live, store.selectedProjectId)
+  return found.ok ? found.live : null
+})
+
+function occupantName(ptyId: string) {
+  const other = ptyOccupant(currentFlow(), ptyId, props.node.id)
+  return other ? other.title || roleLabel(other.role) : ''
+}
+
 function setRole(role: RoleId) {
   updateNode(props.node.id, { role, title: roleLabel(role), channel: defaultChannel(role) })
 }
@@ -47,19 +72,48 @@ function setChannelKind(kind: ChannelKind) {
   else updateNode(props.node.id, { channel: { kind: 'human' } })
 }
 
+function onTitle(event: Event) {
+  updateNode(props.node.id, { title: (event.target as HTMLInputElement).value })
+}
+
+function onContract(event: Event) {
+  updateNode(props.node.id, { roleContract: (event.target as HTMLTextAreaElement).value })
+}
+
+function setToolId(toolId: ToolId) {
+  if (props.node.channel.kind !== 'pty') return
+  updateNode(props.node.id, { channel: { kind: 'pty', toolId, sessionId: '', ptyId: '' } })
+}
+
 function bindPty(ptyId: string) {
   if (props.node.channel.kind !== 'pty') return
+  if (!ptyId) {
+    updateNode(props.node.id, { channel: { ...props.node.channel, ptyId: '', sessionId: '' } })
+    return
+  }
   const live = store.live.find((item) => item.ptyId === ptyId)
-  props.node.channel.ptyId = ptyId
-  props.node.channel.sessionId = live?.sessionId || ''
-  if (live) props.node.channel.toolId = live.toolId
-  persistCurrent()
+  updateNode(props.node.id, {
+    channel: {
+      kind: 'pty',
+      toolId: live?.toolId || props.node.channel.toolId,
+      ptyId,
+      sessionId: live?.sessionId || ''
+    }
+  })
+}
+
+function patchCodex(patch: Partial<CodexChannel>) {
+  if (props.node.channel.kind !== 'codexApp') return
+  updateNode(props.node.id, { channel: { ...props.node.channel, ...patch } })
 }
 
 function onTarget(kind: ReviewTargetKind) {
-  if (props.node.channel.kind !== 'codexApp') return
-  props.node.channel.targetKind = kind
-  persistCurrent()
+  patchCodex({ targetKind: kind })
+}
+
+function onCodexField(field: 'commitSha' | 'baseBranch' | 'customInstructions', event: Event) {
+  const value = (event.target as HTMLInputElement | HTMLTextAreaElement).value
+  patchCodex({ [field]: value })
 }
 </script>
 
@@ -67,10 +121,10 @@ function onTarget(kind: ReviewTargetKind) {
   <article class="card">
     <header class="head">
       <div class="titles">
-        <input v-model="node.title" class="title-input" @change="persistCurrent" />
-        <p class="hint">{{ roleHint(node.role) }} · {{ describeChannel(node.channel) }}</p>
+        <input :value="node.title" class="title-input" @change="onTitle" />
+        <p class="hint">{{ roleHint(node.role) }} · {{ channelHint }}</p>
       </div>
-      <button v-if="canRemove" type="button" class="text-btn" @click="removeRoleNode(node.id)">删除</button>
+      <button type="button" class="text-btn" @click="removeRoleNode(node.id)">删除节点</button>
     </header>
 
     <div class="row">
@@ -93,25 +147,44 @@ function onTarget(kind: ReviewTargetKind) {
 
     <label class="field tight">
       <span>角色合同</span>
-      <textarea v-model="node.roleContract" rows="2" @change="persistCurrent" />
+      <textarea :value="node.roleContract" rows="2" @change="onContract" />
     </label>
 
-    <div v-if="node.channel.kind === 'pty'" class="row">
-      <label class="field tight">
-        <span>窗口类型</span>
-        <select v-model="node.channel.toolId" @change="persistCurrent">
-          <option v-for="tool in tools" :key="tool" :value="tool">{{ toolLabel(tool) }}</option>
-        </select>
-      </label>
-      <label class="field tight">
-        <span>已打开的窗口</span>
-        <select :value="node.channel.ptyId" :disabled="!liveWindows.length" @change="bindPty(($event.target as HTMLSelectElement).value)">
-          <option value="">先打开目标窗口</option>
-          <option v-for="item in liveWindows" :key="item.ptyId" :value="item.ptyId">
-            {{ toolLabel(item.toolId) }} · {{ item.title }}
-          </option>
-        </select>
-      </label>
+    <div v-if="node.channel.kind === 'pty'" class="pty-bind">
+      <div class="row">
+        <label class="field tight">
+          <span>窗口类型</span>
+          <select
+            :value="node.channel.toolId"
+            @change="setToolId(($event.target as HTMLSelectElement).value as ToolId)"
+          >
+            <option v-for="tool in tools" :key="tool" :value="tool">{{ toolLabel(tool) }}</option>
+          </select>
+        </label>
+        <label class="field tight">
+          <span>已打开的窗口</span>
+          <select :value="(node.channel as PtyChannel).ptyId" @change="bindPty(($event.target as HTMLSelectElement).value)">
+            <option value="">先选择一扇窗口</option>
+            <option v-for="item in liveWindows" :key="item.ptyId" :value="item.ptyId">
+              {{ ptyWindowLabel(item, occupantName(item.ptyId) || undefined) }}
+            </option>
+          </select>
+        </label>
+      </div>
+      <div class="pty-actions">
+        <button
+          v-if="boundLive"
+          type="button"
+          class="text-btn"
+          @click="jumpBoundWindow(boundLive.ptyId)"
+        >
+          跳到该窗
+        </button>
+        <button type="button" class="text-btn" @click="openWindowForNode(node.id)">
+          打开新{{ toolLabel((node.channel as PtyChannel).toolId) }}并绑定
+        </button>
+      </div>
+      <p v-if="!liveWindows.length" class="hint">控制台里先打开该类型窗口，或点上面的按钮新开一扇。</p>
     </div>
 
     <div v-else-if="node.channel.kind === 'codexApp'" class="targets">
@@ -127,15 +200,15 @@ function onTarget(kind: ReviewTargetKind) {
       </button>
       <label v-if="node.channel.targetKind === 'commit'" class="field tight grow">
         <span>Commit SHA</span>
-        <input v-model="node.channel.commitSha" placeholder="完整或短 sha" @change="persistCurrent" />
+        <input :value="node.channel.commitSha" placeholder="完整或短 sha" @change="onCodexField('commitSha', $event)" />
       </label>
       <label v-if="node.channel.targetKind === 'baseBranch'" class="field tight grow">
         <span>基线分支</span>
-        <input v-model="node.channel.baseBranch" placeholder="main" @change="persistCurrent" />
+        <input :value="node.channel.baseBranch" placeholder="main" @change="onCodexField('baseBranch', $event)" />
       </label>
       <label v-if="node.channel.targetKind === 'custom'" class="field tight grow">
         <span>审查说明</span>
-        <textarea v-model="node.channel.customInstructions" rows="2" @change="persistCurrent" />
+        <textarea :value="node.channel.customInstructions" rows="2" @change="onCodexField('customInstructions', $event)" />
       </label>
       <div class="threads grow">
         <div class="thread-head">
@@ -203,6 +276,19 @@ function onTarget(kind: ReviewTargetKind) {
   font-size: 12px;
   line-height: 18px;
   color: var(--ad-muted);
+}
+
+.pty-bind {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.pty-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 4px;
 }
 
 .row {

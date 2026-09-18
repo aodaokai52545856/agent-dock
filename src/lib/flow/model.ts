@@ -2,8 +2,9 @@ import type { BridgePipeline } from '../types.ts'
 import { firstCodexNode } from './channels.ts'
 import { makeId } from './ids.ts'
 import { roleContract, roleLabel } from './roles.ts'
+import { defaultNodePoint } from './chartLayout.ts'
 import { createDevReviewFlow } from './templates.ts'
-import { ARTIFACT_CHAR_CAP, FLOW_END, type FlowDef, type FlowNode, type FlowRun, type ProjectFlows } from './types.ts'
+import { ARTIFACT_CHAR_CAP, FLOW_END, FLOW_START, type FlowDef, type FlowEdge, type FlowNode, type FlowRun, type ProjectFlows } from './types.ts'
 
 export const FLOW_STORAGE_KEY = 'ad-bridge-flows'
 export const RUN_STORAGE_KEY = 'ad-bridge-runs'
@@ -74,6 +75,41 @@ export function migratePipeline(pipeline: BridgePipeline): FlowDef {
   return flow
 }
 
+function repairPassFailEdges(nodes: FlowNode[], edges: FlowEdge[]): FlowEdge[] {
+  const misplaced = edges.filter((edge) => edge.gate === 'passFail' && edge.to !== FLOW_END)
+  if (!misplaced.length) return edges
+  let next = edges.map((edge) => (
+    edge.gate === 'passFail' && edge.to !== FLOW_END
+      ? { ...edge, gate: 'none' as const, backTo: undefined }
+      : edge
+  ))
+  for (const edge of misplaced) {
+    const terminal = next.find((item) => item.from === edge.to && item.to === FLOW_END)
+      || next.find((item) => item.to === FLOW_END)
+    if (terminal) {
+      next = next.map((item) => (
+        item.id === terminal.id
+          ? { ...item, gate: 'passFail', backTo: edge.backTo || nodes[0]?.id }
+          : item
+      ))
+    } else {
+      next = [
+        ...next,
+        {
+          id: makeId('e'),
+          from: edge.to,
+          to: FLOW_END,
+          mode: 'auto',
+          transform: 'roleWrap',
+          gate: 'passFail',
+          backTo: edge.backTo || nodes[0]?.id
+        }
+      ]
+    }
+  }
+  return next
+}
+
 function normalizeFlow(row: FlowDef): FlowDef | null {
   if (!row || !row.id || !Array.isArray(row.nodes) || !Array.isArray(row.edges)) return null
   return {
@@ -81,19 +117,29 @@ function normalizeFlow(row: FlowDef): FlowDef | null {
     name: row.name || '未命名流程',
     templateId: row.templateId,
     nodes: row.nodes.map(normalizeNode),
-    edges: row.edges.map((edge) => ({
-      id: edge.id || makeId('e'),
-      from: edge.from,
-      to: edge.to,
-      mode: edge.mode === 'auto' ? 'auto' : 'manual',
-      transform: edge.transform === 'verbatim' ? 'verbatim' : 'roleWrap',
-      gate: edge.gate === 'passFail' ? 'passFail' : 'none',
-      backTo: edge.backTo
-    })),
+    edges: repairPassFailEdges(
+      row.nodes,
+      row.edges.map((edge) => ({
+        id: edge.id || makeId('e'),
+        from: edge.from,
+        to: edge.to,
+        mode: edge.mode === 'auto' ? 'auto' : 'manual',
+        transform: edge.transform === 'verbatim' ? 'verbatim' : 'roleWrap',
+        gate: edge.gate === 'passFail' ? 'passFail' : edge.gate === 'loop' ? 'loop' : 'none',
+        backTo: edge.backTo,
+        maxLoops: edge.gate === 'loop'
+          ? Math.min(20, Math.max(1, Number(edge.maxLoops) || 3))
+          : undefined
+      }))
+    ),
     maxRetries: row.maxRetries ?? 2,
     maxSteps: row.maxSteps ?? 12,
     slice: row.slice || 1,
-    draftTask: row.draftTask || ''
+    draftTask: row.draftTask || '',
+    startX: Number.isFinite(row.startX) ? row.startX : undefined,
+    startY: Number.isFinite(row.startY) ? row.startY : undefined,
+    endX: Number.isFinite(row.endX) ? row.endX : undefined,
+    endY: Number.isFinite(row.endY) ? row.endY : undefined
   }
 }
 
@@ -104,6 +150,8 @@ function normalizeNode(node: FlowNode): FlowNode {
     title: node.title || '节点',
     role: node.role || 'custom',
     roleContract: node.roleContract || roleContract(node.role),
+    x: Number.isFinite(node.x) ? node.x : undefined,
+    y: Number.isFinite(node.y) ? node.y : undefined,
     channel: channel?.kind === 'codexApp'
       ? {
           kind: 'codexApp',
@@ -168,6 +216,7 @@ export function loadAllRuns(storage: StorageLike = defaultStorage()): Record<str
 function slimRun(run: FlowRun): FlowRun {
   return {
     ...run,
+    loopCounts: run.loopCounts || {},
     lastEnvelope: run.lastEnvelope ? slimEnvelope(run.lastEnvelope) : null,
     pendingHandoff: run.pendingHandoff ? slimEnvelope(run.pendingHandoff) : null,
     steps: (run.steps || []).map((step) => ({
@@ -237,6 +286,14 @@ export function ensurePairLoop(flow: FlowDef): FlowDef {
     edges: [
       {
         id: makeId('e'),
+        from: FLOW_START,
+        to: first.id,
+        mode: 'auto',
+        transform: 'roleWrap',
+        gate: 'none'
+      },
+      {
+        id: makeId('e'),
         from: first.id,
         to: second.id,
         mode: 'auto',
@@ -257,59 +314,35 @@ export function ensurePairLoop(flow: FlowDef): FlowDef {
 }
 
 export function appendNode(flow: FlowDef, node: FlowNode): FlowDef {
-  const last = flow.nodes[flow.nodes.length - 1]
-  const nodes = [...flow.nodes, node]
-  const edges = flow.edges.map((edge) => {
-    if (last && edge.from === last.id && (!edge.to || edge.to === FLOW_END)) {
-      return { ...edge, to: node.id }
-    }
-    return edge
-  })
-  const hasForward = last
-    ? edges.some((edge) => edge.from === last.id && edge.to && edge.to !== FLOW_END)
-    : true
-  if (last && !hasForward) {
-    edges.push({
-      id: makeId('e'),
-      from: last.id,
-      to: node.id,
-      mode: 'auto',
-      transform: 'roleWrap',
-      gate: 'none'
-    })
+  const point = defaultNodePoint(flow.nodes.length)
+  const placed: FlowNode = {
+    ...node,
+    x: Number.isFinite(node.x) ? node.x : point.x,
+    y: Number.isFinite(node.y) ? node.y : point.y
   }
-  const next = { ...flow, nodes, edges }
-  if (next.nodes.length === 2) return ensurePairLoop(next)
-  return next
+  return { ...flow, nodes: [...flow.nodes, placed] }
 }
 
 export function removeNode(flow: FlowDef, nodeId: string): FlowDef {
-  const index = flow.nodes.findIndex((item) => item.id === nodeId)
-  if (index < 0) return flow
-  const prev = flow.nodes[index - 1]
-  const next = flow.nodes[index + 1]
   const nodes = flow.nodes.filter((item) => item.id !== nodeId)
-  let edges = flow.edges.filter((edge) => edge.from !== nodeId && edge.to !== nodeId)
-  edges = edges.map((edge) => (edge.backTo === nodeId ? { ...edge, backTo: undefined } : edge))
-  if (prev && next && !edges.some((edge) => edge.from === prev.id && edge.to === next.id)) {
-    edges.push({
-      id: makeId('e'),
-      from: prev.id,
-      to: next.id,
-      mode: 'manual',
-      transform: 'roleWrap',
-      gate: 'none'
-    })
-  }
+  const edges = flow.edges
+    .filter((edge) => edge.from !== nodeId && edge.to !== nodeId)
+    .map((edge) => (edge.backTo === nodeId ? { ...edge, backTo: undefined } : edge))
   return { ...flow, nodes, edges }
 }
 
-export function createCustomNode(role: FlowNode['role'], channel: FlowNode['channel']): FlowNode {
+export function createCustomNode(
+  role: FlowNode['role'],
+  channel: FlowNode['channel'],
+  point?: { x: number; y: number }
+): FlowNode {
   return {
     id: makeId('n'),
     title: roleLabel(role),
     role,
     roleContract: roleContract(role),
-    channel
+    channel,
+    x: point?.x,
+    y: point?.y
   }
 }
