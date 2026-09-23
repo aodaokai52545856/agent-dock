@@ -11,11 +11,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/aodaokai52545856/agent-dock/releases/tag/v0.1.3"><img alt="download" src="https://img.shields.io/badge/%E2%AC%87%20%E6%B5%8B%E8%AF%95%E5%8C%85%20v0.1.3-111111?style=for-the-badge"></a>
+  <a href="https://github.com/aodaokai52545856/agent-dock/releases/tag/v0.1.5"><img alt="download" src="https://img.shields.io/badge/%E2%AC%87%20%E6%B5%8B%E8%AF%95%E5%8C%85%20v0.1.5-111111?style=for-the-badge"></a>
 </p>
 
 <p align="center">
-  <img alt="version" src="https://img.shields.io/badge/version-0.1.3-111111?style=flat-square">
+  <img alt="version" src="https://img.shields.io/badge/version-0.1.5-111111?style=flat-square">
   <img alt="platform" src="https://img.shields.io/badge/Windows%20%7C%20macOS%20%7C%20Linux-0d0d0d?style=flat-square">
   <img alt="stack" src="https://img.shields.io/badge/Tauri%202%20%2B%20Vue%203%20%2B%20Rust-141414?style=flat-square">
   <img alt="license" src="https://img.shields.io/badge/license-Apache%202.0-3d9a6a?style=flat-square">
@@ -39,18 +39,18 @@
 
 ## 测试下载
 
-> **v0.1.3** · 跨平台测试包 · 不需要本机装 Rust
+> **v0.1.5** · 跨平台测试包 · 不需要本机装 Rust
 
 | 文件 | 平台 | 说明 | 大小约 |
 | --- | --- | --- | --- |
-| [**AgentDock-0.1.3-Setup.exe**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.3/AgentDock-0.1.3-Setup.exe) | Windows | NSIS 安装包（推荐） | ~3.5 MB |
-| [**AgentDock-0.1.3.exe**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.3/AgentDock-0.1.3.exe) | Windows | 绿色便携版 | ~14 MB |
-| [**AgentDock-0.1.3.dmg**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.3/AgentDock-0.1.3.dmg) | macOS | 磁盘映像 | ~6.3 MB |
-| [**AgentDock-0.1.3.app.tar.gz**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.3/AgentDock-0.1.3.app.tar.gz) | macOS | `.app` 压缩包 | ~5.6 MB |
-| [**AgentDock-0.1.3.AppImage**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.3/AgentDock-0.1.3.AppImage) | Linux | 免安装可执行 | ~79 MB |
-| [**AgentDock-0.1.3.deb**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.3/AgentDock-0.1.3.deb) | Linux | Debian / Ubuntu | ~5.4 MB |
+| [**AgentDock-0.1.5-Setup.exe**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.5/AgentDock-0.1.5-Setup.exe) | Windows | NSIS 安装包（推荐） | ~3.5 MB |
+| [**AgentDock-0.1.5.exe**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.5/AgentDock-0.1.5.exe) | Windows | 绿色便携版 | ~14 MB |
+| [**AgentDock-0.1.5.dmg**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.5/AgentDock-0.1.5.dmg) | macOS | 磁盘映像 | ~6.3 MB |
+| [**AgentDock-0.1.5.app.tar.gz**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.5/AgentDock-0.1.5.app.tar.gz) | macOS | `.app` 压缩包 | ~5.6 MB |
+| [**AgentDock-0.1.5.AppImage**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.5/AgentDock-0.1.5.AppImage) | Linux | 免安装可执行 | ~79 MB |
+| [**AgentDock-0.1.5.deb**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.5/AgentDock-0.1.5.deb) | Linux | Debian / Ubuntu | ~5.4 MB |
 
-发布页：[Releases · v0.1.3](https://github.com/aodaokai52545856/agent-dock/releases/tag/v0.1.3)
+发布页：[Releases · v0.1.5](https://github.com/aodaokai52545856/agent-dock/releases/tag/v0.1.5)
 
 **运行前提**
 
@@ -142,7 +142,7 @@ npm run tauri:dev
 
 **必须在对应系统上打包**，不能从 Windows 打出 `.dmg` / `.AppImage`。打好的安装包把界面打进二进制，不再监听开发端口。产物落到 `release/`。
 
-版本号读 `package.json` 的 `version`，产物文件名带这个版本，例如当前 `0.1.3` 会打出 `AgentDock-0.1.3-Setup.exe`。
+版本号读 `package.json` 的 `version`，产物文件名带这个版本，例如当前 `0.1.5` 会打出 `AgentDock-0.1.5-Setup.exe`。
 
 ```bash
 npm run pack          # 当前系统
