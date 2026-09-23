@@ -32,6 +32,7 @@ uuid = { version = "1", features = ["v4"] }
 which = "7"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 tauri-plugin-notification = "2"
+rusqlite = { version = "0.32", features = ["bundled"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = [

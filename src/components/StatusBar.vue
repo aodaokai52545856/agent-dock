@@ -19,7 +19,7 @@ import {
   shouldShowDshBalance
 } from '../lib/dshBalance'
 import SpendPanel from './SpendPanel.vue'
-import { SPEND_PANEL_WIDTH, formatSpendLine, resolveSpendRange, type SpendPreset } from '../lib/grokSpend'
+import { SPEND_PANEL_WIDTH, formatSpendLine, resolveSpendRange, sameSpendSnapshot, type SpendPreset } from '../lib/grokSpend'
 import { groupLiveByProject, toolTint } from '../lib/livePty'
 import { currentPipeline, jumpToLive, selectedProject, store } from '../lib/store'
 import { GATE_LABEL, toolLabel } from '../lib/types'
@@ -253,6 +253,7 @@ async function loadSpend(force = false) {
   try {
     const next = await api.grokSpend(spendStart.value, spendEnd.value)
     if (seq !== spendSeq) return
+    if (next.ok && !force && sameSpendSnapshot(spend.value, next)) return
     if (next.ok || !spend.value) spend.value = next
   } catch (err) {
     if (seq !== spendSeq) return

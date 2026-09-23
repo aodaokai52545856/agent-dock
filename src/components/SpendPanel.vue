@@ -1,8 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
+import SpendChart from './SpendChart.vue'
 import {
-  SPEND_CHART_HEIGHT,
-  SPEND_CHART_WIDTH,
   SPEND_PRESETS,
   buildSpendChart,
   dateInRange,
@@ -13,7 +12,6 @@ import {
   formatTokenCount,
   fromLocalDateTime,
   monthCells,
-  nearestHitIndex,
   resolveSpendRange,
   toLocalDateTime,
   type SpendPreset
@@ -49,69 +47,12 @@ const hitWidth = computed(() => Math.max(0, Math.min(100, props.spend?.cacheHitP
 const createdLabel = computed(() =>
   (props.spend?.cacheCreationTokens ?? 0) > 0 ? formatTokenCount(props.spend?.cacheCreationTokens) : 'N/A'
 )
+const emptyText = computed(() =>
+  props.loading ? '正在读取本机会话用量…' : '这个时间段还没有完成的会话轮次'
+)
 const weekdays = ['日', '一', '二', '三', '四', '五', '六']
 const cells = computed(() => monthCells(calCursor.value.getFullYear(), calCursor.value.getMonth()))
 const calTitle = computed(() => `${calCursor.value.getFullYear()}年${calCursor.value.getMonth() + 1}月`)
-const hoverIndex = ref(-1)
-const chartBox = ref<HTMLElement | null>(null)
-const shownTotal = ref(0)
-const shownCost = ref(0)
-const hover = computed(() => (hoverIndex.value >= 0 ? chart.value.hits[hoverIndex.value] ?? null : null))
-const tipStyle = computed(() => {
-  const hit = hover.value
-  const box = chartBox.value
-  if (!hit || !box) return { display: 'none' }
-  const width = box.clientWidth
-  const x = (hit.x / SPEND_CHART_WIDTH) * width
-  return {
-    left: `${Math.min(width - 188, Math.max(8, x + 14))}px`,
-    top: '42px'
-  }
-})
-
-function prefersReduce() {
-  return Boolean(window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches)
-}
-
-function tweenTo(target: { value: number }, next: number) {
-  const from = target.value
-  if (from === next || prefersReduce()) {
-    target.value = next
-    return
-  }
-  const started = performance.now()
-  const dur = 280
-  const step = (now: number) => {
-    const t = Math.min(1, (now - started) / dur)
-    const ease = 1 - (1 - t) * (1 - t)
-    target.value = from + (next - from) * ease
-    if (t < 1) requestAnimationFrame(step)
-  }
-  requestAnimationFrame(step)
-}
-
-watch(
-  () => props.spend?.totalTokens ?? 0,
-  (next) => tweenTo(shownTotal, next),
-  { immediate: true }
-)
-watch(
-  () => props.spend?.costUsd ?? 0,
-  (next) => tweenTo(shownCost, next),
-  { immediate: true }
-)
-
-function onChartMove(event: MouseEvent) {
-  const svg = event.currentTarget as SVGSVGElement
-  const rect = svg.getBoundingClientRect()
-  if (rect.width <= 0) return
-  const x = ((event.clientX - rect.left) / rect.width) * SPEND_CHART_WIDTH
-  hoverIndex.value = nearestHitIndex(chart.value.hits, x)
-}
-
-function onChartLeave() {
-  hoverIndex.value = -1
-}
 
 function dayValue(day: number | null) {
   if (!day) return ''
@@ -315,8 +256,8 @@ function onPanelKey(event: KeyboardEvent) {
     <template v-else>
       <div class="hero">
         <div>
-          <p class="total">{{ formatExactTokens(shownTotal) }}</p>
-          <p class="approx">≈ {{ formatTokenCount(shownTotal) }}</p>
+          <p class="total">{{ formatExactTokens(spend?.totalTokens ?? 0) }}</p>
+          <p class="approx">≈ {{ formatTokenCount(spend?.totalTokens ?? 0) }}</p>
         </div>
         <div class="side">
           <div class="side-card">
@@ -325,26 +266,26 @@ function onPanelKey(event: KeyboardEvent) {
           </div>
           <div class="side-card">
             <span>总成本</span>
-            <strong class="cost">{{ formatSpendCost(shownCost) }}</strong>
+            <strong class="cost">{{ formatSpendCost(spend?.costUsd ?? 0) }}</strong>
           </div>
         </div>
       </div>
 
       <div class="cards">
         <div class="card">
-          <span>↓ 新增输入</span>
+          <span>新增输入</span>
           <strong>{{ formatTokenCount(spend?.inputTokens ?? 0) }}</strong>
         </div>
         <div class="card">
-          <span>↑ Output</span>
+          <span>输出</span>
           <strong>{{ formatTokenCount(spend?.outputTokens ?? 0) }}</strong>
         </div>
         <div class="card">
-          <span>创建</span>
+          <span>缓存写入</span>
           <strong :class="{ faint: createdLabel === 'N/A' }">{{ createdLabel }}</strong>
         </div>
         <div class="card">
-          <span>命中</span>
+          <span>缓存命中</span>
           <strong>{{ formatTokenCount(spend?.cacheReadTokens ?? 0) }}</strong>
         </div>
         <div class="card card-rate">
@@ -354,112 +295,13 @@ function onPanelKey(event: KeyboardEvent) {
         </div>
       </div>
 
-      <div ref="chartBox" class="chart-block">
-        <div class="chart-head">
-          <p>使用趋势</p>
-          <span>{{ rangeLabel }}</span>
-        </div>
-        <svg
-          v-if="hasData"
-          class="chart"
-          :class="{ 'is-loading': loading }"
-          :viewBox="`0 0 ${SPEND_CHART_WIDTH} ${SPEND_CHART_HEIGHT}`"
-          role="img"
-          aria-label="token 趋势"
-          @mousemove="onChartMove"
-          @mouseleave="onChartLeave"
-        >
-          <line
-            v-for="(line, index) in chart.grid"
-            :key="`g-${index}`"
-            :x1="48"
-            :x2="SPEND_CHART_WIDTH - 48"
-            :y1="line.y"
-            :y2="line.y"
-            class="grid"
-          />
-          <text
-            v-for="(line, index) in chart.grid"
-            :key="`gl-${index}`"
-            class="axis"
-            x="8"
-            :y="line.y + 3"
-          >
-            {{ line.label }}
-          </text>
-          <text
-            v-for="(line, index) in chart.costTicks"
-            :key="`cl-${index}`"
-            class="axis"
-            :x="SPEND_CHART_WIDTH - 8"
-            :y="line.y + 3"
-            text-anchor="end"
-          >
-            {{ line.label }}
-          </text>
-          <path
-            v-for="item in chart.series.filter((row) => row.area)"
-            :key="`${item.key}-area`"
-            :d="item.area"
-            :fill="item.color"
-            opacity="0.18"
-          />
-          <path
-            v-for="item in chart.series"
-            :key="item.key"
-            :d="item.path"
-            fill="none"
-            :stroke="item.color"
-            :stroke-width="item.dashed ? 1.6 : 2"
-            stroke-linejoin="round"
-            stroke-linecap="round"
-            :stroke-dasharray="item.dashed ? '5 4' : undefined"
-          />
-          <text
-            v-for="(tick, index) in chart.ticks"
-            :key="`t-${index}`"
-            class="axis"
-            :x="tick.x"
-            :y="SPEND_CHART_HEIGHT - 8"
-            text-anchor="middle"
-          >
-            {{ tick.label }}
-          </text>
-          <g v-if="hover" class="hover">
-            <line
-              :x1="hover.x"
-              :x2="hover.x"
-              :y1="chart.padTop"
-              :y2="chart.bottom"
-              class="cross"
-            />
-            <circle
-              v-for="dot in hover.dots"
-              :key="dot.key"
-              :cx="dot.x"
-              :cy="dot.y"
-              r="3.4"
-              :fill="dot.color"
-              stroke="#111"
-              stroke-width="1.4"
-            />
-          </g>
-        </svg>
-        <div v-if="hover" class="tip" :style="tipStyle">
-          <p class="tip-time">{{ hover.label }}</p>
-          <p v-for="item in hover.values" :key="item.key">
-            <i :style="{ background: item.color }" />
-            {{ item.label }}：{{ item.text }}
-          </p>
-        </div>
-        <p v-else-if="!hasData" class="empty">{{ loading ? '正在读取本机会话用量…' : '这个时间段还没有完成的会话轮次' }}</p>
-        <div class="legend">
-          <span v-for="item in chart.series" :key="item.key">
-            <i :style="{ background: item.color, outline: item.dashed ? `1px dashed ${item.color}` : undefined }" />
-            {{ item.label }}
-          </span>
-        </div>
-      </div>
+      <SpendChart
+        :chart="chart"
+        :has-data="hasData"
+        :loading="loading"
+        :range-label="rangeLabel"
+        :empty-text="emptyText"
+      />
     </template>
   </div>
 </template>
@@ -473,11 +315,9 @@ function onPanelKey(event: KeyboardEvent) {
 @keyframes in {
   from {
     opacity: 0;
-    transform: translateY(8px);
   }
   to {
     opacity: 1;
-    transform: none;
   }
 }
 
@@ -525,7 +365,8 @@ function onPanelKey(event: KeyboardEvent) {
 }
 
 .range-btn.on {
-  border-color: #3b82f6;
+  border-color: var(--ad-border-strong);
+  color: var(--ad-text);
 }
 
 .refresh-btn:disabled {
@@ -574,8 +415,8 @@ function onPanelKey(event: KeyboardEvent) {
 }
 
 .preset.on {
-  background: #2563eb;
-  color: #fff;
+  background: var(--ad-primary);
+  color: var(--ad-primary-text);
 }
 
 .range-hint {
@@ -607,8 +448,8 @@ function onPanelKey(event: KeyboardEvent) {
 }
 
 .field.on {
-  border-color: #3b82f6;
-  background: rgba(37, 99, 235, 0.08);
+  border-color: var(--ad-border-strong);
+  background: var(--ad-selected);
 }
 
 .field-kicker {
@@ -684,16 +525,16 @@ function onPanelKey(event: KeyboardEvent) {
 }
 
 .cal-day.today {
-  box-shadow: inset 0 0 0 1px #3b82f6;
+  box-shadow: inset 0 0 0 1px var(--ad-border-strong);
 }
 
 .cal-day.in {
-  background: rgba(37, 99, 235, 0.22);
+  background: var(--ad-selected);
 }
 
 .cal-day.on {
-  background: #2563eb;
-  color: #fff;
+  background: var(--ad-primary);
+  color: var(--ad-primary-text);
 }
 
 .range-actions {
@@ -711,8 +552,8 @@ function onPanelKey(event: KeyboardEvent) {
 }
 
 .ok-btn {
-  background: #2563eb;
-  color: #fff;
+  background: var(--ad-primary);
+  color: var(--ad-primary-text);
 }
 
 .hero {
@@ -724,8 +565,10 @@ function onPanelKey(event: KeyboardEvent) {
 
 .total {
   margin: 0;
-  font-size: 34px;
-  line-height: 40px;
+  font-size: 32px;
+  line-height: 38px;
+  font-weight: 640;
+  letter-spacing: -0.03em;
   font-variant-numeric: tabular-nums;
   color: var(--ad-text);
 }
@@ -746,7 +589,7 @@ function onPanelKey(event: KeyboardEvent) {
   min-width: 92px;
   padding: 8px 10px;
   border-radius: 10px;
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--ad-hover);
   border: 1px solid var(--ad-border);
 }
 
@@ -767,12 +610,12 @@ function onPanelKey(event: KeyboardEvent) {
 }
 
 .cost {
-  color: #4ade80;
+  color: var(--ad-success);
 }
 
 .cards {
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(108px, 1fr));
   gap: 8px;
   margin-top: 12px;
 }
@@ -786,117 +629,17 @@ function onPanelKey(event: KeyboardEvent) {
   height: 6px;
   margin-top: 8px;
   border-radius: 99px;
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--ad-selected);
   overflow: hidden;
 }
 
 .card-rate b {
   display: block;
   height: 100%;
-  background: #4ade80;
+  background: var(--ad-success);
   transition: width 280ms ease;
 }
 
-.chart-block {
-  position: relative;
-  margin-top: 14px;
-  padding: 10px 8px 6px;
-  border-radius: 12px;
-  border: 1px solid var(--ad-border);
-  background: rgba(255, 255, 255, 0.02);
-}
-
-.chart-head {
-  display: flex;
-  justify-content: space-between;
-  padding: 0 8px 6px;
-  color: var(--ad-muted);
-}
-
-.chart-head p {
-  margin: 0;
-  color: var(--ad-text);
-}
-
-.chart {
-  display: block;
-  width: 100%;
-  height: auto;
-  transition: opacity 180ms ease;
-}
-
-.chart.is-loading {
-  opacity: 0.42;
-}
-
-.cross {
-  stroke: rgba(255, 255, 255, 0.45);
-  stroke-width: 1;
-}
-
-.tip {
-  position: absolute;
-  z-index: 2;
-  min-width: 176px;
-  padding: 8px 10px;
-  border-radius: 8px;
-  background: #1a1a1a;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
-  pointer-events: none;
-  color: var(--ad-text);
-  font-size: 12px;
-  line-height: 18px;
-}
-
-.tip-time {
-  margin: 0 0 6px;
-  color: var(--ad-muted);
-}
-
-.tip p {
-  margin: 0;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-variant-numeric: tabular-nums;
-}
-
-.tip i {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
-
-.grid {
-  stroke: rgba(255, 255, 255, 0.06);
-  stroke-width: 1;
-}
-
-.axis {
-  fill: var(--ad-faint);
-  font-size: 10px;
-}
-
-.legend {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px 16px;
-  padding: 6px 8px 2px;
-  color: var(--ad-muted);
-  font-size: 12px;
-}
-
-.legend i {
-  display: inline-block;
-  width: 8px;
-  height: 8px;
-  margin-right: 6px;
-  border-radius: 50%;
-}
-
-.empty,
 .error {
   margin: 0;
   padding: 28px 8px;
@@ -907,7 +650,6 @@ function onPanelKey(event: KeyboardEvent) {
 @media (prefers-reduced-motion: reduce) {
   .pop-enter-active,
   .pop-leave-active,
-  .chart,
   .card-rate b {
     transition: none;
   }

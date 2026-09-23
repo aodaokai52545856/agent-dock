@@ -165,31 +165,53 @@ export function formatFieldDate(date: string) {
 
 const PAD = { l: 48, r: 48, t: 18, b: 32 }
 
-function catmullPath(points: { x: number; y: number }[], minY?: number, maxY?: number) {
+function smoothPath(points: { x: number; y: number }[]) {
   if (!points.length) return ''
   if (points.length === 1) return `M ${points[0].x.toFixed(1)} ${points[0].y.toFixed(1)}`
-  const clampY = (y: number) => {
-    if (minY == null || maxY == null) return y
-    return Math.min(maxY, Math.max(minY, y))
+  const n = points.length
+  const dx: number[] = []
+  const slope: number[] = []
+  for (let i = 0; i < n - 1; i += 1) {
+    dx[i] = points[i + 1].x - points[i].x
+    const dy = points[i + 1].y - points[i].y
+    slope[i] = dx[i] === 0 ? 0 : dy / dx[i]
+  }
+  const tangent = new Array<number>(n).fill(0)
+  tangent[0] = slope[0]
+  tangent[n - 1] = slope[n - 2]
+  for (let i = 1; i < n - 1; i += 1) {
+    tangent[i] = slope[i - 1] * slope[i] <= 0 ? 0 : (slope[i - 1] + slope[i]) / 2
+  }
+  for (let i = 0; i < n - 1; i += 1) {
+    if (Math.abs(slope[i]) < 1e-12) {
+      tangent[i] = 0
+      tangent[i + 1] = 0
+      continue
+    }
+    const a = tangent[i] / slope[i]
+    const b = tangent[i + 1] / slope[i]
+    const size = a * a + b * b
+    if (size > 9) {
+      const scale = 3 / Math.sqrt(size)
+      tangent[i] = scale * a * slope[i]
+      tangent[i + 1] = scale * b * slope[i]
+    }
   }
   let d = `M ${points[0].x.toFixed(1)} ${points[0].y.toFixed(1)}`
-  for (let i = 0; i < points.length - 1; i += 1) {
-    const p0 = points[i - 1] ?? points[i]
-    const p1 = points[i]
-    const p2 = points[i + 1]
-    const p3 = points[i + 2] ?? p2
-    const c1x = p1.x + (p2.x - p0.x) / 6
-    const c1y = clampY(p1.y + (p2.y - p0.y) / 6)
-    const c2x = p2.x - (p3.x - p1.x) / 6
-    const c2y = clampY(p2.y - (p3.y - p1.y) / 6)
-    d += ` C ${c1x.toFixed(1)} ${c1y.toFixed(1)}, ${c2x.toFixed(1)} ${c2y.toFixed(1)}, ${p2.x.toFixed(1)} ${p2.y.toFixed(1)}`
+  for (let i = 0; i < n - 1; i += 1) {
+    const p0 = points[i]
+    const p1 = points[i + 1]
+    const step = dx[i] / 3
+    const c1y = p0.y + tangent[i] * step
+    const c2y = p1.y - tangent[i + 1] * step
+    d += ` C ${(p0.x + step).toFixed(1)} ${c1y.toFixed(1)}, ${(p1.x - step).toFixed(1)} ${c2y.toFixed(1)}, ${p1.x.toFixed(1)} ${p1.y.toFixed(1)}`
   }
   return d
 }
 
-function areaPath(points: { x: number; y: number }[], bottom: number, top: number) {
+function areaPath(points: { x: number; y: number }[], bottom: number) {
   if (!points.length) return ''
-  const line = catmullPath(points, top, bottom)
+  const line = smoothPath(points)
   const first = points[0]
   const last = points[points.length - 1]
   return `${line} L ${last.x.toFixed(1)} ${bottom.toFixed(1)} L ${first.x.toFixed(1)} ${bottom.toFixed(1)} Z`
@@ -213,10 +235,10 @@ export function buildSpendChart(rows: GrokSpendPoint[]): SpendChartModel {
   const yCost = (v: number) => PAD.t + innerH * (1 - v / maxCost)
   const xy = (values: number[], y: (v: number) => number) => values.map((value, i) => ({ x: xAt(i), y: y(value) }))
   const tokenSeries = [
-    { key: 'cache', label: '缓存命中', color: '#a78bfa', values: cache },
-    { key: 'created', label: '缓存创建', color: '#fb923c', values: created, dashed: true },
-    { key: 'input', label: '输入', color: '#60a5fa', values: input },
-    { key: 'output', label: '输出', color: '#34d399', values: output }
+    { key: 'input', label: '新增输入', color: '#3b82f6', values: input },
+    { key: 'output', label: '输出', color: '#22c55e', values: output },
+    { key: 'created', label: '缓存写入', color: '#f97316', values: created, dashed: true },
+    { key: 'cache', label: '缓存命中', color: '#a855f7', values: cache }
   ]
   const series: SpendChartSeries[] = tokenSeries.map((item) => {
     const pts = xy(item.values, yTok)
@@ -225,18 +247,18 @@ export function buildSpendChart(rows: GrokSpendPoint[]): SpendChartModel {
       label: item.label,
       color: item.color,
       dashed: item.dashed,
-      path: catmullPath(pts, PAD.t, bottom),
-      area: item.dashed ? '' : areaPath(pts, bottom, PAD.t),
+      path: smoothPath(pts),
+      area: item.dashed ? '' : areaPath(pts, bottom),
       axis: 'token' as const
     }
   })
   const costPts = xy(cost, yCost)
-  series.unshift({
+  series.push({
     key: 'cost',
     label: '成本',
-    color: '#f87171',
+    color: '#f43f5e',
     dashed: true,
-    path: catmullPath(costPts, PAD.t, bottom),
+    path: smoothPath(costPts),
     area: '',
     axis: 'cost'
   })
@@ -254,11 +276,11 @@ export function buildSpendChart(rows: GrokSpendPoint[]): SpendChartModel {
     label: part === 0 ? '$0' : formatSpendCost(maxCost * part)
   }))
   const tipMeta = [
-    { key: 'input', label: '输入', color: '#60a5fa', value: input, kind: 'token' as const },
-    { key: 'output', label: '输出', color: '#34d399', value: output, kind: 'token' as const },
-    { key: 'created', label: '缓存创建', color: '#fb923c', value: created, kind: 'token' as const },
-    { key: 'cache', label: '缓存命中', color: '#a78bfa', value: cache, kind: 'token' as const },
-    { key: 'cost', label: '成本', color: '#f87171', value: cost, kind: 'cost' as const }
+    { key: 'input', label: '新增输入', color: '#3b82f6', value: input, kind: 'token' as const },
+    { key: 'output', label: '输出', color: '#22c55e', value: output, kind: 'token' as const },
+    { key: 'created', label: '缓存写入', color: '#f97316', value: created, kind: 'token' as const },
+    { key: 'cache', label: '缓存命中', color: '#a855f7', value: cache, kind: 'token' as const },
+    { key: 'cost', label: '成本', color: '#f43f5e', value: cost, kind: 'cost' as const }
   ]
   const yFor = (key: string, value: number) => (key === 'cost' ? yCost(value) : yTok(value))
   const hits: SpendChartHit[] = points.map((row, index) => {
@@ -293,6 +315,37 @@ export function buildSpendChart(rows: GrokSpendPoint[]): SpendChartModel {
     padRight: PAD.r,
     padTop: PAD.t
   }
+}
+
+export function sameSpendSnapshot(prev: GrokSpend | null, next: GrokSpend | null) {
+  if (!prev?.ok || !next?.ok) return false
+  if (
+    prev.totalTokens !== next.totalTokens ||
+    prev.inputTokens !== next.inputTokens ||
+    prev.outputTokens !== next.outputTokens ||
+    prev.cacheReadTokens !== next.cacheReadTokens ||
+    prev.cacheCreationTokens !== next.cacheCreationTokens ||
+    prev.turnCount !== next.turnCount ||
+    prev.costUsd !== next.costUsd ||
+    prev.rangeStart !== next.rangeStart ||
+    prev.rangeEnd !== next.rangeEnd ||
+    prev.granularity !== next.granularity ||
+    prev.points.length !== next.points.length
+  ) {
+    return false
+  }
+  return prev.points.every((point, index) => {
+    const other = next.points[index]
+    return (
+      other != null &&
+      point.ts === other.ts &&
+      point.inputTokens === other.inputTokens &&
+      point.outputTokens === other.outputTokens &&
+      point.cacheReadTokens === other.cacheReadTokens &&
+      point.cacheCreationTokens === other.cacheCreationTokens &&
+      point.costUsd === other.costUsd
+    )
+  })
 }
 
 export function monthCells(year: number, month: number) {
