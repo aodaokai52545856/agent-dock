@@ -49,6 +49,19 @@ export function projectLiveDot(
   return 'open'
 }
 
+export function projectLiveCounts(
+  live: LivePtyInfo[],
+  projectId: string,
+  lastDataAt: Record<string, number>,
+  now: number
+) {
+  const items = liveOfProject(live, projectId)
+  return {
+    open: items.length,
+    busy: items.filter((item) => isPtyBusy(lastDataAt[item.ptyId], now)).length
+  }
+}
+
 export function liveDotTitle(kind: LiveDotKind, scope: 'session' | 'project') {
   if (kind === 'busy') return scope === 'project' ? '有会话正在执行' : '正在执行'
   if (kind === 'open') return scope === 'project' ? '有打开的会话' : '已打开'

@@ -450,6 +450,7 @@ export async function boot() {
       }
     ]
     store.activePtyId = 'preview-a1'
+    store.ptyDataAt = { 'preview-a1': now }
     rememberPty(lastPtyByProject, 'preview-aitools', 'preview-a1')
     store.sessionToolFilter = parseSessionToolFilter(localStorage.getItem(FILTER_STORAGE_KEY))
     store.settings.sessionToolFilter = store.sessionToolFilter

@@ -1,8 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { endPaneAnim, layout, sidebarPaneWidth, toggleProjects } from '../lib/layout'
-import { liveDotTitle, projectLiveDot, type LiveDotKind } from '../lib/livePulse'
-import { liveOfProject } from '../lib/livePty'
+import { liveDotTitle, projectLiveCounts, projectLiveDot, type LiveDotKind } from '../lib/livePulse'
 import {
   createFlowFromTemplate,
   deleteFlow,
@@ -42,8 +41,8 @@ function projectDot(projectId: string): LiveDotKind {
   return projectLiveDot(store.live, projectId, store.ptyDataAt, now.value)
 }
 
-function projectLiveCount(projectId: string) {
-  return liveOfProject(store.live, projectId).length
+function projectCounts(projectId: string) {
+  return projectLiveCounts(store.live, projectId, store.ptyDataAt, now.value)
 }
 
 const flows = computed(() => store.projectFlows[store.selectedProjectId]?.flows ?? [])
@@ -155,12 +154,20 @@ function onCreate(id: (typeof FLOW_TEMPLATES)[number]['id']) {
                 <span class="project-body">
                   <span class="project-name" :title="project.path">{{ project.name }}</span>
                 </span>
-                <span
-                  v-if="projectLiveCount(project.id)"
-                  class="project-live"
-                  :title="projectLiveCount(project.id) + ' 个已打开会话'"
-                >
-                  {{ projectLiveCount(project.id) }}
+                <span v-if="projectCounts(project.id).open" class="project-counts">
+                  <span
+                    class="project-live"
+                    :title="projectCounts(project.id).open + ' 个已打开窗口'"
+                  >
+                    {{ projectCounts(project.id).open }}
+                  </span>
+                  <span
+                    v-if="projectCounts(project.id).busy"
+                    class="project-busy"
+                    :title="projectCounts(project.id).busy + ' 个正在运行'"
+                  >
+                    {{ projectCounts(project.id).busy }}
+                  </span>
                 </span>
               </button>
               <div class="project-ops">
@@ -437,22 +444,39 @@ function onCreate(id: (typeof FLOW_TEMPLATES)[number]['id']) {
   stroke: var(--ad-text);
 }
 
+.project-counts {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
 .project-live,
+.project-busy,
 .flow-run {
   min-width: 16px;
   height: 16px;
   padding: 0 5px;
   border-radius: 999px;
-  background: rgba(74, 222, 128, 0.16);
-  color: #4ade80;
   font-size: 11px;
   line-height: 16px;
   text-align: center;
+  font-variant-numeric: tabular-nums;
   flex-shrink: 0;
 }
 
+.project-live {
+  background: color-mix(in srgb, var(--ad-success) 16%, transparent);
+  color: var(--ad-success);
+}
+
+.project-busy {
+  background: color-mix(in srgb, var(--ad-busy) 18%, transparent);
+  color: var(--ad-busy);
+}
+
 .flow-run {
-  background: rgba(201, 162, 39, 0.16);
+  background: color-mix(in srgb, var(--ad-warning) 16%, transparent);
   color: var(--ad-warning);
 }
 

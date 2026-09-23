@@ -13,7 +13,7 @@ import {
   shouldShowSessionGroupHead,
   toggleCollapsedGroup
 } from '../lib/sessionGroups'
-import { liveDotForPty, liveDotTitle, projectLiveDot, type LiveDotKind } from '../lib/livePulse'
+import { liveDotForPty, liveDotTitle, projectLiveCounts, projectLiveDot, type LiveDotKind } from '../lib/livePulse'
 import { isCurrentSession, liveOfProject } from '../lib/livePty'
 import { findLiveForSession, isSessionScanning, projectSessionRows, setSessionLiveOnly, setSessionToolFilter, store, visibleSessions } from '../lib/store'
 import { isToolInstalled, sessionFilterBlock, TOOLS, type SessionToolFilter, type ToolId } from '../lib/types'
@@ -147,8 +147,8 @@ function isPending(sessionId: string) {
   return isPendingSessionId(sessionId)
 }
 
-function projectLiveCount(projectId: string) {
-  return liveOfProject(store.live, projectId).length
+function projectCounts(projectId: string) {
+  return projectLiveCounts(store.live, projectId, store.ptyDataAt, now.value)
 }
 
 function closeMenu() {
@@ -445,12 +445,20 @@ onUnmounted(() => {
                 <span class="project-body">
                   <span class="project-name" :title="project.path">{{ project.name }}</span>
                 </span>
-                <span
-                  v-if="projectLiveCount(project.id)"
-                  class="project-live"
-                  :title="projectLiveCount(project.id) + ' 个已打开会话'"
-                >
-                  {{ projectLiveCount(project.id) }}
+                <span v-if="projectCounts(project.id).open" class="project-counts">
+                  <span
+                    class="project-live"
+                    :title="projectCounts(project.id).open + ' 个已打开窗口'"
+                  >
+                    {{ projectCounts(project.id).open }}
+                  </span>
+                  <span
+                    v-if="projectCounts(project.id).busy"
+                    class="project-busy"
+                    :title="projectCounts(project.id).busy + ' 个正在运行'"
+                  >
+                    {{ projectCounts(project.id).busy }}
+                  </span>
                 </span>
               </button>
               <div class="project-ops">
@@ -1124,18 +1132,34 @@ onUnmounted(() => {
 
 
 
-.project-live {
+.project-counts {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.project-live,
+.project-busy {
   min-width: 16px;
   height: 16px;
   padding: 0 5px;
   border-radius: 999px;
-  background: rgba(61, 154, 106, 0.16);
-  color: var(--ad-success);
   font-size: 11px;
   line-height: 16px;
   text-align: center;
   font-variant-numeric: tabular-nums;
   flex-shrink: 0;
+}
+
+.project-live {
+  background: color-mix(in srgb, var(--ad-success) 16%, transparent);
+  color: var(--ad-success);
+}
+
+.project-busy {
+  background: color-mix(in srgb, var(--ad-busy) 18%, transparent);
+  color: var(--ad-busy);
 }
 
 .project-body {

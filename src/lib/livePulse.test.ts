@@ -3,6 +3,7 @@ import {
   isPtyBusy,
   isSignificantPtyChunk,
   liveDotTitle,
+  projectLiveCounts,
   projectLiveDot,
   sessionLiveDot
 } from './livePulse.ts'
@@ -53,4 +54,11 @@ test('dot titles distinguish open vs executing', () => {
   assert.equal(liveDotTitle('busy', 'session'), '正在执行')
   assert.equal(liveDotTitle('open', 'project'), '有打开的会话')
   assert.equal(liveDotTitle('busy', 'project'), '有会话正在执行')
+})
+
+test('project counts split open windows from running windows', () => {
+  const live = [row({ ptyId: 'a', sessionId: 's1' }), row({ ptyId: 'b', sessionId: 's2', toolId: 'kimi' })]
+  assert.deepEqual(projectLiveCounts(live, 'p1', {}, 10_000), { open: 2, busy: 0 })
+  assert.deepEqual(projectLiveCounts(live, 'p1', { b: 9500 }, 10_000), { open: 2, busy: 1 })
+  assert.deepEqual(projectLiveCounts(live, 'other', { b: 9500 }, 10_000), { open: 0, busy: 0 })
 })
