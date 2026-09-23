@@ -8,6 +8,7 @@ import * as api from '../lib/api'
 import { clampOverlayBox, isLayoutBusy, paneAnimating, paneDragging, windowMoving, windowResizing } from '../lib/layout'
 import { isMac, isWindows } from '../lib/platform'
 import { isSignificantPtyChunk } from '../lib/livePulse'
+import { isDshWeb } from '../lib/livePty'
 import { markPtyExit, notePtyData, selectedProject, store } from '../lib/store'
 import { codeFontStack } from '../lib/appearance'
 import { canMeasure, createFitScheduler, rowsThatFit } from '../lib/termFit'
@@ -129,8 +130,16 @@ function cssVar(name: string, fallback: string) {
   return value || fallback
 }
 
+function liveForPty(ptyId: string) {
+  return store.live.find((item) => item.ptyId === ptyId)
+}
+
 function toolForPty(ptyId: string) {
-  return store.live.find((item) => item.ptyId === ptyId)?.toolId
+  return liveForPty(ptyId)?.toolId
+}
+
+function canHost(ptyId: string) {
+  return Boolean(ptyId) && !isDshWeb(liveForPty(ptyId))
 }
 
 function theme(ptyId?: string) {
@@ -195,6 +204,7 @@ function applyTermChrome() {
 }
 
 function ensureHost(ptyId: string) {
+  if (!canHost(ptyId)) return undefined
   if (hosts.has(ptyId)) return hosts.get(ptyId)!
   const el = document.createElement('div')
   el.className = 'term-host'
@@ -230,6 +240,14 @@ function ensureHost(ptyId: string) {
   const host = { term, fit, el, offData, offSurface, offClipboard, lastCols: 0, lastRows: 0, lastW: 0, lastH: 0 }
   hosts.set(ptyId, host)
   return host
+}
+
+function refreshHost(host: Host) {
+  try {
+    host.term.refresh(0, Math.max(0, host.term.rows - 1))
+  } catch {
+    /* not measured yet */
+  }
 }
 
 function bindTermSurface(term: Terminal, ptyId: string) {
@@ -297,18 +315,22 @@ function fitActive(force = false) {
   const id = store.activePtyId
   if (!id) return
   const host = hosts.get(id)
-  if (host) fitHost(id, host, force)
+  if (!host) return
+  fitHost(id, host, force)
+  refreshHost(host)
 }
 
 function show(ptyId: string | '') {
+  const visible = ptyId && canHost(ptyId) ? ptyId : ''
   hosts.forEach((host, id) => {
-    host.el.classList.toggle('is-hidden', id !== ptyId)
+    host.el.classList.toggle('is-hidden', id !== visible)
   })
-  const host = ptyId ? hosts.get(ptyId) : undefined
-  if (!host) return
+  const host = visible ? hosts.get(visible) : undefined
+  if (!host || !visible) return
   nextTick(() => {
     requestAnimationFrame(() => {
-      fitHost(ptyId, host, true)
+      fitHost(visible, host, true)
+      refreshHost(host)
       host.term.focus()
     })
   })
@@ -328,7 +350,7 @@ function disposeHost(ptyId: string) {
 watch(
   () => store.activePtyId,
   (id) => {
-    if (id && !hosts.has(id)) ensureHost(id)
+    if (id && canHost(id) && !hosts.has(id)) ensureHost(id)
     show(id)
   },
   { immediate: true }
@@ -367,7 +389,7 @@ onMounted(async () => {
   if (api.isTauri) {
     unlistenData = await listen<{ ptyId: string; data: string }>('pty-data', (event) => {
       const host = ensureHost(event.payload.ptyId)
-      host.term.write(event.payload.data)
+      if (host) host.term.write(event.payload.data)
       if (isSignificantPtyChunk(event.payload.data)) notePtyData(event.payload.ptyId)
     })
     unlistenExit = await listen<{ ptyId: string }>('pty-exit', (event) => {
@@ -386,6 +408,7 @@ onMounted(async () => {
   window.addEventListener('click', closeTermMenu)
   window.addEventListener('blur', closeTermMenu)
   window.addEventListener('keydown', onTermMenuKey)
+  if (store.activePtyId) show(store.activePtyId)
 })
 
 function onTermMenuKey(event: KeyboardEvent) {
@@ -409,7 +432,7 @@ defineExpose({ ensureHost, show, dispose: disposeHost, fitActive })
 
 <template>
   <section ref="workspaceEl" class="workspace" @contextmenu="onTermMenu">
-    <div v-show="store.activePtyId" id="term-mount" class="mount" />
+    <div v-show="store.activePtyId || loading" id="term-mount" class="mount" />
     <div v-if="loading" class="loading" aria-busy="true" aria-live="polite">
       <span class="spinner" aria-hidden="true" />
       <span>{{ loadingText || '正在打开会话' }}</span>

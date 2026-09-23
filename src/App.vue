@@ -54,7 +54,6 @@ import {
   saveProject,
   selectProject,
   selectedProject,
-  setSessionToolFilter,
   setToolProbes,
   showToast,
   store,
@@ -382,9 +381,6 @@ async function openSession(sessionId?: string, toolId?: ToolId) {
     return
   }
   const tool = toolId ?? store.selectedTool
-  if (store.sessionToolFilter !== 'all' && store.sessionToolFilter !== tool) {
-    await setSessionToolFilter(tool)
-  }
   const requestedId = tool === 'dsh' ? DSH_FIXED_SESSION_ID : sessionId
   const session = requestedId ? store.sessions.find((item) => item.id === requestedId && item.toolId === tool) : undefined
   const target = resolveOpenTarget(store.live, {
@@ -400,14 +396,8 @@ async function openSession(sessionId?: string, toolId?: ToolId) {
     const existing = store.live.find((item) => item.ptyId === target.ptyId)
     if (!existing) return
     if (existing.ptyId === store.activePtyId && target.action === 'switch') return
-    paneLoadingText.value = '正在切换会话'
-    paneLoading.value = true
-    try {
-      rememberOpened(existing)
-      await finishPaneReady()
-    } finally {
-      paneLoading.value = false
-    }
+    rememberOpened(existing)
+    await finishPaneReady()
     return
   }
   paneLoadingText.value = tool === 'dsh' ? '正在打开 DeepSeek Web' : '正在打开会话'
@@ -630,15 +620,18 @@ const confirmCopy = () => {
             @close="askClose"
           />
           <div class="term-stack">
-            <DshWebPane v-if="isDshWeb(activeLive)" :url="activeLive?.url || ''" />
-            <TerminalPane
-              v-else
-              ref="termRef"
-              :loading="paneLoading"
-              :loading-text="paneLoadingText"
-              :font-size="store.settings.terminalFontSize"
-              @start="onEmptyStart"
-            />
+            <div class="term-under" :class="{ 'is-covered': isDshWeb(activeLive) }">
+              <TerminalPane
+                ref="termRef"
+                :loading="paneLoading"
+                :loading-text="paneLoadingText"
+                :font-size="store.settings.terminalFontSize"
+                @start="onEmptyStart"
+              />
+            </div>
+            <div v-if="isDshWeb(activeLive)" class="dsh-over">
+              <DshWebPane :url="activeLive?.url || ''" />
+            </div>
             <div
               class="doc-layer"
               :class="{ 'is-collapsed': layout.docRailCollapsed, 'is-static': paneDragging }"
@@ -796,6 +789,29 @@ const confirmCopy = () => {
   flex-direction: column;
   overflow: hidden;
   isolation: isolate;
+}
+
+.term-under {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.term-under.is-covered {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.dsh-over {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
 }
 
 .doc-layer {

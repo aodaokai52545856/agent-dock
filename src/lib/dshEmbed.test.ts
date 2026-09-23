@@ -165,3 +165,36 @@ test('the close button goes home instead of adopting another live session', () =
     /watch\(\s*\(\) => store\.activePtyId[\s\S]{0,220}?immediate:\s*true/
   )
 })
+
+test('DeepSeek overlay does not unmount the terminal so a live Grok TUI is not wiped', () => {
+  const app = readFileSync(join(root, 'App.vue'), 'utf8')
+  const stack = app.slice(app.indexOf('class="term-stack"'), app.indexOf('class="doc-layer"'))
+  assert.match(stack, /<TerminalPane/)
+  assert.match(stack, /<DshWebPane/)
+  assert.doesNotMatch(
+    stack,
+    /v-else/,
+    'TerminalPane must stay mounted while DeepSeek is showing'
+  )
+  assert.match(app, /term-under/)
+  assert.match(app, /is-covered/)
+  assert.match(app, /dsh-over/)
+})
+
+test('opening a listed session does not rescan or retarget the sidebar filter', () => {
+  const app = readFileSync(join(root, 'App.vue'), 'utf8')
+  const start = app.indexOf('async function openSession')
+  const end = app.indexOf('function onAppContextMenu')
+  assert.ok(start >= 0 && end > start)
+  const open = app.slice(start, end)
+  assert.doesNotMatch(open, /setSessionToolFilter/)
+  assert.doesNotMatch(open, /refreshSessions/)
+  assert.doesNotMatch(open, /正在切换会话/)
+})
+
+test('xterm hosts skip DeepSeek web and refresh after they become visible', () => {
+  const pane = readFileSync(join(root, 'components/TerminalPane.vue'), 'utf8')
+  assert.match(pane, /isDshWeb/)
+  assert.match(pane, /host\.term\.refresh/)
+  assert.match(pane, /v-show="store\.activePtyId \|\| loading"/)
+})
