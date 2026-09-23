@@ -17,6 +17,14 @@ import {
   pickPtyForProject,
   rememberPty
 } from './livePty'
+import {
+  beginOrExtendBusy,
+  doneNoticeCopy,
+  doneNoticeTarget,
+  PTY_DONE_IDLE_MS,
+  settleIdle,
+  type PtyDoneWatch
+} from './ptyDone'
 import { defaultShellPath } from './platform'
 import { flowAsPipeline } from './flow/compat.ts'
 import { ensureProjectFlows, loadAllFlows, loadAllRuns, selectedFlow } from './flow/model.ts'
@@ -43,6 +51,7 @@ import {
   TOOLS,
   clampSessionToolFilter,
   parseSessionToolFilter,
+  toolLabel,
   toolsToScanForFilter
 } from './types'
 import {
@@ -140,6 +149,13 @@ function migrateLoadedUiOpacity(value: number) {
   return n
 }
 
+export type DoneNotice = {
+  ptyId: string
+  title: string
+  toolLabel: string
+  projectName: string
+}
+
 export const store = reactive({
   ready: false,
   projects: [] as Project[],
@@ -172,6 +188,8 @@ export const store = reactive({
   focusedSession: null as FocusedSession | null,
   toast: '' as string,
   toastTimer: 0,
+  doneNotice: null as DoneNotice | null,
+  doneNoticeTimer: 0,
   grokAuthRev: 0,
   dshKeyRev: 0,
   appMode: 'console' as AppMode,
@@ -329,6 +347,88 @@ export function showToast(message: string) {
   store.toastTimer = window.setTimeout(() => {
     store.toast = ''
   }, 3000)
+}
+
+const doneWatches = new Map<string, { watch: PtyDoneWatch; timer: number }>()
+
+export function dismissDoneNotice() {
+  if (typeof window !== 'undefined') window.clearTimeout(store.doneNoticeTimer)
+  store.doneNotice = null
+  store.doneNoticeTimer = 0
+}
+
+export function showDoneNotice(notice: DoneNotice) {
+  store.doneNotice = notice
+  if (typeof window === 'undefined') return
+  window.clearTimeout(store.doneNoticeTimer)
+  store.doneNoticeTimer = window.setTimeout(() => {
+    store.doneNotice = null
+    store.doneNoticeTimer = 0
+  }, 10_000)
+}
+
+export async function openDoneNotice() {
+  const notice = store.doneNotice
+  dismissDoneNotice()
+  if (!notice) return
+  await revealAndJump(notice.ptyId)
+}
+
+async function revealAndJump(ptyId: string) {
+  try {
+    await api.revealMainWindow()
+  } catch {
+    /* focus is best-effort */
+  }
+  await jumpToLive(ptyId)
+}
+
+function clearPtyDone(ptyId: string) {
+  const row = doneWatches.get(ptyId)
+  if (row && typeof window !== 'undefined') window.clearTimeout(row.timer)
+  doneWatches.delete(ptyId)
+}
+
+function prunePtyDone(live: LivePtyInfo[]) {
+  const alive = new Set(live.filter((item) => item.alive !== false).map((item) => item.ptyId))
+  for (const ptyId of [...doneWatches.keys()]) {
+    if (!alive.has(ptyId)) clearPtyDone(ptyId)
+  }
+}
+
+function armPtyDone(ptyId: string, at: number) {
+  if (typeof window === 'undefined') return
+  const prev = doneWatches.get(ptyId)
+  const watch = beginOrExtendBusy(prev?.watch, at)
+  if (prev) window.clearTimeout(prev.timer)
+  const timer = window.setTimeout(() => settlePtyDone(ptyId), PTY_DONE_IDLE_MS)
+  doneWatches.set(ptyId, { watch, timer })
+}
+
+function settlePtyDone(ptyId: string) {
+  const row = doneWatches.get(ptyId)
+  if (!row) return
+  const settled = settleIdle(row.watch, Date.now())
+  doneWatches.set(ptyId, { watch: settled.watch, timer: 0 })
+  if (!settled.notify) return
+  const live = store.live.find((item) => item.ptyId === ptyId && item.alive !== false)
+  if (!live) return
+  void emitSessionDone(live)
+}
+
+async function emitSessionDone(live: LivePtyInfo) {
+  const watching = store.activePtyId === live.ptyId
+  const windowFocused = typeof document !== 'undefined' && document.hasFocus()
+  if (doneNoticeTarget({ watching, windowFocused }) === 'skip') return
+  const notice: DoneNotice = {
+    ptyId: live.ptyId,
+    title: live.title.trim() || '会话',
+    toolLabel: toolLabel(live.toolId),
+    projectName: store.projects.find((item) => item.id === live.projectId)?.name ?? ''
+  }
+  const copy = doneNoticeCopy(notice)
+  void api.notifyDesktop(copy.title, copy.body)
+  showDoneNotice(notice)
 }
 
 export async function boot() {
@@ -855,6 +955,7 @@ export async function refreshLive() {
   const previousProject = store.live.find((item) => item.ptyId === previous)?.projectId ?? store.selectedProjectId
   const local = store.live.slice()
   store.live = mergeLiveFromServer(await api.listLivePtys(), local)
+  prunePtyDone(store.live)
   if (previous && !store.live.some((item) => item.ptyId === previous)) {
     adoptLiveFallback(previous, previousProject)
   }
@@ -863,10 +964,12 @@ export async function refreshLive() {
 export function notePtyData(ptyId: string, at = Date.now()) {
   if (!ptyId) return
   store.ptyDataAt[ptyId] = at
+  armPtyDone(ptyId, at)
 }
 
 export function markPtyExit(ptyId: string, opts?: { userClosed?: boolean }) {
   stopPendingWatch(ptyId)
+  clearPtyDone(ptyId)
   delete store.ptyDataAt[ptyId]
   const dying = store.live.find((item) => item.ptyId === ptyId)
   store.live = store.live.filter((item) => item.ptyId !== ptyId)

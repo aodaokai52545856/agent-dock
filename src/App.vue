@@ -44,6 +44,8 @@ import {
   findVisibleSession,
   markPtyExit,
   markWindowBlurred,
+  dismissDoneNotice,
+  openDoneNotice,
   noteGrokAccountChange,
   pauseDshEmbed,
   refreshAfterWindowFocus,
@@ -743,6 +745,29 @@ const confirmCopy = () => {
       @confirm="onConfirm"
     />
     <div v-if="store.toast" class="toast" role="status">{{ store.toast }}</div>
+    <button
+      v-if="store.doneNotice"
+      type="button"
+      class="done-toast"
+      aria-live="polite"
+      :title="'打开 ' + store.doneNotice.title"
+      @click="openDoneNotice"
+    >
+      <span class="done-toast-copy">
+        <span class="done-toast-kicker">{{ store.doneNotice.toolLabel }}</span>
+        <span class="done-toast-title">{{ store.doneNotice.title }} 已完成</span>
+        <span v-if="store.doneNotice.projectName" class="done-toast-meta">{{ store.doneNotice.projectName }}</span>
+      </span>
+      <span
+        class="done-toast-close"
+        role="button"
+        tabindex="-1"
+        aria-label="关闭"
+        @click.stop="dismissDoneNotice"
+      >
+        ×
+      </span>
+    </button>
   </div>
 </template>
 
@@ -850,5 +875,73 @@ const confirmCopy = () => {
   padding: 8px 16px;
   font-size: 13px;
   z-index: 30;
+}
+
+.done-toast {
+  position: fixed;
+  right: 16px;
+  bottom: 44px;
+  z-index: 40;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  width: 280px;
+  padding: 12px 12px 12px 14px;
+  text-align: left;
+  background: var(--ad-float);
+  border: 1px solid var(--ad-border);
+  border-radius: var(--ad-radius-card);
+  box-shadow: var(--ad-shadow-menu);
+  color: var(--ad-text);
+}
+
+.done-toast:hover {
+  background: var(--ad-hover);
+}
+
+.done-toast-copy {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.done-toast-kicker {
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--ad-muted);
+}
+
+.done-toast-title {
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.done-toast-meta {
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--ad-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.done-toast-close {
+  width: 20px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  border-radius: 6px;
+  color: var(--ad-muted);
+  font-size: 16px;
+  line-height: 1;
+}
+
+.done-toast-close:hover {
+  color: var(--ad-text);
+  background: var(--ad-selected);
 }
 </style>

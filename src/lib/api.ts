@@ -102,6 +102,22 @@ export async function revealMainWindow(): Promise<void> {
   await invoke('reveal_main_window')
 }
 
+export async function notifyDesktop(title: string, body: string): Promise<boolean> {
+  if (!isTauri || !title.trim()) return false
+  try {
+    const { isPermissionGranted, requestPermission, sendNotification } = await import(
+      '@tauri-apps/plugin-notification'
+    )
+    let granted = await isPermissionGranted()
+    if (!granted) granted = (await requestPermission()) === 'granted'
+    if (!granted) return false
+    sendNotification({ title, body })
+    return true
+  } catch {
+    return false
+  }
+}
+
 export async function setWindowFrost(frost: number): Promise<void> {
   if (!isTauri) return
   await invoke('set_window_frost', { frost })
