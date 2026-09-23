@@ -9,3 +9,5 @@ src-tauri/gen
 .cargo-home
 src-tauri/.playwright-cli
 .playwright-cli
+.idea/
+.pwtmp/
