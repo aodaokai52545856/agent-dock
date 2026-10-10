@@ -15,6 +15,15 @@ import {
 } from '../lib/sessionGroups'
 import { liveDotForPty, liveDotTitle, projectLiveCounts, projectLiveDot, type LiveDotKind } from '../lib/livePulse'
 import { isCurrentSession, liveOfProject } from '../lib/livePty'
+import {
+  allKeysSelected,
+  canPhysicallyDeleteSession,
+  deletableSessionKeys,
+  pruneSessionKeys,
+  sessionSelectKey,
+  toggleSessionKey,
+  toggleVisibleSelection
+} from '../lib/sessionBatch'
 import { findLiveForSession, isSessionScanning, projectSessionRows, setSessionLiveOnly, setSessionToolFilter, store, visibleSessions } from '../lib/store'
 import { isToolInstalled, sessionFilterBlock, TOOLS, type SessionToolFilter, type ToolId } from '../lib/types'
 import ToolMark from './ToolMark.vue'
@@ -33,6 +42,7 @@ const emit = defineEmits<{
   close: [payload: { sessionId: string; toolId: ToolId }]
   'close-all': [projectId?: string]
   delete: [payload: { sessionId: string; toolId: ToolId }]
+  'delete-many': [payload: { sessionId: string; toolId: ToolId }[]]
   cite: [payload: { sessionId: string; toolId: ToolId }]
 }>()
 
@@ -48,6 +58,8 @@ const MENU_WIDTH = 228
 const MENU_HEIGHT = 226
 const filterOpen = ref(false)
 const filterFocus = ref(0)
+const selecting = ref(false)
+const selectedKeys = ref<string[]>([])
 const collapsedGroups = ref(
   parseCollapsedGroups(typeof localStorage === 'undefined' ? null : localStorage.getItem(SESSION_GROUP_COLLAPSE_KEY))
 )
@@ -253,6 +265,62 @@ function menuCanDelete() {
   return Boolean(menu.value && !menuPending() && !menuFixedDsh())
 }
 
+const visibleDeletable = computed(() => deletableSessionKeys(groups.value.flatMap((group) => group.sessions)))
+const allVisiblePicked = computed(() => allKeysSelected(selectedKeys.value, visibleDeletable.value))
+const pickedCount = computed(() => selectedKeys.value.length)
+
+function exitSelecting() {
+  selecting.value = false
+  selectedKeys.value = []
+}
+
+function toggleSelecting() {
+  if (selecting.value) exitSelecting()
+  else selecting.value = true
+}
+
+function isPicked(session: { id: string; toolId: ToolId }) {
+  return selectedKeys.value.includes(sessionSelectKey(session.toolId, session.id))
+}
+
+function togglePick(session: { id: string; toolId: ToolId }) {
+  if (!canPhysicallyDeleteSession(session.toolId, session.id)) return
+  selectedKeys.value = toggleSessionKey(selectedKeys.value, sessionSelectKey(session.toolId, session.id))
+}
+
+function toggleSelectVisible() {
+  selectedKeys.value = toggleVisibleSelection(selectedKeys.value, visibleDeletable.value)
+}
+
+function onRowActivate(session: { id: string; toolId: ToolId }) {
+  if (selecting.value) {
+    togglePick(session)
+    return
+  }
+  emit('open', { sessionId: session.id, toolId: session.toolId })
+}
+
+function askBatchDelete() {
+  const picked = new Set(selectedKeys.value)
+  const items = projectSessionRows.value.filter(
+    (row) => picked.has(sessionSelectKey(row.toolId, row.id)) && canPhysicallyDeleteSession(row.toolId, row.id)
+  )
+  if (!items.length) return
+  emit(
+    'delete-many',
+    items.map((row) => ({ sessionId: row.id, toolId: row.toolId }))
+  )
+}
+
+watch(
+  () => store.selectedProjectId,
+  () => exitSelecting()
+)
+
+watch(projectSessionRows, (rows) => {
+  selectedKeys.value = pruneSessionKeys(selectedKeys.value, deletableSessionKeys(rows))
+})
+
 function menuCanCite() {
   return Boolean(menu.value && !menuPending() && (menu.value.toolId === 'grokbuild' || menu.value.toolId === 'kimi'))
 }
@@ -346,6 +414,10 @@ function onKey(event: KeyboardEvent) {
     }
   }
   if (!menu.value) {
+    if (selecting.value && event.key === 'Escape') {
+      exitSelecting()
+      return
+    }
     if (projectMenu.value && event.key === 'Escape') closeMenu()
     return
   }
@@ -537,6 +609,16 @@ onUnmounted(() => {
           </div>
           <button
             type="button"
+            class="text-btn batch-btn"
+            :class="{ 'is-on': selecting }"
+            :aria-pressed="selecting"
+            aria-label="批量选择会话"
+            @click="toggleSelecting"
+          >
+            <span class="batch-label">批量</span>
+          </button>
+          <button
+            type="button"
             class="text-btn refresh-btn"
             :class="{ 'is-scanning': isSessionScanning() }"
             :disabled="isSessionScanning()"
@@ -552,6 +634,16 @@ onUnmounted(() => {
         </div>
         <div class="toolbar">
           <input v-model="store.sessionQuery" class="search" type="search" placeholder="搜索会话" aria-label="搜索会话" />
+          <div v-if="selecting" class="batch-bar">
+            <button type="button" class="text-btn" :disabled="!visibleDeletable.length" @click="toggleSelectVisible">
+              {{ allVisiblePicked ? '取消全选' : '全选' }}
+            </button>
+            <span class="batch-count">已选 {{ pickedCount }}</span>
+            <button type="button" class="text-btn batch-delete" :disabled="!pickedCount" @click="askBatchDelete">
+              删除
+            </button>
+            <button type="button" class="text-btn" @click="exitSelecting">取消</button>
+          </div>
         </div>
 
         <div v-if="store.sessionStatus === 'error' && !liveFilter" class="state">
@@ -607,16 +699,29 @@ onUnmounted(() => {
                   :class="{
                     'row--live': isLive(session.id, session.toolId),
                     'row--busy': sessionDot(session.id, session.toolId) === 'busy',
-                    'row--current': isCurrent(session.id, session.toolId)
+                    'row--current': isCurrent(session.id, session.toolId),
+                    'row--picked': selecting && isPicked(session)
                   }"
                   @contextmenu="openMenu($event, session.id, session.toolId)"
                 >
+                  <label
+                    v-if="selecting && canPhysicallyDeleteSession(session.toolId, session.id)"
+                    class="row-check"
+                    @click.stop
+                  >
+                    <input
+                      type="checkbox"
+                      :checked="isPicked(session)"
+                      :aria-label="'选择 ' + session.title"
+                      @change="togglePick(session)"
+                    />
+                  </label>
                   <button
                     type="button"
                     class="row-main"
                     :title="[session.title, liveDotTitle(sessionDot(session.id, session.toolId), 'session')].filter(Boolean).join(' · ')"
                     :aria-current="isCurrent(session.id, session.toolId) ? 'true' : undefined"
-                    @click="$emit('open', { sessionId: session.id, toolId: session.toolId })"
+                    @click="onRowActivate(session)"
                   >
                     <span v-if="renaming !== session.id" class="row-title">{{ session.title }}</span>
                     <input
@@ -1030,6 +1135,18 @@ onUnmounted(() => {
   color: var(--ad-muted);
 }
 
+.batch-btn {
+  min-width: 28px;
+}
+
+.batch-label {
+  white-space: nowrap;
+}
+
+.batch-btn.is-on {
+  color: var(--ad-text);
+}
+
 .refresh-btn {
   display: inline-flex;
   align-items: center;
@@ -1225,6 +1342,52 @@ onUnmounted(() => {
 
 .search {
   border-radius: var(--ad-radius-control);
+}
+
+.batch-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 28px;
+}
+
+.batch-count {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  line-height: 20px;
+  color: var(--ad-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.batch-delete {
+  color: var(--ad-error);
+}
+
+.batch-delete:disabled,
+.batch-bar .text-btn:disabled {
+  opacity: 0.4;
+}
+
+.row-check {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 38px;
+  flex-shrink: 0;
+  margin-left: 4px;
+}
+
+.row-check input {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: var(--ad-text);
+}
+
+.row--picked {
+  background: var(--ad-hover);
 }
 
 .session-empty {

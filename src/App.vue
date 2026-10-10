@@ -38,6 +38,7 @@ import {
   activeLive,
   boot,
   deleteCurrentSession,
+  deleteSessions,
   dropProject,
   bindLiveSession,
   findLiveForSession,
@@ -75,11 +76,12 @@ const accountOpen = ref(false)
 const deepseekOpen = ref(false)
 const ccswitchBusy = ref(false)
 const confirmOpen = ref(false)
-const confirmMode = ref<'remove' | 'close' | 'delete' | 'close-all'>('remove')
+const confirmMode = ref<'remove' | 'close' | 'delete' | 'delete-many' | 'close-all'>('remove')
 const closingProjectId = ref('')
 const removingId = ref('')
 const closingPtyId = ref('')
 const deletingSession = ref<{ sessionId: string; toolId: ToolId; title: string } | null>(null)
+const deletingMany = ref<{ sessionId: string; toolId: ToolId; title: string }[]>([])
 const renamingId = ref('')
 const renameDraft = ref('')
 
@@ -270,6 +272,26 @@ function askDeleteSession(sessionId: string, toolId: ToolId) {
   confirmOpen.value = true
 }
 
+function askDeleteSessions(items: { sessionId: string; toolId: ToolId }[]) {
+  const rows = items
+    .map((item) => {
+      const session = store.sessions.find((row) => row.id === item.sessionId && row.toolId === item.toolId)
+      return {
+        sessionId: item.sessionId,
+        toolId: item.toolId,
+        title: session?.title ?? item.sessionId
+      }
+    })
+    .filter((item) => !isFixedDshSession(item.toolId, item.sessionId) && !isPendingSessionId(item.sessionId))
+  if (!rows.length) {
+    showToast('没有可以删除的会话')
+    return
+  }
+  deletingMany.value = rows
+  confirmMode.value = 'delete-many'
+  confirmOpen.value = true
+}
+
 async function onConfirm() {
   const closingAll = confirmMode.value === 'close-all'
   const closingOne = confirmMode.value === 'close'
@@ -278,11 +300,16 @@ async function onConfirm() {
     confirmMode.value === 'delete' && deletingSession.value
       ? liveForSession(deletingSession.value.sessionId, deletingSession.value.toolId)
       : null
+  const deletingManyLives =
+    confirmMode.value === 'delete-many'
+      ? deletingMany.value.map((item) => liveForSession(item.sessionId, item.toolId))
+      : []
   const closingDsh =
     (closingAll && closeAllItems.some((item) => isDshWeb(item))) ||
     (closingOne &&
       isDshWeb(store.live.find((item) => item.ptyId === (closingPtyId.value || store.activePtyId)))) ||
-    isDshWeb(deletingLive)
+    isDshWeb(deletingLive) ||
+    deletingManyLives.some((item) => isDshWeb(item))
   if (closingDsh) {
     pauseDshEmbed()
     await api.dshEmbedClose()
@@ -327,7 +354,7 @@ async function onConfirm() {
     if (live) {
       await api.ptyKill(live.ptyId)
       termRef.value?.dispose(live.ptyId)
-      markPtyExit(live.ptyId, { userClosed: true })
+      markPtyExit(live.ptyId, { userClosed: true, skipRefresh: true })
       if (isDshWeb(live)) await api.dshEmbedClose()
     }
     const session = store.sessions.find((item) => item.id === target.sessionId && item.toolId === target.toolId)
@@ -340,6 +367,40 @@ async function onConfirm() {
     } catch (err) {
       showToast(err instanceof Error ? err.message : String(err))
     }
+    return
+  }
+  if (confirmMode.value === 'delete-many' && deletingMany.value.length) {
+    const targets = deletingMany.value.slice()
+    deletingMany.value = []
+    for (const target of targets) {
+      const live = liveForSession(target.sessionId, target.toolId)
+      if (!live) continue
+      try {
+        await api.ptyKill(live.ptyId)
+        termRef.value?.dispose(live.ptyId)
+        markPtyExit(live.ptyId, { userClosed: true, skipRefresh: true })
+        if (isDshWeb(live)) await api.dshEmbedClose()
+      } catch {
+        /* 终端关不掉也继续删磁盘上的会话 */
+      }
+    }
+    const sessions = targets
+      .map((target) => store.sessions.find((item) => item.id === target.sessionId && item.toolId === target.toolId))
+      .filter((item): item is NonNullable<typeof item> => Boolean(item))
+    if (!sessions.length) {
+      showToast('这些会话已经不在列表里')
+      return
+    }
+    const result = await deleteSessions(sessions)
+    if (!result.deleted && result.failed.length) {
+      showToast(result.failed[0]?.message ?? '删除失败')
+      return
+    }
+    if (result.failed.length) {
+      showToast(`已从磁盘删除 ${result.deleted} 个，${result.failed.length} 个失败：${result.failed[0]?.message ?? ''}`)
+      return
+    }
+    showToast(`已从磁盘删除 ${result.deleted} 个会话`)
   }
 }
 
@@ -552,6 +613,19 @@ const confirmCopy = () => {
       action: '删除会话'
     }
   }
+  if (confirmMode.value === 'delete-many') {
+    const titles = deletingMany.value.map((item) => item.title)
+    const preview = titles
+      .slice(0, 5)
+      .map((title) => `「${title}」`)
+      .join('、')
+    const extra = titles.length > 5 ? ` 等 ${titles.length} 个` : ''
+    return {
+      title: '批量删除会话',
+      body: `将从磁盘删除 ${preview}${extra}。对话记录会一并去掉，不能再打开。正在运行的终端会先关掉。`,
+      action: `删除 ${titles.length} 个`
+    }
+  }
   if (confirmMode.value === 'close-all') {
     const count = liveOfProject(store.live, closingProjectId.value).length
     return {
@@ -606,6 +680,7 @@ const confirmCopy = () => {
           @close="(payload) => askCloseSession(payload.sessionId, payload.toolId)"
           @close-all="askCloseAll"
           @delete="(payload) => askDeleteSession(payload.sessionId, payload.toolId)"
+          @delete-many="askDeleteSessions"
           @cite="openCiteTurns"
         />
         <PaneGutter

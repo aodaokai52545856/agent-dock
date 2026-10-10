@@ -1,6 +1,17 @@
 import { computed, reactive } from 'vue'
 import * as api from './api'
 import { DSH_FIXED_SESSION_ID, DSH_FIXED_SESSION_TITLE } from './dsh'
+import { canPhysicallyDeleteSession } from './sessionBatch'
+import {
+  forgetProjectSessionView,
+  readGlobalSessionLiveOnly,
+  readGlobalSessionToolFilter,
+  readProjectSessionView,
+  writeGlobalSessionLiveOnly,
+  writeGlobalSessionToolFilter,
+  writeProjectSessionView,
+  type SessionViewStorage
+} from './sessionViewMemory'
 import {
   isPendingSessionId,
   keepLiveTitle,
@@ -128,8 +139,6 @@ const defaultSettings = (): AppSettings => ({
   ccswitchInstallDir: ''
 })
 
-const FILTER_STORAGE_KEY = 'ad-session-tool-filter'
-const LIVE_ONLY_KEY = 'ad-session-live-only'
 const MODE_STORAGE_KEY = 'ad-app-mode'
 const lastPtyByProject: Record<string, string> = {}
 const previewSessions: Record<string, SessionRow[]> = {}
@@ -138,9 +147,25 @@ export function parseAppMode(value: unknown): AppMode {
   return value === 'bridge' ? 'bridge' : 'console'
 }
 
-function restoreSessionLiveOnly() {
-  if (typeof localStorage === 'undefined') return
-  store.sessionLiveOnly = localStorage.getItem(LIVE_ONLY_KEY) === '1'
+function sessionViewStorage(): SessionViewStorage | null {
+  if (typeof localStorage === 'undefined') return null
+  return localStorage
+}
+
+function rememberCurrentSessionView() {
+  writeProjectSessionView(sessionViewStorage(), store.selectedProjectId, {
+    toolFilter: store.sessionToolFilter,
+    liveOnly: store.sessionLiveOnly
+  })
+}
+
+function applyRememberedSessionView(projectId: string) {
+  const view = readProjectSessionView(sessionViewStorage(), projectId, {
+    toolFilter: parseSessionToolFilter(store.settings.sessionToolFilter),
+    liveOnly: readGlobalSessionLiveOnly(sessionViewStorage())
+  })
+  store.sessionToolFilter = view.toolFilter
+  store.sessionLiveOnly = view.liveOnly
 }
 
 function migrateLoadedUiOpacity(value: number) {
@@ -324,13 +349,13 @@ export function applyState(state: AppState) {
     ccswitchDownloadDir: state.settings.ccswitchDownloadDir ?? '',
     ccswitchInstallDir: state.settings.ccswitchInstallDir ?? ''
   }
-  store.sessionToolFilter = store.settings.sessionToolFilter
   store.ready = true
   applyUiGlass(store.settings.uiOpacity, store.settings.uiFrost)
   applyAppearance(appearanceFromSettings(store.settings))
   if (!store.selectedProjectId || !store.projects.some((item) => item.id === store.selectedProjectId)) {
     store.selectedProjectId = store.projects[0]?.id ?? ''
   }
+  applyRememberedSessionView(store.selectedProjectId)
 }
 
 export function noteGrokAccountChange() {
@@ -552,9 +577,8 @@ export async function boot() {
     store.activePtyId = 'preview-a1'
     store.ptyDataAt = { 'preview-a1': now }
     rememberPty(lastPtyByProject, 'preview-aitools', 'preview-a1')
-    store.sessionToolFilter = parseSessionToolFilter(localStorage.getItem(FILTER_STORAGE_KEY))
-    store.settings.sessionToolFilter = store.sessionToolFilter
-    restoreSessionLiveOnly()
+    store.settings.sessionToolFilter = readGlobalSessionToolFilter(sessionViewStorage())
+    applyRememberedSessionView(store.selectedProjectId)
     applyUiGlass(store.settings.uiOpacity, store.settings.uiFrost)
     applyAppearance(appearanceFromSettings(store.settings))
     restoreAppMode()
@@ -565,7 +589,6 @@ export async function boot() {
     return
   }
   applyState(await api.loadAppState())
-  restoreSessionLiveOnly()
   restoreAppMode()
   store.projectFlows = loadAllFlows()
   store.runs = loadAllRuns()
@@ -762,10 +785,12 @@ export async function selectProject(id: string) {
     return
   }
   rememberActivePty()
+  rememberCurrentSessionView()
   store.selectedProjectId = id
   store.sessions = []
   store.sessionErrors = {}
   store.sessionQuery = ''
+  applyRememberedSessionView(id)
   ensurePipeline(id)
   applyProjectPty(id)
   await refreshSessions()
@@ -794,13 +819,20 @@ export async function saveProject(draft: ProjectDraft, id?: string) {
   const state = id ? await api.updateProject({ ...draft, id }) : await api.addProject(draft)
   applyState(state)
   if (!id) {
-    store.selectedProjectId = store.projects[0]?.id ?? ''
+    const nextId = store.projects[0]?.id ?? ''
+    if (store.selectedProjectId && store.selectedProjectId !== nextId) {
+      rememberCurrentSessionView()
+    }
+    store.selectedProjectId = nextId
+    applyRememberedSessionView(nextId)
   }
   if (store.selectedProjectId) ensurePipeline(store.selectedProjectId)
 }
 
 export async function dropProject(id: string) {
-  applyState(await api.removeProject(id))
+  const state = await api.removeProject(id)
+  forgetProjectSessionView(sessionViewStorage(), id)
+  applyState(state)
   await refreshSessions()
 }
 
@@ -844,9 +876,11 @@ function filterAvail(id: SessionToolFilter): SessionFilterAvail | undefined {
 }
 
 function clampCurrentToolFilter() {
-  const next = clampSessionToolFilter(store.sessionToolFilter, store.probes, filterAvail(store.sessionToolFilter))
-  store.sessionToolFilter = next
-  store.settings.sessionToolFilter = next
+  store.sessionToolFilter = clampSessionToolFilter(
+    store.sessionToolFilter,
+    store.probes,
+    filterAvail(store.sessionToolFilter)
+  )
 }
 
 export function setToolProbes(probes: ToolProbeMap) {
@@ -859,10 +893,9 @@ export async function setSessionToolFilter(id: SessionToolFilter) {
   if (next === store.sessionToolFilter) return
   store.sessionToolFilter = next
   store.settings.sessionToolFilter = next
-  if (!api.isTauri) {
-    localStorage.setItem(FILTER_STORAGE_KEY, next)
-    return
-  }
+  rememberCurrentSessionView()
+  writeGlobalSessionToolFilter(sessionViewStorage(), next)
+  if (!api.isTauri) return
   try {
     await saveAppSettings({ ...store.settings, sessionToolFilter: next })
   } catch (error) {
@@ -873,8 +906,8 @@ export async function setSessionToolFilter(id: SessionToolFilter) {
 
 export function setSessionLiveOnly(on: boolean) {
   store.sessionLiveOnly = on
-  if (typeof localStorage === 'undefined') return
-  localStorage.setItem(LIVE_ONLY_KEY, on ? '1' : '0')
+  rememberCurrentSessionView()
+  writeGlobalSessionLiveOnly(sessionViewStorage(), on)
 }
 
 export function pauseDshEmbed() {
@@ -921,14 +954,50 @@ export async function renameCurrentSession(session: SessionRow, title: string) {
   }
 }
 
+export async function deleteSessions(sessions: SessionRow[]) {
+  const failed: { id: string; toolId: ToolId; title: string; message: string }[] = []
+  let deleted = 0
+  if (!store.selectedProjectId) return { deleted, failed }
+  const projectId = store.selectedProjectId
+  for (const session of sessions) {
+    if (!canPhysicallyDeleteSession(session.toolId, session.id)) {
+      failed.push({
+        id: session.id,
+        toolId: session.toolId,
+        title: session.title,
+        message: '这个会话不能删除'
+      })
+      continue
+    }
+    try {
+      await api.deleteSession(projectId, session.toolId, session.id)
+      dropSessionLocally(session)
+      deleted += 1
+    } catch (error) {
+      failed.push({
+        id: session.id,
+        toolId: session.toolId,
+        title: session.title,
+        message: error instanceof Error ? error.message : String(error)
+      })
+    }
+  }
+  await refreshSessions({ silent: true })
+  return { deleted, failed }
+}
+
 export async function deleteCurrentSession(session: SessionRow) {
-  if (!store.selectedProjectId) return
-  await api.deleteSession(store.selectedProjectId, session.toolId, session.id)
+  const result = await deleteSessions([session])
+  const failure = result.failed[0]
+  if (failure) throw new Error(failure.message)
+  showToast('已删除会话')
+}
+
+function dropSessionLocally(session: SessionRow) {
+  store.sessions = store.sessions.filter((item) => item.id !== session.id || item.toolId !== session.toolId)
   if (store.focusedSession?.sessionId === session.id && store.focusedSession.toolId === session.toolId) {
     store.focusedSession = null
   }
-  await refreshSessions()
-  showToast('已删除会话')
 }
 
 function adoptLiveFallback(deadPtyId: string, deadProjectId?: string | null, opts?: { userClosed?: boolean }) {
@@ -967,14 +1036,14 @@ export function notePtyData(ptyId: string, at = Date.now()) {
   armPtyDone(ptyId, at)
 }
 
-export function markPtyExit(ptyId: string, opts?: { userClosed?: boolean }) {
+export function markPtyExit(ptyId: string, opts?: { userClosed?: boolean; skipRefresh?: boolean }) {
   stopPendingWatch(ptyId)
   clearPtyDone(ptyId)
   delete store.ptyDataAt[ptyId]
   const dying = store.live.find((item) => item.ptyId === ptyId)
   store.live = store.live.filter((item) => item.ptyId !== ptyId)
   adoptLiveFallback(ptyId, dying?.projectId ?? store.selectedProjectId, opts)
-  void refreshSessions({ silent: true })
+  if (!opts?.skipRefresh) void refreshSessions({ silent: true })
 }
 
 export function rememberOpened(info: LivePtyInfo) {
