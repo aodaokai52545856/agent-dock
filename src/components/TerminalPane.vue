@@ -12,7 +12,7 @@ import { isDshWeb } from '../lib/livePty'
 import { markPtyExit, notePtyData, selectedProject, store } from '../lib/store'
 import { codeFontStack } from '../lib/appearance'
 import { canMeasure, createFitScheduler, rowsThatFit } from '../lib/termFit'
-import { attachTermClipboard } from '../lib/termClipboard'
+import { attachTermClipboard, resolveClaudePaste } from '../lib/termClipboard'
 import { termMenuItems, type TermMenuAction } from '../lib/termMenu'
 import {
   ansiPaletteBlack,
@@ -87,8 +87,7 @@ async function runTermMenu(action: TermMenuAction) {
     return
   }
   if (action === 'paste') {
-    const text = await api.clipboardRead()
-    if (text) host.term.paste(text)
+    await pasteFromClipboard(id, host.term)
     return
   }
   if (action === 'selectAll') host.term.selectAll()
@@ -136,6 +135,24 @@ function liveForPty(ptyId: string) {
 
 function toolForPty(ptyId: string) {
   return liveForPty(ptyId)?.toolId
+}
+
+async function pasteFromClipboard(ptyId: string, term: Terminal) {
+  try {
+    const contents = await api.clipboardReadContents()
+    if (toolForPty(ptyId) === 'claude') {
+      const action = resolveClaudePaste(contents, isWindows)
+      if (action.kind === 'image') {
+        await api.ptyWrite(ptyId, action.sequence)
+        return
+      }
+      if (action.kind === 'text') term.paste(action.text)
+      return
+    }
+    if (contents.text) term.paste(contents.text)
+  } catch {
+    /* clipboard and pty write are best-effort */
+  }
 }
 
 function canHost(ptyId: string) {
@@ -235,7 +252,11 @@ function ensureHost(ptyId: string) {
     write: (text) => {
       void api.clipboardWrite(text)
     },
-    mac: isMac
+    mac: isMac,
+    onPaste: () => {
+      void pasteFromClipboard(ptyId, term)
+    },
+    pasteEnabled: () => toolForPty(ptyId) === 'claude'
   })
   const host = { term, fit, el, offData, offSurface, offClipboard, lastCols: 0, lastRows: 0, lastW: 0, lastH: 0 }
   hosts.set(ptyId, host)

@@ -101,7 +101,7 @@ pub fn upgrade_tool(tool: ToolId, settings: &AppSettings, proxy_url: Option<&str
             &["--ignore-scripts"],
             &proxy,
         ),
-        ToolId::Dsh => upgrade_via_npm(&mut log, "@deepseek-ai/dsh", &proxy),
+        ToolId::Dsh => upgrade_dsh_npm(&mut log, &proxy),
     };
     if tool == ToolId::Dsh {
         let report = dsh::verify_install(settings);
@@ -336,6 +336,34 @@ fn npm_view_result(pkg: &str, proxy: &[(String, String)]) -> Result<String, Stri
 
 fn upgrade_via_npm(log: &mut String, pkg: &str, proxy: &[(String, String)]) -> bool {
     upgrade_via_npm_flags(log, pkg, &[], proxy)
+}
+
+fn upgrade_dsh_npm(log: &mut String, proxy: &[(String, String)]) -> bool {
+    let mut ok = upgrade_via_npm(log, "@deepseek-ai/dsh", proxy);
+    if ok || koffi_lock_hint(log).is_none() {
+        return ok;
+    }
+    push_line(
+        log,
+        "koffi.node 仍被占用，1 秒后重试一次。若 DeepSeek 是在别的终端里开的，请先关掉。",
+    );
+    std::thread::sleep(Duration::from_secs(1));
+    ok = upgrade_via_npm(log, "@deepseek-ai/dsh", proxy);
+    if !ok {
+        if let Some(hint) = koffi_lock_hint(log) {
+            push_line(log, hint);
+        }
+    }
+    ok
+}
+
+fn koffi_lock_hint(text: &str) -> Option<&'static str> {
+    let lower = text.to_ascii_lowercase();
+    if lower.contains("ebusy") && lower.contains("koffi") {
+        Some("DeepSeek 的 koffi.node 正在被运行中的 dsh 占用，npm 替换不了这个文件。请先关掉 DeepSeek Web 和终端里的 dsh，再升级。")
+    } else {
+        None
+    }
 }
 
 fn upgrade_via_npm_flags(
@@ -1447,6 +1475,14 @@ fn semver_tuple(text: &str) -> Option<(u64, u64, u64, Option<String>)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn explains_koffi_file_lock() {
+        let log = "npm error code EBUSY\nnpm error path koffi.node\n";
+        assert!(koffi_lock_hint(log).unwrap().contains("koffi.node"));
+        assert!(koffi_lock_hint("npm error code EBUSY").is_none());
+        assert!(koffi_lock_hint("added 1 package").is_none());
+    }
 
     #[test]
     fn parses_first_semver() {

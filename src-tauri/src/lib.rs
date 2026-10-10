@@ -203,6 +203,11 @@ fn clipboard_read() -> Result<String, String> {
 }
 
 #[tauri::command]
+fn clipboard_read_contents() -> clipboard::ClipboardContents {
+    clipboard::read_contents()
+}
+
+#[tauri::command]
 fn app_version() -> String {
     tools::update::app_version()
 }
@@ -907,6 +912,7 @@ pub fn run() {
             folder_label,
             clipboard_write,
             clipboard_read,
+            clipboard_read_contents,
             reveal_main_window,
             set_window_frost,
             probe_tools,

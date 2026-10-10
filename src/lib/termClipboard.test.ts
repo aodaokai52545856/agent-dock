@@ -2,7 +2,9 @@ import assert from 'node:assert/strict'
 import {
   attachTermClipboard,
   parseOsc52,
+  resolveClaudePaste,
   shouldCopySelection,
+  shouldInterceptPaste,
   type ClipKeyEvent
 } from './termClipboard.ts'
 
@@ -55,6 +57,23 @@ test('Ctrl+Shift+C copies a selection on non-mac hosts', () => {
   assert.equal(shouldCopySelection(chord, true, true), false)
 })
 
+test('Windows Ctrl+V is a paste chord and macOS leaves it alone', () => {
+  const paste = key({ code: 'KeyV', key: 'v', ctrlKey: true })
+  assert.equal(shouldInterceptPaste(paste, false), true)
+  assert.equal(shouldInterceptPaste(paste, true), false)
+  assert.equal(shouldInterceptPaste(key({ code: 'KeyV', key: 'v', ctrlKey: true, repeat: true }), false), false)
+  assert.equal(shouldInterceptPaste(key({ type: 'keyup', code: 'KeyV', key: 'v', ctrlKey: true }), false), false)
+  assert.equal(shouldInterceptPaste(key({ code: 'KeyV', key: 'v', ctrlKey: true, altKey: true }), false), false)
+})
+
+test('Claude paste sends text, or an image chord when the clipboard has only an image', () => {
+  assert.deepEqual(resolveClaudePaste({ text: 'hello', hasImage: false }, true), { kind: 'text', text: 'hello' })
+  assert.deepEqual(resolveClaudePaste({ text: 'hello', hasImage: true }, true), { kind: 'text', text: 'hello' })
+  assert.deepEqual(resolveClaudePaste({ text: '  ', hasImage: true }, true), { kind: 'image', sequence: '\u001bv' })
+  assert.deepEqual(resolveClaudePaste({ text: '', hasImage: true }, false), { kind: 'image', sequence: '\u0016' })
+  assert.deepEqual(resolveClaudePaste({ text: '', hasImage: false }, true), { kind: 'skip' })
+})
+
 test('attachTermClipboard writes OSC 52 and host copy, and copies on mouseup', () => {
   const osc = new Map<number, (data: string) => boolean>()
   let keyHandler: ((event: ClipKeyEvent) => boolean) | undefined
@@ -103,4 +122,44 @@ test('attachTermClipboard writes OSC 52 and host copy, and copies on mouseup', (
   assert.deepEqual(written, ['Hello', 'picked', 'picked'])
   assert.equal(osc.has(52), false)
   assert.equal(listeners.has('mouseup'), false)
+})
+
+test('Ctrl+V asks the host to paste only while that host owns the chord', () => {
+  let keyHandler: ((event: ClipKeyEvent) => boolean) | undefined
+  let pastes = 0
+  let enabled = true
+  const term = {
+    parser: {
+      registerOscHandler() {
+        return { dispose() {} }
+      }
+    },
+    attachCustomKeyEventHandler(handler: (event: ClipKeyEvent) => boolean) {
+      keyHandler = handler
+    },
+    getSelection() {
+      return ''
+    },
+    hasSelection() {
+      return false
+    }
+  }
+  const el = {
+    addEventListener() {},
+    removeEventListener() {}
+  }
+  const pasteKey = key({ code: 'KeyV', key: 'v', ctrlKey: true })
+  attachTermClipboard(term, el, {
+    write() {},
+    mac: false,
+    onPaste() {
+      pastes += 1
+    },
+    pasteEnabled: () => enabled
+  })
+  assert.equal(keyHandler?.(pasteKey), false)
+  enabled = false
+  assert.equal(keyHandler?.(pasteKey), true)
+  assert.equal(keyHandler?.(key({ type: 'keyup', code: 'KeyV', key: 'v', ctrlKey: true })), true)
+  assert.equal(pastes, 1)
 })

@@ -97,6 +97,17 @@ export async function clipboardRead(): Promise<string> {
   return ''
 }
 
+export async function clipboardReadContents(): Promise<{ text: string; hasImage: boolean }> {
+  if (isTauri) {
+    try {
+      return await invoke('clipboard_read_contents')
+    } catch {
+      /* fall through to text-only */
+    }
+  }
+  return { text: await clipboardRead(), hasImage: false }
+}
+
 export async function revealMainWindow(): Promise<void> {
   if (!isTauri) return
   await invoke('reveal_main_window')
@@ -343,20 +354,20 @@ export async function listLivePtys(): Promise<LivePtyInfo[]> {
 }
 
 export async function appVersion(): Promise<string> {
-  if (!isTauri) return '0.1.5'
+  if (!isTauri) return '0.1.6'
   return invoke('app_version')
 }
 
 export async function checkAppUpdate(proxyUrl?: string): Promise<AppUpdateInfo> {
   if (!isTauri) {
     return {
-      localVersion: '0.1.5',
-      latestVersion: '0.1.5',
+      localVersion: '0.1.6',
+      latestVersion: '0.1.6',
       compare: '已是最新',
       kind: 'win-setup',
       kindLabel: 'Windows 安装包',
-      assetName: 'AgentDock-0.1.5-Setup.exe',
-      htmlUrl: 'https://github.com/aodaokai52545856/agent-dock/releases/tag/v0.1.5'
+      assetName: 'AgentDock-0.1.6-Setup.exe',
+      htmlUrl: 'https://github.com/aodaokai52545856/agent-dock/releases/tag/v0.1.6'
     }
   }
   return invoke('check_app_update', { proxyUrl: proxyUrl || null })

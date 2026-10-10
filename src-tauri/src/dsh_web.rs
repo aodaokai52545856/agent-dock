@@ -68,6 +68,28 @@ impl Hub {
         let _ = reap_strays_with(&live, self.lock_records(), |pid| self.forget_lock_pid(pid));
     }
 
+    /// Stop DeepSeek Web this Dock started so npm can replace `koffi.node`.
+    /// Does not set `shutting_down`, so the profile can be opened again afterwards.
+    pub fn release_for_package_change(&self) -> Vec<String> {
+        let ids: Vec<String> = {
+            let sessions = lock_sessions(&self.sessions);
+            sessions.keys().cloned().collect()
+        };
+        #[cfg(windows)]
+        if let Ok(mut job) = self.job.lock() {
+            // Closing the job kills every assigned process, including grandchildren
+            // that have koffi.node loaded. The replacement job covers the next open.
+            *job = KillJob::new();
+        }
+        let mut released = Vec::new();
+        for id in ids {
+            if self.kill(&id).unwrap_or(false) {
+                released.push(id);
+            }
+        }
+        released
+    }
+
     pub fn shutdown(&self) {
         if self.shutting_down.swap(true, Ordering::SeqCst) {
             return;

@@ -92,9 +92,18 @@ impl InstallReport {
     }
 }
 
+/// Top-level `dsh --help`.
+/// 0.1.x listed subcommands under `Commands:`.
+/// 0.2.x is a profile launcher (`[--profile]`, `plugin`); `web` is only an example.
+/// `dsh web --help` is the web app's own flag list and must not match.
 pub fn looks_like_dsh_help(text: &str) -> bool {
     let t = text.to_ascii_lowercase();
-    t.contains("usage: dsh") && t.contains("commands:") && t.contains("web")
+    if !t.contains("usage: dsh") {
+        return false;
+    }
+    let legacy = t.contains("commands:") && t.contains("web");
+    let launcher = t.contains("[--profile]") && t.contains("plugin");
+    legacy || launcher
 }
 
 pub fn looks_like_dsh_web_help(text: &str) -> bool {
@@ -525,6 +534,24 @@ mod tests {
         assert!(!looks_like_dsh_help(web));
         assert!(!looks_like_dsh_help(""));
         assert!(!looks_like_dsh_web_help(""));
+    }
+
+    #[test]
+    fn dsh_020_launcher_help_counts_as_dsh_not_web() {
+        let launcher = r#"Usage: dsh [--profile] <name> [options] [app-args...]
+       dsh plugin --profile <name> <pnpm-args...>
+
+dsh: boot a DeepSeek Harness profile — an ordered stack of plugin-bundle patch
+layers under your own overrides.
+
+Examples:
+  dsh web                                   boot the web profile (same as: dsh --profile web)
+"#;
+        let web = "Usage: dsh --profile web [options]\n\nServe the DeepSeek Harness browser UI.\n\nOptions:\n  --no-open                      do not open the Web UI\n  --port <port>                  listen port\n";
+        assert!(looks_like_dsh_help(launcher));
+        assert!(!looks_like_dsh_web_help(launcher));
+        assert!(looks_like_dsh_web_help(web));
+        assert!(!looks_like_dsh_help(web));
     }
 
     #[test]

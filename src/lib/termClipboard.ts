@@ -15,8 +15,19 @@ export type ClipKeyEvent = {
   metaKey: boolean
   shiftKey: boolean
   altKey: boolean
+  repeat?: boolean
   preventDefault?: () => void
 }
+
+export type ClipboardPaste = {
+  text: string
+  hasImage: boolean
+}
+
+export type ResolvedPaste =
+  | { kind: 'text'; text: string }
+  | { kind: 'image'; sequence: string }
+  | { kind: 'skip' }
 
 export type ClipTerm = {
   parser: {
@@ -66,6 +77,27 @@ export function parseOsc52(data: string): Osc52Action {
   return { kind: 'write', text }
 }
 
+export function shouldInterceptPaste(event: ClipKeyEvent, mac: boolean) {
+  if (mac || event.repeat) return false
+  if (event.type !== 'keydown' || event.altKey || event.metaKey || event.shiftKey) return false
+  if (!event.ctrlKey) return false
+  return event.code === 'KeyV' || event.key === 'v' || event.key === 'V'
+}
+
+// Windows Claude binds image paste to alt+v. Terminals send that as ESC v, and
+// Claude treats the meta flag as alt. Other platforms bind ctrl+v (0x16).
+export function claudeImagePasteSequence(windows: boolean) {
+  return windows ? '\u001bv' : '\u0016'
+}
+
+export function resolveClaudePaste(input: ClipboardPaste, windows: boolean): ResolvedPaste {
+  if (input.hasImage && input.text.trim() === '') {
+    return { kind: 'image', sequence: claudeImagePasteSequence(windows) }
+  }
+  if (input.text) return { kind: 'text', text: input.text }
+  return { kind: 'skip' }
+}
+
 export function shouldCopySelection(event: ClipKeyEvent, hasSelection: boolean, mac: boolean) {
   if (event.type !== 'keydown' || event.altKey) return false
   const copyKey = event.code === 'KeyC' || event.key === 'c' || event.key === 'C'
@@ -78,7 +110,12 @@ export function shouldCopySelection(event: ClipKeyEvent, hasSelection: boolean, 
 export function attachTermClipboard(
   term: ClipTerm,
   el: ClipSurface,
-  hooks: { write: (text: string) => void; mac: boolean }
+  hooks: {
+    write: (text: string) => void
+    mac: boolean
+    onPaste?: () => void
+    pasteEnabled?: () => boolean
+  }
 ) {
   let disposed = false
   const offOsc = term.parser.registerOscHandler(OSC_CLIPBOARD, (data) => {
@@ -88,11 +125,19 @@ export function attachTermClipboard(
     return true
   })
   term.attachCustomKeyEventHandler((event) => {
-    if (disposed || !shouldCopySelection(event, term.hasSelection(), hooks.mac)) return true
-    event.preventDefault?.()
-    const text = term.getSelection()
-    if (text) hooks.write(text)
-    return false
+    if (disposed) return true
+    if (shouldCopySelection(event, term.hasSelection(), hooks.mac)) {
+      event.preventDefault?.()
+      const text = term.getSelection()
+      if (text) hooks.write(text)
+      return false
+    }
+    if (hooks.onPaste && shouldInterceptPaste(event, hooks.mac) && hooks.pasteEnabled?.() !== false) {
+      event.preventDefault?.()
+      hooks.onPaste()
+      return false
+    }
+    return true
   })
   const onMouseUp = () => {
     if (disposed) return
