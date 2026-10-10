@@ -117,12 +117,16 @@ fn string_token(value: Option<&Value>) -> Option<String> {
 }
 
 fn billing_url() -> String {
+    billing_url_at(Utc::now().timestamp_millis())
+}
+
+fn billing_url_at(ts: i64) -> String {
     let base = std::env::var("GROK_CLI_CHAT_PROXY_BASE_URL")
         .ok()
         .map(|item| item.trim().to_string())
         .filter(|item| !item.is_empty())
         .unwrap_or_else(|| DEFAULT_PROXY_BASE.to_string());
-    format!("{}/billing?format=credits", base.trim_end_matches('/'))
+    format!("{}/billing?format=credits&_={ts}", base.trim_end_matches('/'))
 }
 
 fn fetch_billing(token: &str, project: Option<&Project>, settings: &AppSettings) -> Result<String, String> {
@@ -169,6 +173,8 @@ fn request_billing(token: &str, proxy: Option<&str>) -> Result<String, String> {
     let response = builder.build().get(&billing_url())
         .set("Authorization", &format!("Bearer {token}"))
         .set("X-XAI-Token-Auth", "xai-grok-cli")
+        .set("Cache-Control", "no-cache")
+        .set("Pragma", "no-cache")
         .call();
     match response {
         Ok(resp) => read_ok_body(resp),
@@ -346,5 +352,12 @@ mod tests {
     fn missing_percent_is_unavailable() {
         let err = parse_billing(r#"{"config":{}}"#).unwrap_err();
         assert!(err.contains("没有用量数据"));
+    }
+
+    #[test]
+    fn billing_url_busts_get_caches() {
+        let url = billing_url_at(1_758_700_000_000);
+        assert!(url.contains("/billing?format=credits&_=1758700000000"));
+        assert!(url.starts_with("https://cli-chat-proxy.grok.com/v1/"));
     }
 }

@@ -1,6 +1,7 @@
 import type { GrokUsage, SessionToolFilter, ToolId } from './types'
 
 export const GROK_USAGE_INTERVAL_MS = 60_000
+export const GROK_USAGE_FAST_INTERVAL_MS = 15_000
 
 export function shouldShowGrokUsage(filter: SessionToolFilter, selectedTool: ToolId, appMode = 'console') {
   if (appMode !== 'console') return false
@@ -47,17 +48,17 @@ export function formatMoney(value: number | null | undefined) {
   return value.toFixed(2)
 }
 
-export function formatUsageLine(usage: GrokUsage) {
+export function formatUsageLine(usage: GrokUsage, now = Date.now()) {
   if (!usage.ok) return 'Grok 用量失败'
   const remaining = formatPercent(usage.remainingPercent)
-  const reset = formatResetAt(usage.resetsAt)
+  const reset = formatResetAt(usage.resetsAt, now)
   const parts = [`Grok 剩 ${remaining}%`]
   if (reset) parts.push(reset)
   if ((usage.prepaidBalance ?? 0) > 0) parts.push(`额度 ${formatMoney(usage.prepaidBalance)}`)
   return parts.join(' · ')
 }
 
-export function formatUsageTooltip(usage: GrokUsage) {
+export function formatUsageTooltip(usage: GrokUsage, now = Date.now()) {
   if (!usage.ok) return usage.message || '读取 Grok 用量失败，点击重试'
   const period = usage.periodLabel || '本期'
   const lines = [
@@ -69,10 +70,33 @@ export function formatUsageTooltip(usage: GrokUsage) {
   if (usage.prepaidBalance != null) {
     lines.push(`额度 ${formatMoney(usage.prepaidBalance)}`)
   }
-  const reset = formatResetAt(usage.resetsAt)
+  const reset = formatResetAt(usage.resetsAt, now)
   if (reset) lines.push(reset)
   if (usage.message) lines.push(usage.message)
   return lines.join('\n')
+}
+
+export function usageResetDue(usage: GrokUsage | null | undefined, now = Date.now()) {
+  if (!usage?.ok || !usage.resetsAt) return false
+  const at = Date.parse(usage.resetsAt)
+  return Number.isFinite(at) && at <= now
+}
+
+export function shouldApplyUsageFetch(
+  current: GrokUsage | null | undefined,
+  next: GrokUsage,
+  now = Date.now()
+) {
+  if (next.ok) return true
+  if (!current) return true
+  if (!current.ok) return true
+  return usageResetDue(current, now)
+}
+
+export function grokUsagePollMs(usage: GrokUsage | null | undefined, now = Date.now()) {
+  if (!usage) return GROK_USAGE_INTERVAL_MS
+  if (!usage.ok || usageResetDue(usage, now)) return GROK_USAGE_FAST_INTERVAL_MS
+  return GROK_USAGE_INTERVAL_MS
 }
 
 

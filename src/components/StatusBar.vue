@@ -2,9 +2,10 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import * as api from '../lib/api'
 import {
-  GROK_USAGE_INTERVAL_MS,
   formatUsageLine,
   formatUsageTooltip,
+  grokUsagePollMs,
+  shouldApplyUsageFetch,
   shouldShowGrokUsage,
   usageTone
 } from '../lib/grokUsage'
@@ -42,6 +43,7 @@ const spendLoading = ref(false)
 const dshBalance = ref<DshBalance | null>(null)
 const dshLoading = ref(false)
 const peakNow = ref(Date.now())
+const usageNow = ref(Date.now())
 let usageTimer = 0
 let dshTimer = 0
 let peakTimer = 0
@@ -57,12 +59,12 @@ const showDshBalance = computed(() =>
 )
 
 const usageText = computed(() => {
-  if (usage.value) return formatUsageLine(usage.value)
+  if (usage.value) return formatUsageLine(usage.value, usageNow.value)
   return usageLoading.value ? 'Grok 用量…' : 'Grok 用量'
 })
 
 const usageTitle = computed(() => {
-  if (usage.value) return formatUsageTooltip(usage.value)
+  if (usage.value) return formatUsageTooltip(usage.value, usageNow.value)
   return usageLoading.value ? '正在读取 Grok 用量' : '点击读取 Grok 用量'
 })
 
@@ -220,26 +222,33 @@ async function loadUsage() {
   try {
     const next = await api.grokUsage(store.selectedProjectId || null)
     if (seq !== usageSeq) return
-    if (next.ok || !usage.value) usage.value = next
-  } catch (err) {
-    if (seq !== usageSeq) return
-    if (!usage.value) {
-      usage.value = {
-        ok: false,
-        usedPercent: null,
-        remainingPercent: null,
-        resetsAt: null,
-        periodLabel: null,
-        prepaidBalance: null,
-        onDemandUsed: null,
-        onDemandCap: null,
-        grokBuildUsedPercent: null,
-        usedCredits: null,
-        creditLimit: null,
-        fetchedAt: new Date().toISOString(),
-        message: err instanceof Error ? err.message : '读取 Grok 用量失败，点击重试'
+    usageNow.value = Date.now()
+    if (shouldApplyUsageFetch(usage.value, next, usageNow.value)) {
+      const prevMs = grokUsagePollMs(usage.value, usageNow.value)
+      usage.value = next
+      if (showGrokUsage.value && grokUsagePollMs(usage.value, usageNow.value) !== prevMs) {
+        startUsageTimer()
       }
     }
+  } catch (err) {
+    if (seq !== usageSeq) return
+    const failed: GrokUsage = {
+      ok: false,
+      usedPercent: null,
+      remainingPercent: null,
+      resetsAt: null,
+      periodLabel: null,
+      prepaidBalance: null,
+      onDemandUsed: null,
+      onDemandCap: null,
+      grokBuildUsedPercent: null,
+      usedCredits: null,
+      creditLimit: null,
+      fetchedAt: new Date().toISOString(),
+      message: err instanceof Error ? err.message : '读取 Grok 用量失败，点击重试'
+    }
+    usageNow.value = Date.now()
+    if (shouldApplyUsageFetch(usage.value, failed, usageNow.value)) usage.value = failed
   } finally {
     if (seq === usageSeq) usageLoading.value = false
   }
@@ -289,6 +298,23 @@ function stopUsageTimer() {
   }
 }
 
+function startUsageTimer() {
+  stopUsageTimer()
+  usageNow.value = Date.now()
+  usageTimer = window.setInterval(() => {
+    usageNow.value = Date.now()
+    void loadUsage()
+    void loadSpend()
+  }, grokUsagePollMs(usage.value, usageNow.value))
+}
+
+function onWindowFocus() {
+  if (!showGrokUsage.value) return
+  usageNow.value = Date.now()
+  void loadUsage()
+  void loadSpend()
+}
+
 function stopDshTimer() {
   if (dshTimer) {
     window.clearInterval(dshTimer)
@@ -327,10 +353,7 @@ watch(
     }
     void loadUsage()
     void loadSpend()
-    usageTimer = window.setInterval(() => {
-      void loadUsage()
-      void loadSpend()
-    }, GROK_USAGE_INTERVAL_MS)
+    startUsageTimer()
   },
   { immediate: true }
 )
@@ -359,6 +382,7 @@ onMounted(() => {
   window.addEventListener('click', onDocClick)
   window.addEventListener('keydown', onKey)
   window.addEventListener('resize', onResize)
+  window.addEventListener('focus', onWindowFocus)
 })
 
 onUnmounted(() => {
@@ -371,6 +395,7 @@ onUnmounted(() => {
   window.removeEventListener('click', onDocClick)
   window.removeEventListener('keydown', onKey)
   window.removeEventListener('resize', onResize)
+  window.removeEventListener('focus', onWindowFocus)
 })
 
 watch(liveCount, (n) => {
