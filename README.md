@@ -1,120 +1,157 @@
 <p align="center">
-  <img src="src-tauri/icons/128x128.png" width="88" height="88" alt="Agent Dock">
+  <img src="src-tauri/icons/128x128.png" width="112" height="112" alt="Agent Dock">
 </p>
 
 <h1 align="center">Agent Dock</h1>
 
 <p align="center">
-  <strong>本机 AI 特工的统一驾驶舱</strong><br>
-  无边框深色桌面启动器 · 一窗接管 OpenCode / Grok / Kimi / Claude / Pi / DeepSeek<br>
-  编排串联 Cursor 开发与 Codex 审查
+  <em>本机 AI 特工的统一驾驶舱</em>
 </p>
 
 <p align="center">
-  <a href="https://github.com/aodaokai52545856/agent-dock/releases/tag/v0.1.6"><img alt="download" src="https://img.shields.io/badge/%E2%AC%87%20%E4%B8%8B%E8%BD%BD%20v0.1.6-111111?style=for-the-badge"></a>
+  无边框深色桌面端 · 一窗接管 OpenCode / Grok / Kimi / Claude / Pi / DeepSeek<br>
+  编排把 <b>Cursor 开发</b> 与 <b>Codex 审查</b> 串成过闸流水线
 </p>
 
 <p align="center">
-  <img alt="version" src="https://img.shields.io/badge/version-0.1.6-111111?style=flat-square">
-  <img alt="platform" src="https://img.shields.io/badge/Windows%20%7C%20macOS%20%7C%20Linux-0d0d0d?style=flat-square">
-  <img alt="stack" src="https://img.shields.io/badge/Tauri%202%20%2B%20Vue%203%20%2B%20Rust-141414?style=flat-square">
-  <img alt="license" src="https://img.shields.io/badge/license-Apache%202.0-3d9a6a?style=flat-square">
+  <a href="https://github.com/aodaokai52545856/agent-dock/releases/tag/v0.1.6"><img src="https://img.shields.io/badge/Download-v0.1.6-0A0A0A?style=for-the-badge&logo=github&logoColor=white" alt="Download v0.1.6"></a>
+  &nbsp;
+  <a href="#快速开始"><img src="https://img.shields.io/badge/Quick_Start-文档-1a1a1a?style=for-the-badge" alt="Quick Start"></a>
 </p>
 
 <p align="center">
-  <a href="#%E4%B8%8B%E8%BD%BD">下载</a> ·
-  <a href="#%E8%83%BD%E5%8A%9B">能力</a> ·
-  <a href="#%E4%B8%A4%E7%A7%8D%E6%A8%A1%E5%BC%8F">模式</a> ·
-  <a href="#%E5%90%AF%E5%8A%A8">启动</a> ·
-  <a href="#%E6%89%93%E5%8C%85">打包</a> ·
-  <a href="#%E7%BC%96%E6%8E%92%E6%A8%A1%E5%BC%8F">编排</a> ·
-  <a href="#%E5%BC%80%E5%8F%91">开发</a>
+  <img src="https://img.shields.io/badge/version-0.1.6-111111?style=flat-square" alt="version">
+  <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-0d0d0d?style=flat-square" alt="platform">
+  <img src="https://img.shields.io/badge/stack-Tauri%202%20·%20Vue%203%20·%20Rust-141414?style=flat-square" alt="stack">
+  <img src="https://img.shields.io/badge/license-Apache%202.0-3d9a6a?style=flat-square" alt="license">
+</p>
+
+<br>
+
+<p align="center">
+  <img width="92%" alt="Agent Dock · 控制台" src="https://github.com/user-attachments/assets/1380fac6-b7d7-41b8-97e1-3379e781547b" />
+</p>
+<p align="center">
+  <sub>控制台 · 项目工作区 · 内嵌终端 · 用量与文档栏</sub>
 </p>
 
 <p align="center">
-  <img width="1412" height="986" alt="Agent Dock 控制台" src="https://github.com/user-attachments/assets/1380fac6-b7d7-41b8-97e1-3379e781547b" />
-  <img width="1412" height="986" alt="Agent Dock 编排" src="https://github.com/user-attachments/assets/f89b0c59-6351-43d1-b84c-9265ff1c0da3" />
+  <img width="92%" alt="Agent Dock · 编排" src="https://github.com/user-attachments/assets/f89b0c59-6351-43d1-b84c-9265ff1c0da3" />
 </p>
+<p align="center">
+  <sub>编排 · 流程图 · 开发-审查闸 · 通道桥接</sub>
+</p>
+
+<br>
+
+## 为什么需要 Dock
+
+本机已经有 `opencode`、`grok`、`kimi`、`claude`、Pi、DeepSeek、Cursor、Codex，但它们散落在各自终端和窗口里：会话难找、代理不一致、开发和审查抢同一条 thread。
+
+**Agent Dock** 把它们收进一个 frameless 深色窗口。客户只装安装包即可运行，不必装 Rust。
+
+<table>
+  <tr>
+    <td width="33%" valign="top">
+      <h3>一窗接管</h3>
+      <p>挂上项目目录，按 CLI 扫描磁盘 session。点开即在内嵌 xterm 续聊（Windows ConPTY · macOS / Linux PTY）。</p>
+    </td>
+    <td width="33%" valign="top">
+      <h3>按项目代理</h3>
+      <p>只写入该终端的 <code>HTTP_PROXY</code> / <code>HTTPS_PROXY</code>。不动系统环境变量，项目之间互不干扰。</p>
+    </td>
+    <td width="33%" valign="top">
+      <h3>开发 · 审查过闸</h3>
+      <p>Cursor SDK 写完一块，Codex <code>review/start</code> 以 <b>detached</b> 审查。未通过不能进下一片。</p>
+    </td>
+  </tr>
+  <tr>
+    <td width="33%" valign="top">
+      <h3>用量与密钥</h3>
+      <p>Grok 额度 / token 花费、DeepSeek 余额一目了然。密钥在 Dock 内托管，明文不进仓库。</p>
+    </td>
+    <td width="33%" valign="top">
+      <h3>意见桥接</h3>
+      <p>流程图节点可绑 Grok 窗口。边可选自动或手动桥接，把审查意见交给下一角色。</p>
+    </td>
+    <td width="33%" valign="top">
+      <h3>外观可控</h3>
+      <p>浅色 / 深色 / 跟随系统。强调色、字体、对比度、侧栏半透明、窗口透明度与毛玻璃。</p>
+    </td>
+  </tr>
+</table>
 
 ---
 
 ## 下载
 
-> **v0.1.6** · 跨平台安装包 · 客户无需本机 Rust
+> **v0.1.6** · 跨平台安装包 · 无需本机 Rust
 
 | 文件 | 平台 | 说明 | 大小约 |
-| --- | --- | --- | --- |
-| [**AgentDock-0.1.6-Setup.exe**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.6/AgentDock-0.1.6-Setup.exe) | Windows | NSIS 安装包（推荐） | ~3.5 MB |
-| [**AgentDock-0.1.6.exe**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.6/AgentDock-0.1.6.exe) | Windows | 绿色便携版 | ~14 MB |
-| [**AgentDock-0.1.6.dmg**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.6/AgentDock-0.1.6.dmg) | macOS | 磁盘映像 | ~6.3 MB |
-| [**AgentDock-0.1.6.app.tar.gz**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.6/AgentDock-0.1.6.app.tar.gz) | macOS | `.app` 压缩包 | ~5.6 MB |
-| [**AgentDock-0.1.6.AppImage**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.6/AgentDock-0.1.6.AppImage) | Linux | 免安装可执行 | ~79 MB |
-| [**AgentDock-0.1.6.deb**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.6/AgentDock-0.1.6.deb) | Linux | Debian / Ubuntu | ~5.4 MB |
+| :---: | :---: | --- | ---: |
+| [**AgentDock-0.1.6-Setup.exe**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.6/AgentDock-0.1.6-Setup.exe) | Windows | NSIS 安装包（推荐） | ~4.4 MB |
+| [**AgentDock-0.1.6.exe**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.6/AgentDock-0.1.6.exe) | Windows | 绿色便携版 | ~17 MB |
+| [**AgentDock-0.1.6.dmg**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.6/AgentDock-0.1.6.dmg) | macOS | 磁盘映像 | ~7.5 MB |
+| [**AgentDock-0.1.6.app.tar.gz**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.6/AgentDock-0.1.6.app.tar.gz) | macOS | `.app` 压缩包 | ~6.8 MB |
+| [**AgentDock-0.1.6.AppImage**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.6/AgentDock-0.1.6.AppImage) | Linux | 免安装可执行 | ~82 MB |
+| [**AgentDock-0.1.6.deb**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.6/AgentDock-0.1.6.deb) | Linux | Debian / Ubuntu | ~7.7 MB |
 
-发布页：[Releases · v0.1.6](https://github.com/aodaokai52545856/agent-dock/releases/tag/v0.1.6)
+<p align="center">
+  <a href="https://github.com/aodaokai52545856/agent-dock/releases/tag/v0.1.6">→ 打开 Releases · v0.1.6</a>
+</p>
 
 **运行前提**
 
-- **Windows：** Win10/11 + [WebView2](https://developer.microsoft.com/microsoft-edge/webview2/)（多数机器已自带）
-- **macOS / Linux：** 按系统装好 WebView / WebKitGTK 等运行时即可
-- CLI（`opencode` / `grok` / `kimi` / `claude` 等）请自行安装并登录；Dock **不代登录**
-- 编排自动开发需要 Cursor API Key；Codex 审查需要本机已登录 Codex
+| | |
+| --- | --- |
+| **Windows** | Win10 / 11 + [WebView2](https://developer.microsoft.com/microsoft-edge/webview2/)（多数机器已自带） |
+| **macOS / Linux** | 系统 WebView / WebKitGTK 等运行时 |
+| **CLI** | `opencode` / `grok` / `kimi` / `claude` 等自行安装并登录；Dock **不代登录** |
+| **编排** | 自动开发需 Cursor API Key；Codex 审查需本机已登录 Codex |
 
 <details>
-<summary><strong>v0.1.6 更新要点</strong></summary>
+<summary><b>v0.1.6 更新要点</b></summary>
+
+<br>
 
 - 侧栏可多选删除会话，并记住每个项目的筛选
 - Grok 用量在额度重置前加快刷新
-- Claude 窗口可 Ctrl+V 粘贴文字和图片
+- Claude 窗口可 <kbd>Ctrl</kbd>+<kbd>V</kbd> 粘贴文字和图片
+- README 升级为产品页呈现
 
 </details>
 
----
-
-## 能力
-
-本地 CLI 与会话散落在各终端里：找不到、代理不一致、开发和审查抢同一条 thread。Agent Dock 用一个 frameless 深色窗口把它们收拢。
-
-| | |
-| --- | --- |
-| **工作区** | 挂上项目目录，按 CLI 扫描磁盘 session |
-| **续聊** | 内嵌 xterm；Windows ConPTY，macOS / Linux 系统 PTY |
-| **按项目代理** | 只注入该终端的 `HTTP_PROXY` / `HTTPS_PROXY`，不动系统环境 |
-| **开发-审查闸** | 编排 `review/start` **detached**，未通过不能进下一片 |
-| **Cursor + Codex** | 设置填 Cursor API Key（`@cursor/sdk`，与 IDE 额度分开）；Codex 本机已登录即可审 |
-| **意见桥接** | 流程图节点绑 Grok 窗口，边可选自动或手动 |
-
-> 客户只需安装 exe / dmg / AppImage，不需要 Rust。源码开发才需要本机工具链。
+> **macOS 提示：** CI 产物暂未 Apple 公证。若提示「已损坏」，终端执行 `xattr -cr ~/Downloads/AgentDock-0.1.6.dmg`，或对 app **右键 → 打开**。
 
 ---
 
 ## 两种模式
 
-标题栏切换，默认 **控制台**。切到编排 **不会关掉** 已打开的终端。
+标题栏一键切换。默认 **控制台**；切到编排 **不会关掉** 已打开的终端。
 
 ### 控制台
 
 左侧挂项目，按 OpenCode / Grok / Kimi / Claude Code / Pi / DeepSeek 扫描 session，点开即在内嵌终端续聊（DeepSeek 走 Web 嵌入）。
 
-- **文档栏** · Grok / Kimi 写出的 plan / spec / doc，可预览 Markdown，可引用对话片段
-- **Grok 多账号** · 切换账号会关掉旧 Grok 终端，避免混用身份
-- **用量与花费** · 状态栏读取 Grok 额度与 token；DeepSeek 显示剩余人民币
-- **CLI 版本** · 探测、升级、卸载本机工具；可安装并启动 CC Switch
-- **DeepSeek 密钥** · 在 Dock 管理 `.credentials.yaml`，明文不进仓库
-- **外观** · 浅色 / 深色 / 跟随系统；强调色、字体、对比度、侧栏半透明、窗口透明度与毛玻璃
+| 能力 | 说明 |
+| --- | --- |
+| **文档栏** | Grok / Kimi 写出的 plan / spec / doc，可预览 Markdown，可引用对话片段 |
+| **Grok 多账号** | 切换账号会关掉旧 Grok 终端，避免混用身份 |
+| **用量与花费** | 状态栏读取 Grok 额度与 token；DeepSeek 显示剩余人民币 |
+| **CLI 版本** | 探测、升级、卸载本机工具；可安装并启动 CC Switch |
+| **DeepSeek 密钥** | 在 Dock 管理 `.credentials.yaml`，明文不进仓库 |
+| **外观** | 浅色 / 深色 / 跟随系统；强调色、字体、对比度、侧栏半透明、窗口透明度与毛玻璃 |
 
-### 编排（待定）
+### 编排
 
 同一套项目，主画布没有终端。左上项目、左下已保存流程；右栏在 **编排** 画图，在 **运行** 预览并人工干预。
 
-默认一对一：**开发者 → 审查者**，通过则结束，未通过回到开发者。角色库预置开发者 / 审查者 / 项目经理，也可自建。节点绑通道（Codex 应用程序、Grok 窗口、Cursor SDK、人工）。边可选自动或手动桥接。
-
-内置模板：
-
-- **开发-审查闸** · Cursor SDK 开发 → Codex 审查，未通过带意见返工
-- **Codex → Grok** · 审查意见桥接到已打开的 Grok 窗口
-
-同一工作区同一时刻只应有一个写者。
+- 默认一对一：**开发者 → 审查者**（通过则结束，未通过回到开发者）
+- 角色库预置开发者 / 审查者 / 项目经理，也可自建
+- 节点绑通道：Codex 应用程序、Grok 窗口、Cursor SDK、人工
+- 边可选自动或手动桥接
+- 内置模板：**开发-审查闸** · **Codex → Grok**
+- 同一工作区同一时刻只应有一个写者
 
 ---
 
@@ -122,13 +159,15 @@
 
 | 平台 | 开发 | 客户运行 | WebView |
 | --- | --- | --- | --- |
-| Windows | Rust + Node.js，终端默认 PowerShell | 安装包即可 | WebView2 |
-| macOS 10.15+ | Rust + Node.js，默认 `$SHELL` / zsh | 安装包即可 | 系统 WKWebView |
-| Linux | Rust + Node.js，默认 `$SHELL` / bash | 安装包即可 | WebKitGTK 4.1 |
+| **Windows** | Rust + Node.js · 终端默认 PowerShell | 安装包即可 | WebView2 |
+| **macOS 10.15+** | Rust + Node.js · `$SHELL` / zsh | 安装包即可 | 系统 WKWebView |
+| **Linux** | Rust + Node.js · `$SHELL` / bash | 安装包即可 | WebKitGTK 4.1 |
 
 从 Finder / 开始菜单 / 应用菜单打开时，Dock 会补上 Homebrew、nvm、`~/.local/bin`、`~/.kimi-code/bin` 等常见 PATH。
 
 ---
+
+<a id="快速开始"></a>
 
 ## 启动
 
@@ -146,18 +185,18 @@ npm run tauri:dev
 
 ## 打包
 
-**必须在对应系统上打包**，不能从 Windows 打出 `.dmg` / `.AppImage`。安装包把界面打进二进制，不再监听开发端口。产物落到 `release/`。
+**必须在对应系统上打包**，不能从 Windows 打出 `.dmg` / `.AppImage`。产物把界面打进二进制，不再监听开发端口，落到 `release/`。
 
-版本号读 `package.json` 的 `version`，产物文件名带这个版本，例如当前 `0.1.6` 会打出 `AgentDock-0.1.6-Setup.exe`。
+版本号读 `package.json` 的 `version`。当前 `0.1.6` 会打出 `AgentDock-0.1.6-Setup.exe` 等文件名。
 
 ```bash
 npm run pack          # 当前系统
-npm run pack:win      # AgentDock-<version>.exe + AgentDock-<version>-Setup.exe
-npm run pack:mac      # Agent Dock.app + AgentDock-<version>.dmg
-npm run pack:linux    # AgentDock-<version>.AppImage + AgentDock-<version>.deb
+npm run pack:win      # .exe + -Setup.exe
+npm run pack:mac      # .app + .dmg
+npm run pack:linux    # .AppImage + .deb
 ```
 
-GitHub 打 tag `v*` 或手动跑 [`release`](.github/workflows/release.yml) workflow，会在 Windows / macOS / Ubuntu runner 上打包并上传 artifact。
+GitHub 打 tag `v*`，或手动跑 [`release`](.github/workflows/release.yml) workflow，会在 Windows / macOS / Ubuntu runner 上打包并上传 artifact。
 
 ---
 
@@ -195,20 +234,13 @@ agent-dock/
 ```
 
 ```bash
-npm run test:fit
-npm run test:layout
-npm run test:bridge
-npm run test:flow
-npm run test:usage
-npm run test:appearance
-npm run test:cite
-npm run test:ccswitch
-npm run test:dsh
-npm run test:live
-npm run test:pack
+npm run test:fit && npm run test:layout && npm run test:bridge
+npm run test:flow && npm run test:usage && npm run test:appearance
+npm run test:cite && npm run test:ccswitch && npm run test:dsh
+npm run test:live && npm run test:pack
 ```
 
-技术栈：**Tauri 2** · **Vue 3** · **Vite** · **Rust**（`portable-pty`）· **xterm.js**。
+**技术栈** · Tauri 2 · Vue 3 · Vite · Rust（`portable-pty`）· xterm.js
 
 ---
 
