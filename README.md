@@ -1,11 +1,11 @@
 <p align="center">
-  <img src="src-tauri/icons/128x128.png" width="112" height="112" alt="Agent Dock">
+  <img src="src-tauri/icons/128x128.png" width="96" height="96" alt="Agent Dock">
 </p>
 
 <h1 align="center">Agent Dock</h1>
 
 <p align="center">
-  <em>本机 AI 特工的统一驾驶舱</em>
+  <strong>本机 AI 特工的统一驾驶舱</strong>
 </p>
 
 <p align="center">
@@ -14,9 +14,9 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/aodaokai52545856/agent-dock/releases/tag/v0.1.7"><img src="https://img.shields.io/badge/Download-v0.1.7-0A0A0A?style=for-the-badge&logo=github&logoColor=white" alt="Download v0.1.7"></a>
+  <a href="https://github.com/aodaokai52545856/agent-dock/releases/tag/v0.1.7"><img src="https://img.shields.io/badge/⬇%20Download-v0.1.7-0A0A0A?style=for-the-badge&logo=github&logoColor=white" alt="Download v0.1.7"></a>
   &nbsp;
-  <a href="#快速开始"><img src="https://img.shields.io/badge/Quick_Start-文档-1a1a1a?style=for-the-badge" alt="Quick Start"></a>
+  <a href="#快速开始"><img src="https://img.shields.io/badge/Quick_Start-启动-1a1a1a?style=for-the-badge" alt="Quick Start"></a>
 </p>
 
 <p align="center">
@@ -24,6 +24,22 @@
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-0d0d0d?style=flat-square" alt="platform">
   <img src="https://img.shields.io/badge/stack-Tauri%202%20·%20Vue%203%20·%20Rust-141414?style=flat-square" alt="stack">
   <img src="https://img.shields.io/badge/license-Apache%202.0-3d9a6a?style=flat-square" alt="license">
+</p>
+
+<p align="center">
+  <a href="#下载">下载</a>
+  ·
+  <a href="#v017-新能力">新能力</a>
+  ·
+  <a href="#能力">能力</a>
+  ·
+  <a href="#两种模式">模式</a>
+  ·
+  <a href="#快速开始">启动</a>
+  ·
+  <a href="#打包">打包</a>
+  ·
+  <a href="#开发">开发</a>
 </p>
 
 <br>
@@ -39,7 +55,7 @@
   <img width="92%" alt="Agent Dock · 编排" src="https://github.com/user-attachments/assets/f89b0c59-6351-43d1-b84c-9265ff1c0da3" />
 </p>
 <p align="center">
-  <sub>编排 · 流程图 · 开发-审查闸 · 通道桥接</sub>
+  <sub>编排 · 流程图 · 开发–审查闸 · 通道桥接</sub>
 </p>
 
 <br>
@@ -49,6 +65,31 @@
 本机已经有 `opencode`、`grok`、`kimi`、`claude`、Pi、DeepSeek、Cursor、Codex，但它们散落在各自终端和窗口里：会话难找、代理不一致、开发和审查抢同一条 thread。
 
 **Agent Dock** 把它们收进一个 frameless 深色窗口。客户只装安装包即可运行，不必装 Rust。
+
+---
+
+<a id="v017-新能力"></a>
+
+## v0.1.7 新能力
+
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <h3>Mermaid 流程图预览</h3>
+      <p>文档栏 Markdown 预览可直接渲染 Mermaid 流程图与时序图，跟随浅色 / 深色主题，严格沙箱渲染。</p>
+    </td>
+    <td width="50%" valign="top">
+      <h3>城市本地时间</h3>
+      <p>顶部栏时钟可按城市查看当地时间：支持搜索，按大洲 / 国家浏览，主流城市可自设并记在本机。</p>
+    </td>
+  </tr>
+</table>
+
+---
+
+<a id="能力"></a>
+
+## 能力
 
 <table>
   <tr>
@@ -83,6 +124,8 @@
 
 ---
 
+<a id="下载"></a>
+
 ## 下载
 
 > **v0.1.7** · 跨平台安装包 · 无需本机 Rust
@@ -97,7 +140,7 @@
 | [**AgentDock-0.1.7.deb**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.7/AgentDock-0.1.7.deb) | Linux | Debian / Ubuntu | ~7.7 MB |
 
 <p align="center">
-  <a href="https://github.com/aodaokai52545856/agent-dock/releases/tag/v0.1.7">→ 打开 Releases · v0.1.7</a>
+  <a href="https://github.com/aodaokai52545856/agent-dock/releases/tag/v0.1.7"><b>→ 打开 Releases · v0.1.7</b></a>
 </p>
 
 **运行前提**
@@ -108,17 +151,6 @@
 | **macOS / Linux** | 系统 WebView / WebKitGTK 等运行时 |
 | **CLI** | `opencode` / `grok` / `kimi` / `claude` 等自行安装并登录；Dock **不代登录** |
 | **编排** | 自动开发需 Cursor API Key；Codex 审查需本机已登录 Codex |
-
-<details>
-<summary><b>v0.1.7 更新要点</b></summary>
-
-<br>
-
-- 顶部栏时钟：按城市看当地时间，可搜索，并按大洲、国家分类
-- 主流城市可自行设置，并记在本机
-- Markdown 预览支持 Mermaid 流程图
-
-</details>
 
 > **macOS 提示：** CI 产物暂未 Apple 公证。若提示「已损坏」，终端执行 `xattr -cr ~/Downloads/AgentDock-0.1.7.dmg`，或对 app **右键 → 打开**。
 
@@ -134,7 +166,8 @@
 
 | 能力 | 说明 |
 | --- | --- |
-| **文档栏** | Grok / Kimi 写出的 plan / spec / doc，可预览 Markdown，可引用对话片段 |
+| **文档栏** | Grok / Kimi 写出的 plan / spec / doc，可预览 Markdown（含 Mermaid），可引用对话片段 |
+| **城市时钟** | 顶部栏按城市看当地时间；搜索、大洲 / 国家分类；自选城市本机持久化 |
 | **Grok 多账号** | 切换账号会关掉旧 Grok 终端，避免混用身份 |
 | **用量与花费** | 状态栏读取 Grok 额度与 token；DeepSeek 显示剩余人民币 |
 | **CLI 版本** | 探测、升级、卸载本机工具；可安装并启动 CC Switch |
@@ -182,6 +215,8 @@ npm run tauri:dev
 
 ---
 
+<a id="打包"></a>
+
 ## 打包
 
 **必须在对应系统上打包**，不能从 Windows 打出 `.dmg` / `.AppImage`。产物把界面打进二进制，不再监听开发端口，落到 `release/`。
@@ -221,6 +256,8 @@ npm run spike:app-server -- "/path/to/project"
 ```
 
 ---
+
+<a id="开发"></a>
 
 ## 开发
 
