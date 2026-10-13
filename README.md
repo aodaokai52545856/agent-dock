@@ -132,12 +132,12 @@
 
 | 文件 | 平台 | 说明 | 大小约 |
 | :---: | :---: | --- | ---: |
-| [**AgentDock-0.1.7-Setup.exe**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.7/AgentDock-0.1.7-Setup.exe) | Windows | NSIS 安装包（推荐） | ~4.4 MB |
-| [**AgentDock-0.1.7.exe**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.7/AgentDock-0.1.7.exe) | Windows | 绿色便携版 | ~17 MB |
-| [**AgentDock-0.1.7.dmg**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.7/AgentDock-0.1.7.dmg) | macOS | 磁盘映像 | ~7.5 MB |
-| [**AgentDock-0.1.7.app.tar.gz**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.7/AgentDock-0.1.7.app.tar.gz) | macOS | `.app` 压缩包 | ~6.8 MB |
-| [**AgentDock-0.1.7.AppImage**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.7/AgentDock-0.1.7.AppImage) | Linux | 免安装可执行 | ~82 MB |
-| [**AgentDock-0.1.7.deb**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.7/AgentDock-0.1.7.deb) | Linux | Debian / Ubuntu | ~7.7 MB |
+| [**AgentDock-0.1.7-Setup.exe**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.7/AgentDock-0.1.7-Setup.exe) | Windows | NSIS 安装包（推荐） | ~5.7 MB |
+| [**AgentDock-0.1.7.exe**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.7/AgentDock-0.1.7.exe) | Windows | 绿色便携版 | ~18 MB |
+| [**AgentDock-0.1.7.dmg**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.7/AgentDock-0.1.7.dmg) | macOS | 磁盘映像 | ~8.8 MB |
+| [**AgentDock-0.1.7.app.tar.gz**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.7/AgentDock-0.1.7.app.tar.gz) | macOS | `.app` 压缩包 | ~8.1 MB |
+| [**AgentDock-0.1.7.AppImage**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.7/AgentDock-0.1.7.AppImage) | Linux | 免安装可执行 | ~84 MB |
+| [**AgentDock-0.1.7.deb**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.7/AgentDock-0.1.7.deb) | Linux | Debian / Ubuntu | ~9.0 MB |
 
 <p align="center">
   <a href="https://github.com/aodaokai52545856/agent-dock/releases/tag/v0.1.7"><b>→ 打开 Releases · v0.1.7</b></a>
