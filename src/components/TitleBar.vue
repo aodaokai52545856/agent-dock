@@ -5,6 +5,7 @@ import { isTauri } from '../lib/api'
 import { beginWindowMove, endWindowMove, noteWindowMove } from '../lib/layout'
 import { setAppMode, store } from '../lib/store'
 import { isTitlebarDoubleClick } from '../lib/titleDrag'
+import ClockMenu from './ClockMenu.vue'
 
 const emit = defineEmits<{
   settings: []
@@ -17,6 +18,7 @@ const emit = defineEmits<{
 
 const fileOpen = ref(false)
 const ccswitchOpen = ref(false)
+const clockBurst = ref(0)
 const maximized = ref(false)
 let offResized: (() => void) | undefined
 let offMoved: (() => void) | undefined
@@ -54,19 +56,33 @@ async function closeWindow() {
   await getCurrentWindow().close()
 }
 
+function shutClock() {
+  clockBurst.value += 1
+}
+
 function toggleFile() {
+  const next = !fileOpen.value
   ccswitchOpen.value = false
-  fileOpen.value = !fileOpen.value
+  shutClock()
+  fileOpen.value = next
 }
 
 function closeMenus() {
   fileOpen.value = false
   ccswitchOpen.value = false
+  shutClock()
 }
 
 function toggleCcswitch() {
+  const next = !ccswitchOpen.value
   fileOpen.value = false
-  ccswitchOpen.value = !ccswitchOpen.value
+  shutClock()
+  ccswitchOpen.value = next
+}
+
+function onClockOpen() {
+  fileOpen.value = false
+  ccswitchOpen.value = false
 }
 
 function openSettings() {
@@ -197,6 +213,7 @@ onUnmounted(() => {
       </div>
     </div>
     <div class="drag" />
+    <ClockMenu :burst="clockBurst" @open="onClockOpen" />
     <div class="controls" role="group" aria-label="窗口控制" @mousedown.stop>
       <button type="button" class="win" aria-label="最小化" @click="minimize">
         <svg viewBox="0 0 12 12" aria-hidden="true">

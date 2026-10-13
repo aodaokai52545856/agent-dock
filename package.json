@@ -19,6 +19,7 @@
     "icon:gen": "node scripts/generate_icon.mjs",
     "test:fit": "node --experimental-strip-types src/lib/termFit.test.ts && node --experimental-strip-types src/lib/termSync.test.ts && node --experimental-strip-types src/lib/termGlass.test.ts && node --experimental-strip-types src/lib/termClipboard.test.ts && node --experimental-strip-types src/lib/termMenu.test.ts",
     "test:layout": "node --experimental-strip-types src/lib/layout.test.ts && node --experimental-strip-types src/lib/titleDrag.test.ts",
+    "test:clock": "node --experimental-strip-types src/lib/worldClock.test.ts",
     "test:bridge": "node --experimental-strip-types src/lib/reviewVerdict.test.ts",
     "test:flow": "node --experimental-strip-types src/lib/flow/envelope.test.ts && node --experimental-strip-types src/lib/flow/engine.test.ts && node --experimental-strip-types src/lib/flow/model.test.ts && node --experimental-strip-types src/lib/flow/ptyWait.test.ts && node --experimental-strip-types src/lib/flow/roles.test.ts && node --experimental-strip-types src/lib/flow/channels.test.ts && node --experimental-strip-types src/lib/flow/chartLayout.test.ts && node --experimental-strip-types src/lib/flow/inspector.test.ts",
     "test:usage": "node --experimental-strip-types src/lib/grokUsage.test.ts && node --experimental-strip-types src/lib/grokSpend.test.ts && node --experimental-strip-types src/lib/dshBalance.test.ts",
