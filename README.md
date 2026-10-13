@@ -14,13 +14,13 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/aodaokai52545856/agent-dock/releases/tag/v0.1.6"><img src="https://img.shields.io/badge/Download-v0.1.6-0A0A0A?style=for-the-badge&logo=github&logoColor=white" alt="Download v0.1.6"></a>
+  <a href="https://github.com/aodaokai52545856/agent-dock/releases/tag/v0.1.7"><img src="https://img.shields.io/badge/Download-v0.1.7-0A0A0A?style=for-the-badge&logo=github&logoColor=white" alt="Download v0.1.7"></a>
   &nbsp;
   <a href="#快速开始"><img src="https://img.shields.io/badge/Quick_Start-文档-1a1a1a?style=for-the-badge" alt="Quick Start"></a>
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.1.6-111111?style=flat-square" alt="version">
+  <img src="https://img.shields.io/badge/version-0.1.7-111111?style=flat-square" alt="version">
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-0d0d0d?style=flat-square" alt="platform">
   <img src="https://img.shields.io/badge/stack-Tauri%202%20·%20Vue%203%20·%20Rust-141414?style=flat-square" alt="stack">
   <img src="https://img.shields.io/badge/license-Apache%202.0-3d9a6a?style=flat-square" alt="license">
@@ -85,19 +85,19 @@
 
 ## 下载
 
-> **v0.1.6** · 跨平台安装包 · 无需本机 Rust
+> **v0.1.7** · 跨平台安装包 · 无需本机 Rust
 
 | 文件 | 平台 | 说明 | 大小约 |
 | :---: | :---: | --- | ---: |
-| [**AgentDock-0.1.6-Setup.exe**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.6/AgentDock-0.1.6-Setup.exe) | Windows | NSIS 安装包（推荐） | ~4.4 MB |
-| [**AgentDock-0.1.6.exe**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.6/AgentDock-0.1.6.exe) | Windows | 绿色便携版 | ~17 MB |
-| [**AgentDock-0.1.6.dmg**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.6/AgentDock-0.1.6.dmg) | macOS | 磁盘映像 | ~7.5 MB |
-| [**AgentDock-0.1.6.app.tar.gz**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.6/AgentDock-0.1.6.app.tar.gz) | macOS | `.app` 压缩包 | ~6.8 MB |
-| [**AgentDock-0.1.6.AppImage**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.6/AgentDock-0.1.6.AppImage) | Linux | 免安装可执行 | ~82 MB |
-| [**AgentDock-0.1.6.deb**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.6/AgentDock-0.1.6.deb) | Linux | Debian / Ubuntu | ~7.7 MB |
+| [**AgentDock-0.1.7-Setup.exe**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.7/AgentDock-0.1.7-Setup.exe) | Windows | NSIS 安装包（推荐） | ~4.4 MB |
+| [**AgentDock-0.1.7.exe**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.7/AgentDock-0.1.7.exe) | Windows | 绿色便携版 | ~17 MB |
+| [**AgentDock-0.1.7.dmg**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.7/AgentDock-0.1.7.dmg) | macOS | 磁盘映像 | ~7.5 MB |
+| [**AgentDock-0.1.7.app.tar.gz**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.7/AgentDock-0.1.7.app.tar.gz) | macOS | `.app` 压缩包 | ~6.8 MB |
+| [**AgentDock-0.1.7.AppImage**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.7/AgentDock-0.1.7.AppImage) | Linux | 免安装可执行 | ~82 MB |
+| [**AgentDock-0.1.7.deb**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.7/AgentDock-0.1.7.deb) | Linux | Debian / Ubuntu | ~7.7 MB |
 
 <p align="center">
-  <a href="https://github.com/aodaokai52545856/agent-dock/releases/tag/v0.1.6">→ 打开 Releases · v0.1.6</a>
+  <a href="https://github.com/aodaokai52545856/agent-dock/releases/tag/v0.1.7">→ 打开 Releases · v0.1.7</a>
 </p>
 
 **运行前提**
@@ -110,18 +110,17 @@
 | **编排** | 自动开发需 Cursor API Key；Codex 审查需本机已登录 Codex |
 
 <details>
-<summary><b>v0.1.6 更新要点</b></summary>
+<summary><b>v0.1.7 更新要点</b></summary>
 
 <br>
 
-- 侧栏可多选删除会话，并记住每个项目的筛选
-- Grok 用量在额度重置前加快刷新
-- Claude 窗口可 <kbd>Ctrl</kbd>+<kbd>V</kbd> 粘贴文字和图片
-- README 升级为产品页呈现
+- 顶部栏时钟：按城市看当地时间，可搜索，并按大洲、国家分类
+- 主流城市可自行设置，并记在本机
+- Markdown 预览支持 Mermaid 流程图
 
 </details>
 
-> **macOS 提示：** CI 产物暂未 Apple 公证。若提示「已损坏」，终端执行 `xattr -cr ~/Downloads/AgentDock-0.1.6.dmg`，或对 app **右键 → 打开**。
+> **macOS 提示：** CI 产物暂未 Apple 公证。若提示「已损坏」，终端执行 `xattr -cr ~/Downloads/AgentDock-0.1.7.dmg`，或对 app **右键 → 打开**。
 
 ---
 
@@ -187,7 +186,7 @@ npm run tauri:dev
 
 **必须在对应系统上打包**，不能从 Windows 打出 `.dmg` / `.AppImage`。产物把界面打进二进制，不再监听开发端口，落到 `release/`。
 
-版本号读 `package.json` 的 `version`。当前 `0.1.6` 会打出 `AgentDock-0.1.6-Setup.exe` 等文件名。
+版本号读 `package.json` 的 `version`。当前 `0.1.7` 会打出 `AgentDock-0.1.7-Setup.exe` 等文件名。
 
 ```bash
 npm run pack          # 当前系统
