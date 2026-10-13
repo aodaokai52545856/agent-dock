@@ -201,7 +201,19 @@ function previewDocBody(path: string): SessionDocBody {
       path,
       title: '2026-09-11-cite-rail',
       relPath: 'docs/superpowers/plans/2026-09-11-cite-rail.md',
-      text: '# 跨 CLI 引用\n\n- 右侧列出本 session 写出的 Markdown\n- 弹窗预览后写入目标终端提示行\n'
+      text: [
+        '# 跨 CLI 引用',
+        '',
+        '- 右侧列出本 session 写出的 Markdown',
+        '- 弹窗预览后写入目标终端提示行',
+        '',
+        '```mermaid',
+        'flowchart TD',
+        '  A[文档栏] --> B[预览 Markdown]',
+        '  B --> C[引用到终端]',
+        '```',
+        ''
+      ].join('\n')
     }
   }
   if (path.includes('kimi')) {
@@ -216,7 +228,19 @@ function previewDocBody(path: string): SessionDocBody {
     path,
     title: 'Plan',
     relPath: null,
-    text: '# 修窗口圆角\n\n1. 先改 token\n2. 再核对毛玻璃\n'
+    text: [
+      '# 修窗口圆角',
+      '',
+      '1. 先改 token',
+      '2. 再核对毛玻璃',
+      '',
+      '```flowchart',
+      'TD',
+      '  Start[开始] --> Token[改 token]',
+      '  Token --> Glass[核对毛玻璃]',
+      '```',
+      ''
+    ].join('\n')
   }
 }
 

@@ -1,7 +1,16 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
 import * as api from '../lib/api'
+import {
+  DOC_PREVIEW_EDGES,
+  loadDocPreviewSize,
+  nextDocPreviewSize,
+  saveDocPreviewSize,
+  type DocPreviewEdge,
+  type DocPreviewSize
+} from '../lib/docPreview'
 import { renderMarkdown } from '../lib/markdown'
+import { pageMermaidTheme, paintMermaidDiagrams } from '../lib/mermaidRender'
 import { formatCiteBlock, wrapBracketedPaste } from '../lib/sessionCite'
 import { showToast, store } from '../lib/store'
 import type { SessionDoc, SessionDocBody, ToolId } from '../lib/types'
@@ -22,7 +31,18 @@ const body = ref<SessionDocBody | null>(null)
 const loading = ref(false)
 const error = ref('')
 const citing = ref(false)
+const mdRef = ref<HTMLElement | null>(null)
+const size = ref<DocPreviewSize>(loadDocPreviewSize())
 let loadSeq = 0
+let paintSeq = 0
+let resizing: {
+  edge: DocPreviewEdge
+  startX: number
+  startY: number
+  start: DocPreviewSize
+  pointerId: number
+  target: HTMLElement
+} | null = null
 
 const html = computed(() => (body.value ? renderMarkdown(body.value.text) : ''))
 
@@ -34,7 +54,19 @@ watch(
       error.value = ''
       return
     }
+    size.value = loadDocPreviewSize(window.innerWidth, window.innerHeight)
     void load()
+  }
+)
+
+watch(
+  () => [props.open, html.value, store.settings.uiTheme] as const,
+  async () => {
+    if (!props.open || !html.value) return
+    const seq = ++paintSeq
+    await nextTick()
+    if (seq !== paintSeq || !mdRef.value) return
+    await paintMermaidDiagrams(mdRef.value, pageMermaidTheme())
   }
 )
 
@@ -92,11 +124,71 @@ async function cite(includeBody: boolean) {
     citing.value = false
   }
 }
+
+function onResizeMove(event: PointerEvent) {
+  if (!resizing || event.pointerId !== resizing.pointerId) return
+  size.value = nextDocPreviewSize(
+    resizing.start,
+    resizing.edge,
+    event.clientX - resizing.startX,
+    event.clientY - resizing.startY,
+    window.innerWidth,
+    window.innerHeight
+  )
+}
+
+function onResizeUp(event: PointerEvent) {
+  if (!resizing || event.pointerId !== resizing.pointerId) return
+  const { target, pointerId } = resizing
+  resizing = null
+  document.documentElement.classList.remove('ad-resizing')
+  target.removeEventListener('pointermove', onResizeMove)
+  target.removeEventListener('pointerup', onResizeUp)
+  target.removeEventListener('pointercancel', onResizeUp)
+  if (target.hasPointerCapture(pointerId)) target.releasePointerCapture(pointerId)
+  saveDocPreviewSize(size.value)
+}
+
+function beginResize(edge: DocPreviewEdge, event: PointerEvent) {
+  if (event.button !== 0) return
+  event.preventDefault()
+  event.stopPropagation()
+  const target = event.currentTarget as HTMLElement
+  resizing = {
+    edge,
+    startX: event.clientX,
+    startY: event.clientY,
+    start: { ...size.value },
+    pointerId: event.pointerId,
+    target
+  }
+  document.documentElement.classList.add('ad-resizing')
+  target.setPointerCapture(event.pointerId)
+  target.addEventListener('pointermove', onResizeMove)
+  target.addEventListener('pointerup', onResizeUp)
+  target.addEventListener('pointercancel', onResizeUp)
+}
+
+onUnmounted(() => {
+  paintSeq += 1
+  if (!resizing) return
+  document.documentElement.classList.remove('ad-resizing')
+  resizing.target.removeEventListener('pointermove', onResizeMove)
+  resizing.target.removeEventListener('pointerup', onResizeUp)
+  resizing.target.removeEventListener('pointercancel', onResizeUp)
+  resizing = null
+})
 </script>
 
 <template>
   <div v-if="open" class="ad-mask" @click.self="emit('close')">
-    <div class="ad-dialog dialog" role="dialog" aria-modal="true" aria-label="文档预览">
+    <div
+      class="ad-dialog dialog"
+      role="dialog"
+      aria-modal="true"
+      aria-label="文档预览"
+      :style="{ width: size.w + 'px', height: size.h + 'px' }"
+    >
       <header>
         <div>
           <h2>{{ body?.title || doc?.title || '文档' }}</h2>
@@ -110,7 +202,7 @@ async function cite(includeBody: boolean) {
         <p>{{ error }}</p>
         <button type="button" class="btn btn-ghost btn-small" @click="load">重试</button>
       </div>
-      <div v-else class="md" v-html="html" />
+      <div v-else ref="mdRef" class="md" v-html="html" />
 
       <div class="actions">
         <button type="button" class="btn btn-ghost" :disabled="!body" @click="copyText">复制</button>
@@ -127,17 +219,30 @@ async function cite(includeBody: boolean) {
           {{ citing ? '写入中…' : '引用到当前终端' }}
         </button>
       </div>
+
+      <span
+        v-for="edge in DOC_PREVIEW_EDGES"
+        :key="edge"
+        class="grip"
+        :class="edge"
+        :title="edge === 'se' ? '拖动调整大小' : undefined"
+        @pointerdown="beginResize(edge, $event)"
+      />
     </div>
   </div>
 </template>
 
 <style scoped>
 .dialog {
-  width: 880px;
+  position: relative;
+  width: 1120px;
   max-width: calc(100vw - 48px);
+  height: 720px;
   max-height: calc(100vh - 48px);
   display: flex;
   flex-direction: column;
+  overflow: hidden;
+  background: var(--ad-float-read);
 }
 
 header {
@@ -146,6 +251,7 @@ header {
   justify-content: space-between;
   gap: 16px;
   margin-bottom: 16px;
+  flex-shrink: 0;
 }
 
 h2 {
@@ -163,6 +269,8 @@ h2 {
 }
 
 .state {
+  flex: 1;
+  min-height: 0;
   padding: 24px 0;
 }
 
@@ -172,8 +280,7 @@ h2 {
 
 .md {
   flex: 1;
-  min-height: 240px;
-  max-height: calc(100vh - 240px);
+  min-height: 0;
   overflow: auto;
   padding-right: 8px;
   color: var(--ad-text);
@@ -243,10 +350,117 @@ h2 {
   text-align: left;
 }
 
+.md :deep(.ad-mermaid) {
+  margin: 0 0 12px;
+  padding: 16px;
+  overflow: auto;
+  background: var(--ad-harbor);
+  border: 1px solid var(--ad-border);
+  border-radius: 8px;
+}
+
+.md :deep(.ad-mermaid svg) {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 0 auto;
+}
+
+.md :deep(.ad-mermaid.is-error) {
+  white-space: pre-wrap;
+  font-family: var(--ad-mono);
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--ad-error);
+}
+
 .actions {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
   margin-top: 16px;
+  flex-shrink: 0;
+}
+
+.grip {
+  position: absolute;
+  z-index: 2;
+  touch-action: none;
+}
+
+.grip.n,
+.grip.s {
+  left: 12px;
+  right: 12px;
+  height: 6px;
+  cursor: ns-resize;
+}
+
+.grip.n {
+  top: 0;
+}
+
+.grip.s {
+  bottom: 0;
+}
+
+.grip.e,
+.grip.w {
+  top: 12px;
+  bottom: 12px;
+  width: 6px;
+  cursor: ew-resize;
+}
+
+.grip.e {
+  right: 0;
+}
+
+.grip.w {
+  left: 0;
+}
+
+.grip.ne,
+.grip.nw,
+.grip.se,
+.grip.sw {
+  width: 12px;
+  height: 12px;
+}
+
+.grip.ne {
+  top: 0;
+  right: 0;
+  cursor: nesw-resize;
+}
+
+.grip.nw {
+  top: 0;
+  left: 0;
+  cursor: nwse-resize;
+}
+
+.grip.se {
+  right: 0;
+  bottom: 0;
+  cursor: nwse-resize;
+}
+
+.grip.sw {
+  left: 0;
+  bottom: 0;
+  cursor: nesw-resize;
+}
+
+.grip.se::after {
+  content: '';
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  width: 8px;
+  height: 8px;
+  border-right: 2px solid var(--ad-muted);
+  border-bottom: 2px solid var(--ad-muted);
+  pointer-events: none;
 }
 </style>

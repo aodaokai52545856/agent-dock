@@ -521,11 +521,18 @@ watch(liveCount, (n) => {
     <button
       v-if="store.appMode === 'console'"
       type="button"
-      class="link"
+      class="link docs-btn"
       :class="{ on: docsOpen }"
       :aria-pressed="docsOpen"
+      :title="docsOpen ? '收起文档栏' : '打开会话文档'"
+      :aria-label="docsOpen ? '收起文档栏' : '打开会话文档'"
       @click="$emit('docs')"
     >
+      <svg class="docs-icon" viewBox="0 0 16 16" aria-hidden="true">
+        <path d="M4.5 2.5h4.2L12.5 6.3V13.5H4.5z" />
+        <path d="M8.6 2.5V6.3H12.5" />
+        <path d="M6.2 9h4.6M6.2 11.2h3.2" />
+      </svg>
       文档
     </button>
     <button type="button" class="link" @click="$emit('refresh')">
@@ -594,6 +601,36 @@ watch(liveCount, (n) => {
 .link.on {
   color: var(--ad-text);
   background: var(--ad-hover);
+}
+
+.docs-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 22px;
+  padding: 0 9px 0 7px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--ad-text);
+  background: color-mix(in srgb, var(--ad-text) 14%, transparent);
+  border: 1px solid var(--ad-border-strong);
+}
+
+.docs-icon {
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.35;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.link.docs-btn:hover,
+.link.docs-btn.on {
+  color: var(--ad-primary-text);
+  background: var(--ad-primary);
+  border-color: var(--ad-primary);
 }
 
 .usage:disabled {

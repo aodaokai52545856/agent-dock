@@ -23,7 +23,7 @@
     "test:flow": "node --experimental-strip-types src/lib/flow/envelope.test.ts && node --experimental-strip-types src/lib/flow/engine.test.ts && node --experimental-strip-types src/lib/flow/model.test.ts && node --experimental-strip-types src/lib/flow/ptyWait.test.ts && node --experimental-strip-types src/lib/flow/roles.test.ts && node --experimental-strip-types src/lib/flow/channels.test.ts && node --experimental-strip-types src/lib/flow/chartLayout.test.ts && node --experimental-strip-types src/lib/flow/inspector.test.ts",
     "test:usage": "node --experimental-strip-types src/lib/grokUsage.test.ts && node --experimental-strip-types src/lib/grokSpend.test.ts && node --experimental-strip-types src/lib/dshBalance.test.ts",
     "test:appearance": "node --experimental-strip-types src/lib/appearance.test.ts && node --experimental-strip-types src/lib/uiGlass.test.ts",
-    "test:cite": "node --experimental-strip-types src/lib/sessionCite.test.ts && node --experimental-strip-types src/lib/markdown.test.ts",
+    "test:cite": "node --experimental-strip-types src/lib/sessionCite.test.ts && node --experimental-strip-types src/lib/markdown.test.ts && node --experimental-strip-types src/lib/docPreview.test.ts",
     "test:ccswitch": "node --experimental-strip-types src/lib/ccswitch.test.ts",
     "test:dsh": "node --experimental-strip-types src/lib/dsh.test.ts && node --experimental-strip-types src/lib/dshGlass.test.ts && node --experimental-strip-types src/lib/dshEmbed.test.ts",
     "test:live": "node --experimental-strip-types src/lib/livePty.test.ts && node --experimental-strip-types src/lib/liveBind.test.ts && node --experimental-strip-types src/lib/livePulse.test.ts && node --experimental-strip-types src/lib/ptyDone.test.ts && node --experimental-strip-types src/lib/types.test.ts && node --experimental-strip-types src/lib/toolVersions.test.ts && node --experimental-strip-types src/lib/sessionGroups.test.ts && node --experimental-strip-types src/lib/sessionBatch.test.ts && node --experimental-strip-types src/lib/sessionViewMemory.test.ts",
@@ -37,6 +37,7 @@
     "@xterm/addon-fit": "^0.10.0",
     "@xterm/xterm": "^5.5.0",
     "marked": "^15.0.12",
+    "mermaid": "^12.1.0",
     "vue": "^3.5.13"
   },
   "devDependencies": {

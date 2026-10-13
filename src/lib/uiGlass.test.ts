@@ -1,11 +1,13 @@
 import assert from 'node:assert/strict'
 import {
+  READ_VEIL_MIN,
   UI_FROST_DEFAULT,
   UI_OPACITY_DEFAULT,
   clampUiFrost,
   clampUiOpacity,
   glassRgba,
   inkBoostPercent,
+  readingVeilAlpha,
   veilAlpha
 } from './uiGlass.ts'
 
@@ -38,4 +40,11 @@ test('secondary ink jumps toward body text by half glass so 50% opacity still re
   assert.equal(inkBoostPercent(0), 0)
   assert.equal(inkBoostPercent(50) >= 80, true)
   assert.equal(inkBoostPercent(100), 95)
+})
+
+test('reading dialogs are denser than chrome and never drop below the floor', () => {
+  assert.equal(readingVeilAlpha(0) > veilAlpha(0), true)
+  assert.equal(readingVeilAlpha(50) > veilAlpha(50), true)
+  assert.equal(readingVeilAlpha(100) >= READ_VEIL_MIN, true)
+  assert.equal(readingVeilAlpha(100) > veilAlpha(100), true)
 })

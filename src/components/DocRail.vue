@@ -117,6 +117,13 @@ function openCite() {
   emit('cite', session)
 }
 
+function tagClass(kind: string) {
+  if (kind === 'summary') return 'is-summary'
+  if (kind === 'plan') return 'is-plan'
+  if (kind === 'spec') return 'is-spec'
+  return 'is-doc'
+}
+
 const emptyCopy = computed(() => {
   if (!selectedProject.value) return '先选一个项目。'
   if (!railSession.value && !activeLive.value) return '打开会话后，这里会列出这次写出的 Markdown 和最后总结。'
@@ -131,7 +138,10 @@ const emptyCopy = computed(() => {
   <aside class="rail" aria-label="会话文档">
     <div class="body" :style="{ width: layout.docRailWidth + 'px' }" :aria-hidden="collapsed">
       <div class="head">
-        <p class="kicker">文档</p>
+        <p class="kicker">
+          文档
+          <span v-if="docs.length" class="count">{{ docs.length }}</span>
+        </p>
         <button type="button" class="icon-btn" title="收起文档栏" @click="toggleDocRail">›</button>
       </div>
 
@@ -155,10 +165,16 @@ const emptyCopy = computed(() => {
         <li v-for="doc in docs" :key="doc.path">
           <button type="button" class="doc" @click="emit('open', doc)">
             <span class="doc-top">
-              <span class="ad-tag" :class="{ 'is-summary': doc.kind === 'summary' }">{{ kindLabel(doc.kind) }}</span>
+              <span class="ad-tag" :class="tagClass(doc.kind)">{{ kindLabel(doc.kind) }}</span>
               <span class="doc-time">{{ relativeTime(doc.updatedAt) }}</span>
             </span>
-            <span class="doc-title" :title="doc.title">{{ doc.title }}</span>
+            <span class="doc-main">
+              <svg class="doc-glyph" viewBox="0 0 16 16" aria-hidden="true">
+                <path d="M4.5 2.5h4.2L12.5 6.3V13.5H4.5z" />
+                <path d="M8.6 2.5V6.3H12.5" />
+              </svg>
+              <span class="doc-title" :title="doc.title">{{ doc.title }}</span>
+            </span>
             <span class="doc-path" :title="doc.relPath || doc.path">{{
               doc.kind === 'summary' ? '来自会话记录' : doc.relPath || '会话文件'
             }}</span>
@@ -195,10 +211,30 @@ const emptyCopy = computed(() => {
 }
 
 .kicker {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   margin: 0;
   font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
   line-height: 20px;
-  color: var(--ad-muted);
+  color: var(--ad-text);
+}
+
+.count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: var(--ad-radius-pill);
+  background: var(--ad-selected);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0;
+  color: var(--ad-text);
 }
 
 .session {
@@ -253,16 +289,19 @@ const emptyCopy = computed(() => {
 .doc {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 4px;
   width: 100%;
-  padding: 8px 10px;
-  margin-bottom: 4px;
-  border-radius: 10px;
+  padding: 10px;
+  margin-bottom: 6px;
+  border: 1px solid var(--ad-border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--ad-hover) 72%, transparent);
   text-align: left;
 }
 
 .doc:hover {
   background: var(--ad-hover);
+  border-color: var(--ad-border-strong);
 }
 
 .doc-top {
@@ -272,15 +311,51 @@ const emptyCopy = computed(() => {
   gap: 8px;
 }
 
+.doc-main {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.doc-glyph {
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: var(--ad-muted);
+  stroke-width: 1.3;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
 .doc-title {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ad-text);
 }
 
 .ad-tag.is-summary {
   color: var(--ad-text);
   background: var(--ad-selected);
+}
+
+.ad-tag.is-plan {
+  color: var(--ad-kimi);
+  background: color-mix(in srgb, var(--ad-kimi) 16%, transparent);
+}
+
+.ad-tag.is-spec {
+  color: var(--ad-warning);
+  background: color-mix(in srgb, var(--ad-warning) 16%, transparent);
+}
+
+.ad-tag.is-doc {
+  color: var(--ad-text);
+  background: color-mix(in srgb, var(--ad-text) 10%, transparent);
 }
 
 .doc-path,

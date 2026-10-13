@@ -32,6 +32,7 @@ export function applyUiGlass(opacity: number, frost: number) {
   root.style.setProperty('--ad-ui-opacity', String(nextOpacity))
   root.style.setProperty('--ad-ui-frost', String(nextFrost))
   root.style.setProperty('--ad-ink-boost', `${inkBoostPercent(nextOpacity)}%`)
+  root.style.setProperty('--ad-read-veil', String(readingVeilAlpha(nextOpacity)))
   if (nextFrost <= 0) root.setAttribute('data-frost', 'off')
   else root.removeAttribute('data-frost')
 }
@@ -42,6 +43,15 @@ export function applyUiOpacity(value: number, frost = UI_FROST_DEFAULT) {
 
 export function veilAlpha(opacityPercent: number) {
   return Math.max(0, Math.min(1, 0.9 - (clampUiOpacity(opacityPercent) / 100) * 0.78))
+}
+
+/** Markdown and other reading dialogs stay denser than chrome glass. */
+export const READ_VEIL_MIN = 0.88
+export const READ_VEIL_MAX = 0.98
+export const READ_VEIL_BOOST = 0.22
+
+export function readingVeilAlpha(opacityPercent: number) {
+  return Math.min(READ_VEIL_MAX, Math.max(READ_VEIL_MIN, veilAlpha(opacityPercent) + READ_VEIL_BOOST))
 }
 
 export function glassRgba(hex: string, opacityPercent: number) {
