@@ -11,6 +11,7 @@ const emit = defineEmits<{
   settings: []
   versions: []
   accounts: []
+  'claude-accounts': []
   deepseek: []
   'ccswitch-open': []
   'ccswitch-install': []
@@ -110,6 +111,11 @@ function openAccounts() {
   emit('accounts')
 }
 
+function openClaudeAccounts() {
+  closeMenus()
+  emit('claude-accounts')
+}
+
 function openDeepseek() {
   closeMenus()
   emit('deepseek')
@@ -169,6 +175,7 @@ onUnmounted(() => {
         <div v-if="fileOpen" class="ad-menu file-menu" role="menu">
           <button type="button" class="ad-menu-item" role="menuitem" @click="openSettings">设置</button>
           <button type="button" class="ad-menu-item" role="menuitem" @click="openAccounts">Grok 账号</button>
+          <button type="button" class="ad-menu-item" role="menuitem" @click="openClaudeAccounts">Claude 账号</button>
           <button type="button" class="ad-menu-item" role="menuitem" @click="openDeepseek">DeepSeek</button>
         </div>
       </div>

@@ -15,6 +15,7 @@ import SideBar from './components/SideBar.vue'
 import CcswitchDialog from './components/CcswitchDialog.vue'
 import VersionDrawer from './components/VersionDrawer.vue'
 import DeepseekKeyDialog from './components/DeepseekKeyDialog.vue'
+import ClaudeAccountDialog from './components/ClaudeAccountDialog.vue'
 import GrokAccountDialog from './components/GrokAccountDialog.vue'
 import StatusBar from './components/StatusBar.vue'
 import WindowResizeFrame from './components/WindowResizeFrame.vue'
@@ -73,6 +74,7 @@ const settingsOpen = ref(false)
 const versionOpen = ref(false)
 const ccswitchOpen = ref(false)
 const accountOpen = ref(false)
+const claudeAccountOpen = ref(false)
 const deepseekOpen = ref(false)
 const ccswitchBusy = ref(false)
 const confirmOpen = ref(false)
@@ -596,6 +598,23 @@ async function onGrokSwitched() {
   }
 }
 
+async function onClaudeSwitched() {
+  const claudeLive = store.live.filter((item) => item.toolId === 'claude')
+  for (const item of claudeLive) {
+    await api.ptyKill(item.ptyId)
+    termRef.value?.dispose(item.ptyId)
+    markPtyExit(item.ptyId)
+  }
+  if (claudeLive.length) {
+    showToast('已切换 Claude 账号，并关掉旧终端')
+  } else {
+    showToast('已切换 Claude 账号')
+  }
+  if (store.selectedTool === 'claude') {
+    void refreshSessions()
+  }
+}
+
 const confirmCopy = () => {
   if (confirmMode.value === 'remove') {
     const name = removingProject.value?.name ?? '该项目'
@@ -657,6 +676,7 @@ const confirmCopy = () => {
       @settings="settingsOpen = true"
       @versions="versionOpen = true"
       @accounts="accountOpen = true"
+      @claude-accounts="claudeAccountOpen = true"
       @deepseek="deepseekOpen = true"
       @ccswitch-open="onCcswitchOpen"
       @ccswitch-install="onCcswitchInstall"
@@ -785,6 +805,11 @@ const confirmCopy = () => {
       :open="accountOpen"
       @close="accountOpen = false"
       @switched="onGrokSwitched"
+    />
+    <ClaudeAccountDialog
+      :open="claudeAccountOpen"
+      @close="claudeAccountOpen = false"
+      @switched="onClaudeSwitched"
     />
     <DeepseekKeyDialog :open="deepseekOpen" @close="deepseekOpen = false" />
     <SettingsDrawer

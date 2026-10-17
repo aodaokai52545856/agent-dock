@@ -267,6 +267,23 @@ export interface GrokAccountList {
   accounts: GrokAccount[]
 }
 
+export interface ClaudeAccount {
+  id: string
+  name: string
+  email: string
+  accountUuid: string
+  subscriptionType: string
+  updatedAt: string
+  active: boolean
+}
+
+export interface ClaudeAccountList {
+  loggedIn: boolean
+  currentEmail: string
+  currentName: string
+  accounts: ClaudeAccount[]
+}
+
 export interface DshBalance {
   ok: boolean
   available: boolean | null

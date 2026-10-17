@@ -15,6 +15,7 @@ import type {
   DshKeyStatus,
   CursorDevResult,
   GitSnapshot,
+  ClaudeAccountList,
   GrokAccountList,
   GrokSpend,
   GrokUsage,
@@ -587,6 +588,38 @@ export async function deleteGrokAccount(accountId: string): Promise<GrokAccountL
 export async function loginGrokAccount(): Promise<GrokAccountList> {
   if (!isTauri) return emptyAccounts()
   return invoke('login_grok_account')
+}
+
+const emptyClaudeAccounts = (): ClaudeAccountList => ({
+  loggedIn: false,
+  currentEmail: '',
+  currentName: '',
+  accounts: []
+})
+
+export async function listClaudeAccounts(): Promise<ClaudeAccountList> {
+  if (!isTauri) return emptyClaudeAccounts()
+  return invoke('list_claude_accounts')
+}
+
+export async function saveClaudeAccount(name: string): Promise<ClaudeAccountList> {
+  if (!isTauri) return emptyClaudeAccounts()
+  return invoke('save_claude_account', { name })
+}
+
+export async function switchClaudeAccount(accountId: string): Promise<ClaudeAccountList> {
+  if (!isTauri) return emptyClaudeAccounts()
+  return invoke('switch_claude_account', { accountId })
+}
+
+export async function deleteClaudeAccount(accountId: string): Promise<ClaudeAccountList> {
+  if (!isTauri) return emptyClaudeAccounts()
+  return invoke('delete_claude_account', { accountId })
+}
+
+export async function loginClaudeAccount(): Promise<ClaudeAccountList> {
+  if (!isTauri) return emptyClaudeAccounts()
+  return invoke('login_claude_account')
 }
 
 const previewUsage = (): GrokUsage => {

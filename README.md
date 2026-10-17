@@ -136,6 +136,7 @@
 | --- | --- |
 | **文档栏** | Grok / Kimi 写出的 plan / spec / doc，可预览 Markdown，可引用对话片段 |
 | **Grok 多账号** | 切换账号会关掉旧 Grok 终端，避免混用身份 |
+| **Claude 多账号** | 切换账号会关掉旧 Claude 终端，避免混用身份 |
 | **用量与花费** | 状态栏读取 Grok 额度与 token；DeepSeek 显示剩余人民币 |
 | **CLI 版本** | 探测、升级、卸载本机工具；可安装并启动 CC Switch |
 | **DeepSeek 密钥** | 在 Dock 管理 `.credentials.yaml`，明文不进仓库 |

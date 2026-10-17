@@ -9,6 +9,7 @@ mod dsh_embed;
 mod dsh_keys;
 mod dsh_web;
 mod dsh_web_guard;
+mod claude_accounts;
 mod grok_accounts;
 mod secret_box;
 mod grok_spend;
@@ -33,6 +34,7 @@ use std::sync::Arc;
 use tauri::webview::PageLoadEvent;
 use tauri::{AppHandle, Emitter, Manager, State};
 use dsh_balance::DshBalance;
+use claude_accounts::ClaudeAccountList;
 use grok_accounts::GrokAccountList;
 use grok_spend::GrokSpend;
 use grok_usage::GrokUsage;
@@ -255,6 +257,34 @@ async fn list_tool_versions(
     })
     .await
     .map_err(|err| format!("检查版本失败：{err}"))
+}
+
+#[tauri::command]
+fn list_claude_accounts(app: AppHandle) -> Result<ClaudeAccountList, String> {
+    claude_accounts::list_accounts(&app)
+}
+
+#[tauri::command]
+fn save_claude_account(app: AppHandle, name: String) -> Result<ClaudeAccountList, String> {
+    claude_accounts::save_current(&app, name)
+}
+
+#[tauri::command]
+fn switch_claude_account(app: AppHandle, account_id: String) -> Result<ClaudeAccountList, String> {
+    claude_accounts::switch_account(&app, &account_id)
+}
+
+#[tauri::command]
+fn delete_claude_account(app: AppHandle, account_id: String) -> Result<ClaudeAccountList, String> {
+    claude_accounts::delete_account(&app, &account_id)
+}
+
+#[tauri::command]
+async fn login_claude_account(app: AppHandle) -> Result<ClaudeAccountList, String> {
+    let state = state::load_state(&app)?;
+    tauri::async_runtime::spawn_blocking(move || claude_accounts::login_new(&app, &state.settings))
+        .await
+        .map_err(|err| format!("登录失败：{err}"))?
 }
 
 #[tauri::command]
@@ -943,6 +973,11 @@ pub fn run() {
             switch_grok_account,
             delete_grok_account,
             login_grok_account,
+            list_claude_accounts,
+            save_claude_account,
+            switch_claude_account,
+            delete_claude_account,
+            login_claude_account,
             list_sessions,
             list_session_docs,
             read_session_doc,
