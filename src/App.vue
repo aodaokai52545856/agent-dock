@@ -976,7 +976,7 @@ const confirmCopy = () => {
   box-shadow: var(--ad-shadow-menu);
   padding: 8px 16px;
   font-size: 13px;
-  z-index: 30;
+  z-index: 38;
 }
 
 .done-toast {
