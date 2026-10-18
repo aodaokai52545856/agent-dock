@@ -76,3 +76,20 @@ test('traditional and all match in v1 once classifier-only', () => {
   assert.equal(a, b)
   assertAllowed(a)
 })
+
+test('all converts glyphs and punctuation', () => {
+  const out = convertText('软件（测试），。', 'all')
+  assert.equal(out, '軟件(測試),.')
+  assertAllowed(out)
+})
+
+test('traditional matches all', () => {
+  const input = '软件（测试），。😀￥'
+  assert.equal(convertText(input, 'traditional'), convertText(input, 'all'))
+})
+
+test('symbols keeps simplified Han', () => {
+  const out = convertText('软件，', 'symbols')
+  assert.equal(out, '软件,')
+  assertAllowed(out)
+})

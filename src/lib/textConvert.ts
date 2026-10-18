@@ -1,4 +1,10 @@
+import { ST_CHARACTERS } from './opencc/stCharacters.ts'
+
 export type ConvertMode = 'traditional' | 'symbols' | 'all'
+
+export function convertReady(): boolean {
+  return ST_CHARACTERS['软'] === '軟'
+}
 
 const HAN_RANGES: Array<[number, number]> = [
   [0x3400, 0x4dbf],
@@ -79,7 +85,11 @@ function mapCodePoint(cp: number): string | null {
 }
 
 function toTraditional(input: string): string {
-  return input
+  let out = ''
+  for (const ch of input) {
+    out += ST_CHARACTERS[ch] ?? ch
+  }
+  return out
 }
 
 function classify(input: string): string {
