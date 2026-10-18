@@ -22,6 +22,7 @@ import WindowResizeFrame from './components/WindowResizeFrame.vue'
 import TitleBar from './components/TitleBar.vue'
 import DshWebPane from './components/DshWebPane.vue'
 import TerminalPane from './components/TerminalPane.vue'
+import TextConvertFab from './components/TextConvertFab.vue'
 import * as api from './lib/api'
 import {
   beginPaneDrag,
@@ -844,6 +845,7 @@ const confirmCopy = () => {
       @close="confirmOpen = false"
       @confirm="onConfirm"
     />
+    <TextConvertFab />
     <div v-if="store.toast" class="toast" role="status">{{ store.toast }}</div>
     <button
       v-if="store.doneNotice"

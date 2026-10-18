@@ -61,12 +61,12 @@ export async function folderLabel(path: string): Promise<string> {
   return invoke('folder_label', { path })
 }
 
-export async function clipboardWrite(text: string): Promise<void> {
-  if (!text) return
+export async function clipboardWrite(text: string): Promise<boolean> {
+  if (!text) return false
   if (isTauri) {
     try {
       await invoke('clipboard_write', { text })
-      return
+      return true
     } catch {
       /* fall through to the web clipboard */
     }
@@ -74,10 +74,12 @@ export async function clipboardWrite(text: string): Promise<void> {
   if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
     try {
       await navigator.clipboard.writeText(text)
+      return true
     } catch {
       /* copy is best-effort */
     }
   }
+  return false
 }
 
 export async function clipboardRead(): Promise<string> {
