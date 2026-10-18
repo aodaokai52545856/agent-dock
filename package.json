@@ -25,6 +25,7 @@
     "test:usage": "node --experimental-strip-types src/lib/grokUsage.test.ts && node --experimental-strip-types src/lib/grokSpend.test.ts && node --experimental-strip-types src/lib/dshBalance.test.ts",
     "test:appearance": "node --experimental-strip-types src/lib/appearance.test.ts && node --experimental-strip-types src/lib/uiGlass.test.ts",
     "test:cite": "node --experimental-strip-types src/lib/sessionCite.test.ts && node --experimental-strip-types src/lib/markdown.test.ts && node --experimental-strip-types src/lib/docPreview.test.ts",
+    "test:convert": "node --experimental-strip-types src/lib/textConvert.test.ts",
     "test:ccswitch": "node --experimental-strip-types src/lib/ccswitch.test.ts",
     "test:dsh": "node --experimental-strip-types src/lib/dsh.test.ts && node --experimental-strip-types src/lib/dshGlass.test.ts && node --experimental-strip-types src/lib/dshEmbed.test.ts",
     "test:live": "node --experimental-strip-types src/lib/livePty.test.ts && node --experimental-strip-types src/lib/liveBind.test.ts && node --experimental-strip-types src/lib/livePulse.test.ts && node --experimental-strip-types src/lib/ptyDone.test.ts && node --experimental-strip-types src/lib/types.test.ts && node --experimental-strip-types src/lib/toolVersions.test.ts && node --experimental-strip-types src/lib/sessionGroups.test.ts && node --experimental-strip-types src/lib/sessionBatch.test.ts && node --experimental-strip-types src/lib/sessionViewMemory.test.ts",
