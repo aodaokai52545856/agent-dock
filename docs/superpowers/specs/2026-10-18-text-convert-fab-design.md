@@ -18,7 +18,7 @@ Agent Dock 是 Tauri 2 + Vue 3 驾驶舱。弹窗都是居中 `ad-dialog`，右�
 
 - 结果在面板显示，可编辑后再复制
 - 「转繁体」「洗符号」可分开点，另加「全部转换」
-- 繁体只换字形（「软件」→「軟件」），不用词组表
+- 繁体只换字形（「软件」→「軟件」），用台湾字形（「里面」→「裡面」），不用词组表
 - 全角标点/字母/数字/括号转半角；汉字保留；没有 ASCII 对应的 emoji 和符号删除
 - 按钮右下角常驻，两种模式都能用
 
@@ -28,7 +28,7 @@ Agent Dock 是 Tauri 2 + Vue 3 驾驶舱。弹窗都是居中 `ad-dialog`，右�
 - 刷新/退出后保留原文
 - 把结果贴进当前终端
 - 词组级简繁（「软件」→「軟體」）
-- 台湾/香港用词、香港字形集
+- 台湾用词、香港字形集
 - 保留 emoji 或拉丁扩展字母
 - Rust / Tauri 命令做转换
 - 居中模态遮罩
@@ -48,9 +48,9 @@ Agent Dock 是 Tauri 2 + Vue 3 驾驶舱。弹窗都是居中 `ad-dialog`，右�
 | 部分 | 位置 | 职责 |
 |------|------|------|
 | 浮动按钮 + 面板 | `src/components/TextConvertFab.vue` | 右下角按钮；展开浮层面板 |
-| 转换纯函数 | `src/lib/textConvert.ts` | s2t 字形、全角/标点映射、封闭分类删除 |
+| 转换纯函数 | `src/lib/textConvert.ts` | s2tw 台湾字形、全角/标点映射、封闭分类删除 |
 | 测试 | `src/lib/textConvert.test.ts` | 映射、删除、禁止漏字符 |
-| 简繁表 | OpenCC `s2t` 字符级（不用 STPhrases / s2twp） | 「软件」→「軟件」 |
+| 简繁表 | OpenCC `s2tw` 字符级：`STCharacters` + `TWVariants`（不用 STPhrases / TWPhrases / s2twp） | 「软件」→「軟件」，「里面」→「裡面」 |
 
 按钮 `position: fixed; right: 16px; bottom: 56px; z-index: 35`（工作区内容之上，完成 toast 的 40 之下）。`bottom: 56px` 避开状态栏。面板从按钮向上展开，背景 `--ad-float`。
 
@@ -68,7 +68,7 @@ Agent Dock 是 Tauri 2 + Vue 3 驾驶舱。弹窗都是居中 `ad-dialog`，右�
 
 | 操作 | 读 | 写结果框 |
 |------|----|----------|
-| 转繁体 | 原文 | s2t 字形 + 封闭分类（标点/全角映射，不能映射的删） |
+| 转繁体 | 原文 | s2tw 台湾字形 + 封闭分类（标点/全角映射，不能映射的删） |
 | 洗符号 | 原文 | 不做简繁，只封闭分类。汉字保持简体 |
 | 全部转换 | 原文 | 与「转繁体」相同（第一版 `traditional` 和 `all` 输出相同） |
 | 复制 | 结果框 | 系统剪贴板；成功 toast「已复制」。结果为空则按钮不可用 |
@@ -88,7 +88,7 @@ function convertText(input: string, mode: ConvertMode): string
 function isAllowedOutputChar(ch: string): boolean
 ```
 
-`traditional` 与 `all` 第一版走同一条流水线，两个 mode 都保留，方便以后拆开「只转繁体、不动标点」。`symbols` 跳过 s2t。
+`traditional` 与 `all` 第一版走同一条流水线，两个 mode 都保留，方便以后拆开「只转繁体、不动标点」。`symbols` 跳过简繁。
 
 面板调用 `convertText` 后写入结果 ref。复制走现有前端剪贴板路径（与其它 toast 一样，失败不关面板）。
 
@@ -97,7 +97,7 @@ function isAllowedOutputChar(ch: string): boolean
 按 Unicode **码点**遍历（`for...of` 字符串迭代器，处理 surrogate）。每个码点只进下列分支，没有「原样留下」：
 
 ```
-若 mode 为 traditional | all：先做 s2t 字形（字符级）
+若 mode 为 traditional | all：先做 s2tw 台湾字形（STCharacters 再 TWVariants，字符级）
   → 允许的 ASCII？保留
   → 汉字？保留
   → 映射表有对应？替换为允许的 ASCII（可多字符，如 … → ...）
@@ -132,7 +132,7 @@ function isAllowedOutputChar(ch: string): boolean
 - U+30000–U+3134F
 - U+31350–U+323AF
 
-康熙部首、笔画、注音、假名、韩文 **不是汉字**。无 ASCII 映射则删除。s2t 表没有的汉字保持原字（仍是汉字）。
+康熙部首、笔画、注音、假名、韩文 **不是汉字**。无 ASCII 映射则删除。简繁表没有的汉字保持原字（仍是汉字）。
 
 ### 映射表
 

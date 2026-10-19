@@ -93,3 +93,22 @@ test('symbols keeps simplified Han', () => {
   assert.equal(out, '软件,')
   assertAllowed(out)
 })
+
+test('all uses Taiwan glyphs not Hong Kong orthodox', () => {
+  const out = convertText('里面为伪启群床着', 'all')
+  assert.equal(out, '裡面為偽啟群床著')
+  assertAllowed(out)
+})
+
+test('already traditional HK forms become Taiwan glyphs', () => {
+  const out = convertText('裏面爲僞啓羣牀', 'all')
+  assert.equal(out, '裡面為偽啟群床')
+  assertAllowed(out)
+})
+
+test('Taiwan phrases are not applied', () => {
+  const out = convertText('软件信息', 'all')
+  assert.equal(out, '軟件信息')
+  assert.notEqual(out, '軟體資訊')
+  assertAllowed(out)
+})

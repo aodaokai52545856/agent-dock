@@ -1,9 +1,10 @@
 import { ST_CHARACTERS } from './opencc/stCharacters.ts'
+import { TW_VARIANTS } from './opencc/twVariants.ts'
 
 export type ConvertMode = 'traditional' | 'symbols' | 'all'
 
 export function convertReady(): boolean {
-  return ST_CHARACTERS['软'] === '軟'
+  return ST_CHARACTERS['软'] === '軟' && TW_VARIANTS['裏'] === '裡'
 }
 
 const HAN_RANGES: Array<[number, number]> = [
@@ -87,7 +88,8 @@ function mapCodePoint(cp: number): string | null {
 function toTraditional(input: string): string {
   let out = ''
   for (const ch of input) {
-    out += ST_CHARACTERS[ch] ?? ch
+    const std = ST_CHARACTERS[ch] ?? ch
+    out += TW_VARIANTS[std] ?? std
   }
   return out
 }
