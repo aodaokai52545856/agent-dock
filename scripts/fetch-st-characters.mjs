@@ -26,13 +26,20 @@ function writeTs(file, exportName, entries) {
 
 const st = await loadDict('STCharacters.txt')
 const tw = await loadDict('TWVariants.txt')
+const hk = await loadDict('HKVariants.txt')
 if (st['软'] !== '軟' || st['测'] !== '測' || st['试'] !== '試') {
   throw new Error('STCharacters missing expected glyph mappings')
 }
 if (tw['裏'] !== '裡' || tw['爲'] !== '為' || tw['着'] !== '著') {
   throw new Error('TWVariants missing expected Taiwan glyph mappings')
 }
+if (hk['衛'] !== '衞' || hk['說'] !== '説' || hk['爲'] !== '為') {
+  throw new Error('HKVariants missing expected Hong Kong glyph mappings')
+}
 mkdirSync(dir, { recursive: true })
 writeTs(join(dir, 'stCharacters.ts'), 'ST_CHARACTERS', st)
 writeTs(join(dir, 'twVariants.ts'), 'TW_VARIANTS', tw)
-console.log(`wrote ${Object.keys(st).length} ST + ${Object.keys(tw).length} TW mappings`)
+writeTs(join(dir, 'hkVariants.ts'), 'HK_VARIANTS', hk)
+console.log(
+  `wrote ${Object.keys(st).length} ST + ${Object.keys(tw).length} TW + ${Object.keys(hk).length} HK mappings`
+)

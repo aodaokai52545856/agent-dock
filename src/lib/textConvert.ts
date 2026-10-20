@@ -1,10 +1,21 @@
+import { HK_VARIANTS } from './opencc/hkVariants.ts'
 import { ST_CHARACTERS } from './opencc/stCharacters.ts'
 import { TW_VARIANTS } from './opencc/twVariants.ts'
 
-export type ConvertMode = 'traditional' | 'symbols' | 'all'
+export type ConvertCharset = 'tw' | 'hk' | 'std'
+
+export const CONVERT_CHARSETS: Array<{ id: ConvertCharset; label: string }> = [
+  { id: 'tw', label: '台湾繁体' },
+  { id: 'hk', label: '香港繁体' },
+  { id: 'std', label: '标准繁体' }
+]
 
 export function convertReady(): boolean {
-  return ST_CHARACTERS['软'] === '軟' && TW_VARIANTS['裏'] === '裡'
+  return (
+    ST_CHARACTERS['软'] === '軟' &&
+    TW_VARIANTS['裏'] === '裡' &&
+    HK_VARIANTS['衛'] === '衞'
+  )
 }
 
 const HAN_RANGES: Array<[number, number]> = [
@@ -85,11 +96,18 @@ function mapCodePoint(cp: number): string | null {
   return PUNCT[cp] ?? null
 }
 
-function toTraditional(input: string): string {
+function regionalVariants(charset: ConvertCharset): Record<string, string> | null {
+  if (charset === 'tw') return TW_VARIANTS
+  if (charset === 'hk') return HK_VARIANTS
+  return null
+}
+
+function toTraditional(input: string, charset: ConvertCharset): string {
+  const variants = regionalVariants(charset)
   let out = ''
   for (const ch of input) {
     const std = ST_CHARACTERS[ch] ?? ch
-    out += TW_VARIANTS[std] ?? std
+    out += variants?.[std] ?? std
   }
   return out
 }
@@ -109,8 +127,7 @@ function classify(input: string): string {
   return out
 }
 
-export function convertText(input: string, mode: ConvertMode): string {
+export function convertText(input: string, charset: ConvertCharset = 'tw'): string {
   if (!input) return ''
-  const source = mode === 'symbols' ? input : toTraditional(input)
-  return classify(source)
+  return classify(toTraditional(input, charset))
 }

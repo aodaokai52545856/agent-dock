@@ -1,17 +1,32 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import * as api from '../lib/api'
-import { convertReady, convertText, type ConvertMode } from '../lib/textConvert'
-import { showToast } from '../lib/store'
+import { isDshWeb } from '../lib/livePty'
+import { wrapBracketedPaste } from '../lib/sessionCite'
+import { CONVERT_CHARSETS, convertReady, convertText, type ConvertCharset } from '../lib/textConvert'
+import { activeLive, showToast, store } from '../lib/store'
 
 const open = ref(false)
 const source = ref('')
 const result = ref('')
+const charset = ref<ConvertCharset>('tw')
+const sending = ref(false)
 const tableReady = convertReady()
 
 const hasSource = computed(() => source.value.length > 0)
 const hasResult = computed(() => result.value.length > 0)
 const convertEnabled = computed(() => tableReady && hasSource.value)
+const canSend = computed(() => {
+  if (!hasResult.value || sending.value) return false
+  if (!store.activePtyId) return false
+  return !isDshWeb(activeLive.value)
+})
+const sendTitle = computed(() => {
+  if (!hasResult.value) return '先转换出结果'
+  if (!store.activePtyId) return '先打开目标会话'
+  if (isDshWeb(activeLive.value)) return '当前会话不支持写入'
+  return '发送到当前聊天框'
+})
 
 function toggle() {
   open.value = !open.value
@@ -21,15 +36,34 @@ function close() {
   open.value = false
 }
 
-function run(mode: ConvertMode) {
+function run() {
   if (!convertEnabled.value) return
-  result.value = convertText(source.value, mode)
+  result.value = convertText(source.value, charset.value)
 }
 
-async function copyResult() {
+watch(charset, () => {
+  if (convertEnabled.value && hasResult.value) run()
+})
+
+async function sendResult() {
   if (!hasResult.value) return
-  const ok = await api.clipboardWrite(result.value)
-  showToast(ok ? '已复制' : '复制失败')
+  if (!store.activePtyId) {
+    showToast('先打开目标会话')
+    return
+  }
+  if (isDshWeb(activeLive.value)) {
+    showToast('当前会话不支持写入')
+    return
+  }
+  sending.value = true
+  try {
+    await api.ptyWrite(store.activePtyId, wrapBracketedPaste(result.value) + '\r')
+    showToast('已发送到当前聊天')
+  } catch (err) {
+    showToast(err instanceof Error ? err.message : String(err))
+  } finally {
+    sending.value = false
+  }
 }
 
 function onKey(ev: KeyboardEvent) {
@@ -65,17 +99,37 @@ onUnmounted(() => window.removeEventListener('keydown', onKey))
         <textarea v-model="result" class="result" spellcheck="false" />
       </label>
       <div class="row">
-        <button type="button" class="btn" :disabled="!convertEnabled" @click="run('traditional')">
-          转繁体
-        </button>
-        <button type="button" class="btn" :disabled="!convertEnabled" @click="run('symbols')">
-          洗符号
-        </button>
-        <button type="button" class="btn btn-primary" :disabled="!convertEnabled" @click="run('all')">
+        <select
+          v-model="charset"
+          class="charset"
+          aria-label="繁体字符集"
+          :disabled="!tableReady"
+        >
+          <option v-for="item in CONVERT_CHARSETS" :key="item.id" :value="item.id">
+            {{ item.label }}
+          </option>
+        </select>
+        <button type="button" class="btn btn-primary" :disabled="!convertEnabled" @click="run">
           全部转换
         </button>
-        <button type="button" class="btn btn-ghost" :disabled="!hasResult" @click="copyResult">
-          复制
+        <button
+          type="button"
+          class="btn btn-ghost send"
+          :disabled="!canSend"
+          :aria-label="sendTitle"
+          :title="sendTitle"
+          @click="sendResult"
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path
+              d="M22 2 11 13M22 2 15 22 11 13 2 9 22 2Z"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            />
+          </svg>
         </button>
       </div>
     </div>
@@ -154,12 +208,25 @@ onUnmounted(() => window.removeEventListener('keydown', onKey))
 
 .row {
   display: flex;
-  flex-wrap: wrap;
+  align-items: center;
   gap: 8px;
-  justify-content: flex-start;
 }
 
-.row .btn-ghost {
+.charset {
+  width: 132px;
+  flex: 0 0 132px;
+}
+
+.send {
   margin-left: auto;
+  min-width: 36px;
+  width: 36px;
+  padding: 0;
+}
+
+.send svg {
+  width: 16px;
+  height: 16px;
+  display: block;
 }
 </style>
