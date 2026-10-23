@@ -10,6 +10,7 @@ mod dsh_keys;
 mod dsh_web;
 mod dsh_web_guard;
 mod claude_accounts;
+mod claude_oauth;
 mod grok_accounts;
 mod secret_box;
 mod grok_spend;
@@ -265,13 +266,22 @@ fn list_claude_accounts(app: AppHandle) -> Result<ClaudeAccountList, String> {
 }
 
 #[tauri::command]
-fn save_claude_account(app: AppHandle, name: String) -> Result<ClaudeAccountList, String> {
-    claude_accounts::save_current(&app, name)
+async fn save_claude_account(app: AppHandle, name: String) -> Result<ClaudeAccountList, String> {
+    let settings = state::load_state(&app)?.settings;
+    tauri::async_runtime::spawn_blocking(move || claude_accounts::save_current(&app, &settings, name))
+        .await
+        .map_err(|_| "保存 Claude 账号失败。".to_string())?
 }
 
 #[tauri::command]
-fn switch_claude_account(app: AppHandle, account_id: String) -> Result<ClaudeAccountList, String> {
-    claude_accounts::switch_account(&app, &account_id)
+async fn switch_claude_account(app: AppHandle, hub: State<'_, Arc<PtyHub>>, account_id: String) -> Result<ClaudeAccountList, String> {
+    let settings = state::load_state(&app)?.settings;
+    let hub = hub.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        claude_accounts::switch_account(&app, &settings, &account_id, || hub.stop_tool(&app, ToolId::Claude))
+    })
+    .await
+    .map_err(|_| "切换 Claude 账号失败。".to_string())?
 }
 
 #[tauri::command]
@@ -280,9 +290,12 @@ fn delete_claude_account(app: AppHandle, account_id: String) -> Result<ClaudeAcc
 }
 
 #[tauri::command]
-async fn login_claude_account(app: AppHandle) -> Result<ClaudeAccountList, String> {
+async fn login_claude_account(app: AppHandle, hub: State<'_, Arc<PtyHub>>) -> Result<ClaudeAccountList, String> {
     let state = state::load_state(&app)?;
-    tauri::async_runtime::spawn_blocking(move || claude_accounts::login_new(&app, &state.settings))
+    let hub = hub.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        claude_accounts::login_new(&app, &state.settings, || hub.stop_tool(&app, ToolId::Claude))
+    })
         .await
         .map_err(|err| format!("登录失败：{err}"))?
 }
@@ -716,6 +729,11 @@ async fn pty_open(
         .map_err(|err| format!("启动 DeepSeek Web 失败：{err}"))?;
     }
     let state = state::load_state(&app)?;
+    let _auth_guard = if tool_id == ToolId::Claude {
+        Some(claude_accounts::lock_operation()?)
+    } else {
+        None
+    };
     hub.open(
         app,
         &state,
