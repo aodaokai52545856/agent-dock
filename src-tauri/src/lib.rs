@@ -267,19 +267,14 @@ fn list_claude_accounts(app: AppHandle) -> Result<ClaudeAccountList, String> {
 
 #[tauri::command]
 async fn save_claude_account(app: AppHandle, name: String) -> Result<ClaudeAccountList, String> {
-    let settings = state::load_state(&app)?.settings;
-    tauri::async_runtime::spawn_blocking(move || claude_accounts::save_current(&app, &settings, name))
+    tauri::async_runtime::spawn_blocking(move || claude_accounts::save_current(&app, name))
         .await
         .map_err(|_| "保存 Claude 账号失败。".to_string())?
 }
 
 #[tauri::command]
-async fn switch_claude_account(app: AppHandle, hub: State<'_, Arc<PtyHub>>, account_id: String) -> Result<ClaudeAccountList, String> {
-    let settings = state::load_state(&app)?.settings;
-    let hub = hub.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        claude_accounts::switch_account(&app, &settings, &account_id, || hub.stop_tool(&app, ToolId::Claude))
-    })
+async fn switch_claude_account(app: AppHandle, account_id: String) -> Result<ClaudeAccountList, String> {
+    tauri::async_runtime::spawn_blocking(move || claude_accounts::switch_account(&app, &account_id))
     .await
     .map_err(|_| "切换 Claude 账号失败。".to_string())?
 }
@@ -290,15 +285,39 @@ fn delete_claude_account(app: AppHandle, account_id: String) -> Result<ClaudeAcc
 }
 
 #[tauri::command]
-async fn login_claude_account(app: AppHandle, hub: State<'_, Arc<PtyHub>>) -> Result<ClaudeAccountList, String> {
+async fn login_claude_account(app: AppHandle, hub: State<'_, Arc<PtyHub>>, account_id: String) -> Result<ClaudeAccountList, String> {
     let state = state::load_state(&app)?;
     let hub = hub.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        claude_accounts::login_new(&app, &state.settings, || hub.stop_tool(&app, ToolId::Claude))
+        claude_accounts::login_account(&app, &state.settings, &account_id, || {
+            if hub.claude_account_running(&account_id) {
+                Err("此账号还有打开的终端，请先关闭它们，再重新登录。其他账号可继续运行。".into())
+            } else { Ok(()) }
+        })
     })
         .await
         .map_err(|err| format!("登录失败：{err}"))?
 }
+
+#[tauri::command]
+fn create_claude_account(app: AppHandle, name: String, proxy: String) -> Result<ClaudeAccountList, String> {
+    claude_accounts::create_account(&app, name, proxy)
+}
+
+#[tauri::command]
+fn update_claude_account(app: AppHandle, account_id: String, name: String, proxy: String) -> Result<ClaudeAccountList, String> {
+    claude_accounts::update_account(&app, &account_id, name, proxy)
+}
+
+#[tauri::command]
+async fn verify_claude_account(app: AppHandle, account_id: String) -> Result<ClaudeAccountList, String> {
+    let settings = state::load_state(&app)?.settings;
+    tauri::async_runtime::spawn_blocking(move || claude_accounts::verify_account(&app, &settings, &account_id))
+        .await.map_err(|_| "检查 Claude 登录失败。".to_string())?
+}
+
+#[tauri::command]
+fn cancel_claude_login() { claude_accounts::cancel_login(); }
 
 #[tauri::command]
 fn list_grok_accounts(app: AppHandle) -> Result<GrokAccountList, String> {
@@ -729,22 +748,13 @@ async fn pty_open(
         .map_err(|err| format!("启动 DeepSeek Web 失败：{err}"))?;
     }
     let state = state::load_state(&app)?;
-    let _auth_guard = if tool_id == ToolId::Claude {
-        Some(claude_accounts::lock_operation()?)
-    } else {
-        None
-    };
-    hub.open(
-        app,
-        &state,
-        &project_id,
-        tool_id,
-        session_id,
-        title,
-        cols,
-        rows,
-        ui_theme.as_deref(),
-    )
+    let hub = hub.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let _auth_guard = if tool_id == ToolId::Claude {
+            Some(claude_accounts::lock_operation()?)
+        } else { None };
+        hub.open(app, &state, &project_id, tool_id, session_id, title, cols, rows, ui_theme.as_deref())
+    }).await.map_err(|_| "启动终端失败。".to_string())?
 }
 
 #[tauri::command]
@@ -921,6 +931,7 @@ pub fn run() {
             show_main_window(webview.app_handle());
         })
         .setup(|app| {
+            claude_accounts::initialize(app.handle())?;
             let hub = PtyHub::new();
             hub.start_monitor(app.handle().clone());
             app.manage(hub);
@@ -992,6 +1003,10 @@ pub fn run() {
             delete_grok_account,
             login_grok_account,
             list_claude_accounts,
+            create_claude_account,
+            update_claude_account,
+            verify_claude_account,
+            cancel_claude_login,
             save_claude_account,
             switch_claude_account,
             delete_claude_account,

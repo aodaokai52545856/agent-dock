@@ -12,7 +12,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 const REGISTRY_RECENT_MS: i64 = 48 * 60 * 60 * 1000;
 
 pub fn claude_home() -> PathBuf {
-    std::env::var_os("CLAUDE_HOME")
+    std::env::var_os("CLAUDE_CONFIG_DIR")
+        .filter(|v| !v.is_empty())
+        .or_else(|| std::env::var_os("CLAUDE_HOME").filter(|v| !v.is_empty()))
         .map(PathBuf::from)
         .unwrap_or_else(|| dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")).join(".claude"))
 }
@@ -35,7 +37,10 @@ fn project_dir_names(cwd: &str) -> Vec<String> {
 }
 
 pub fn find_session_file(cwd: &str, session_id: &str) -> Option<PathBuf> {
-    find_session_file_in(&claude_home(), cwd, session_id)
+    let homes = crate::claude_accounts::session_homes();
+    let mut found = homes.iter().filter_map(|home| find_session_file_in(home, cwd, session_id));
+    let first = found.next();
+    if found.next().is_some() { None } else { first }
 }
 
 pub fn find_session_file_in(home: &Path, cwd: &str, session_id: &str) -> Option<PathBuf> {
@@ -53,7 +58,13 @@ pub fn find_session_file_in(home: &Path, cwd: &str, session_id: &str) -> Option<
 }
 
 pub fn list_sessions(cwd: &str) -> Result<Vec<SessionRow>, String> {
-    list_sessions_in(&claude_home(), cwd)
+    let mut rows = BTreeMap::new();
+    for home in crate::claude_accounts::session_homes() {
+        for row in list_sessions_in(&home, cwd)? { rows.entry(row.id.clone()).or_insert(row); }
+    }
+    let mut out: Vec<_> = rows.into_values().collect();
+    out.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+    Ok(out)
 }
 
 pub fn list_sessions_in(home: &Path, cwd: &str) -> Result<Vec<SessionRow>, String> {
@@ -96,7 +107,7 @@ pub fn list_sessions_in(home: &Path, cwd: &str) -> Result<Vec<SessionRow>, Strin
 }
 
 pub fn rename_session(cwd: &str, session_id: &str, title: &str) -> Result<(), String> {
-    rename_session_in(&claude_home(), cwd, session_id, title)
+    rename_session_in(&session_home(cwd, session_id)?, cwd, session_id, title)
 }
 
 pub fn rename_session_in(
@@ -122,7 +133,7 @@ pub fn rename_session_in(
 }
 
 pub fn delete_session(session_id: &str, cwd: &str) -> Result<(), String> {
-    let home = claude_home();
+    let home = session_home(cwd, session_id)?;
     let jsonl = jsonl_file(&home, cwd, session_id);
     let registry = registry_files(&home, session_id);
     if jsonl.is_none() && registry.is_empty() {
@@ -135,6 +146,22 @@ pub fn delete_session(session_id: &str, cwd: &str) -> Result<(), String> {
         let _ = fs::remove_file(&path);
     }
     Ok(())
+}
+
+fn session_home(cwd: &str, session_id: &str) -> Result<PathBuf, String> {
+    let mut owners = Vec::new();
+    for home in crate::claude_accounts::session_homes() {
+        if contains_session_in(&home, cwd, session_id) { owners.push(home); }
+    }
+    if owners.len() > 1 { return Err("此会话存在于多个账号目录，请先处理重复的会话文件。".into()); }
+    owners.pop().ok_or_else(|| "未找到 Claude 会话所属的账号目录。".into())
+}
+
+pub(crate) fn contains_session_in(home: &Path, cwd: &str, session_id: &str) -> bool {
+    find_session_file_in(home, cwd, session_id).is_some()
+        || registry_files(home, session_id).iter().any(|path| {
+            parse_registry(path).is_some_and(|registry| matches_cwd(&registry.cwd, cwd))
+        })
 }
 
 fn merge_registry(

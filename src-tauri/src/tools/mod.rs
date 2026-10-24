@@ -1,4 +1,4 @@
-mod claude;
+pub(crate) mod claude;
 pub mod dsh;
 mod grokbuild;
 mod kimi;

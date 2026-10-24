@@ -275,6 +275,11 @@ export interface ClaudeAccount {
   subscriptionType: string
   updatedAt: string
   active: boolean
+  configDir: string
+  source: 'system' | 'isolated' | 'legacy'
+  status: 'ready' | 'refreshable' | 'signedOut' | 'legacy' | 'broken' | 'conflict' | 'unverified'
+  message: string
+  proxy: string
 }
 
 export interface ClaudeAccountList {

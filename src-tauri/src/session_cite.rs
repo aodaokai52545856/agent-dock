@@ -472,7 +472,7 @@ fn path_allowed(path: &Path, project: &Project) -> bool {
     let mut roots = vec![normalize_path(&project.path)];
     roots.push(normalize_path(&tools::grok_home().to_string_lossy()));
     roots.push(normalize_path(&tools::kimi_home().to_string_lossy()));
-    roots.push(normalize_path(&tools::claude_home().to_string_lossy()));
+    roots.extend(crate::claude_accounts::session_homes().iter().map(|p| normalize_path(&p.to_string_lossy())));
     roots.into_iter().any(|root| file == root || file.starts_with(&(root + "/")))
 }
 

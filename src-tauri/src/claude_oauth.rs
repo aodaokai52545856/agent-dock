@@ -1,16 +1,11 @@
 use crate::proxy::validate_proxy_url;
 use crate::state::AppSettings;
 use chrono::Utc;
-use serde_json::{json, Value};
+use serde_json::Value;
 use std::fmt;
 use std::time::Duration;
 
 const PROFILE_URL: &str = "https://api.anthropic.com/api/oauth/profile";
-// Public OAuth client and endpoint used by Claude Code. Never send credentials
-// to a configurable API base URL or follow redirects from either endpoint.
-const TOKEN_URL: &str = "https://platform.claude.com/v1/oauth/token";
-const CLIENT_ID: &str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
-
 #[derive(Debug, Clone, PartialEq)]
 pub enum AuthError {
     Empty,
@@ -22,6 +17,7 @@ pub enum AuthError {
 }
 
 impl AuthError {
+    #[cfg(test)]
     pub fn code(&self) -> &'static str {
         match self {
             Self::Empty => "empty_credentials",
@@ -38,7 +34,7 @@ impl fmt::Display for AuthError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Empty => f.write_str("这个账号的登录凭据为空，请重新登录后保存。"),
-            Self::Rejected => f.write_str("这个账号的登录已失效，无法自动续期，请重新登录后保存。"),
+            Self::Rejected => f.write_str("此账号未通过身份检查，请重新登录后重试。"),
             Self::Http(stage, status) => {
                 write!(f, "Claude {stage}接口返回 HTTP {status}，请稍后重试。")
             }
@@ -53,7 +49,6 @@ impl fmt::Display for AuthError {
 
 pub trait OAuthClient {
     fn profile(&self, oauth: &Value) -> Result<Value, AuthError>;
-    fn refresh(&self, oauth: &Value) -> Result<Value, AuthError>;
 }
 
 pub struct HttpOAuthClient {
@@ -88,27 +83,6 @@ impl OAuthClient for HttpOAuthClient {
             "身份核验",
         )
     }
-
-    fn refresh(&self, oauth: &Value) -> Result<Value, AuthError> {
-        let refresh = token(oauth, "refreshToken").ok_or(AuthError::Rejected)?;
-        let mut body = json!({
-            "grant_type": "refresh_token",
-            "refresh_token": refresh,
-            "client_id": token(oauth, "clientId").unwrap_or(CLIENT_ID),
-        });
-        if let Some(scopes) = oauth.get("scopes").and_then(Value::as_array) {
-            let scopes = scopes
-                .iter()
-                .filter_map(Value::as_str)
-                .collect::<Vec<_>>()
-                .join(" ");
-            if !scopes.is_empty() {
-                body["scope"] = Value::String(scopes);
-            }
-        }
-        let response = response_json(self.agent.post(TOKEN_URL).send_json(body), "续期")?;
-        merge_refresh(oauth, &response, Utc::now().timestamp_millis())
-    }
 }
 
 fn response_json(
@@ -139,6 +113,7 @@ pub fn token<'a>(oauth: &'a Value, field: &str) -> Option<&'a str> {
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|s| !s.is_empty())
+        .filter(|s| s.bytes().all(|b| (0x21..=0x7e).contains(&b)))
 }
 
 pub fn has_credentials(oauth: &Value) -> bool {
@@ -169,42 +144,14 @@ pub fn verify_identity(account: &Value, profile: &Value) -> Result<(), AuthError
     }
 }
 
-fn merge_refresh(oauth: &Value, response: &Value, now: i64) -> Result<Value, AuthError> {
-    let access = token(response, "access_token").ok_or(AuthError::InvalidResponse)?;
-    let ttl = response
-        .get("expires_in")
-        .and_then(Value::as_i64)
-        .filter(|n| *n > 0)
-        .and_then(|n| n.checked_mul(1000))
-        .and_then(|n| now.checked_add(n))
-        .ok_or(AuthError::InvalidResponse)?;
-    let mut next = oauth.clone();
-    next["accessToken"] = json!(access);
-    next["expiresAt"] = json!(ttl);
-    if let Some(refresh) = token(response, "refresh_token") {
-        next["refreshToken"] = json!(refresh);
-    }
-    if let Some(expiry) = response
-        .get("refresh_token_expires_in")
-        .and_then(Value::as_i64)
-        .filter(|n| *n > 0)
-        .and_then(|n| n.checked_mul(1000))
-        .and_then(|n| now.checked_add(n))
-    {
-        next["refreshTokenExpiresAt"] = json!(expiry);
-    }
-    if let Some(scope) = response.get("scope").and_then(Value::as_str) {
-        next["scopes"] = json!(scope.split_whitespace().collect::<Vec<_>>());
-    }
-    Ok(next)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn rejects_empty_tokens_and_requests_refresh_for_expired_access() {
+        assert!(!has_credentials(&json!({"accessToken": "bad\ntoken"})));
         assert!(!has_credentials(
             &json!({"accessToken": " ", "refreshToken": ""})
         ));
@@ -229,22 +176,6 @@ mod tests {
             verify_identity(&account, &json!({})),
             Err(AuthError::InvalidResponse)
         );
-    }
-
-    #[test]
-    fn refresh_preserves_missing_refresh_token_and_other_credential_fields() {
-        let old = json!({"accessToken": "old", "refreshToken": "keep", "subscriptionType": "pro", "custom": true});
-        let refreshed = merge_refresh(
-            &old,
-            &json!({"access_token": "new", "expires_in": 60}),
-            1000,
-        )
-        .unwrap();
-        assert_eq!(refreshed["accessToken"], "new");
-        assert_eq!(refreshed["refreshToken"], "keep");
-        assert_eq!(refreshed["expiresAt"], 61000);
-        assert_eq!(refreshed["subscriptionType"], "pro");
-        assert_eq!(refreshed["custom"], true);
     }
 
     #[test]

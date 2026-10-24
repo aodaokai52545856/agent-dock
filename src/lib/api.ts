@@ -381,20 +381,20 @@ export async function listLivePtys(): Promise<LivePtyInfo[]> {
 }
 
 export async function appVersion(): Promise<string> {
-  if (!isTauri) return '0.1.11'
+  if (!isTauri) return '0.1.12'
   return invoke('app_version')
 }
 
 export async function checkAppUpdate(proxyUrl?: string): Promise<AppUpdateInfo> {
   if (!isTauri) {
     return {
-      localVersion: '0.1.11',
-      latestVersion: '0.1.11',
+      localVersion: '0.1.12',
+      latestVersion: '0.1.12',
       compare: '已是最新',
       kind: 'win-setup',
       kindLabel: 'Windows 安装包',
-      assetName: 'AgentDock-0.1.11-Setup.exe',
-      htmlUrl: 'https://github.com/aodaokai52545856/agent-dock/releases/tag/v0.1.11'
+      assetName: 'AgentDock-0.1.12-Setup.exe',
+      htmlUrl: 'https://github.com/aodaokai52545856/agent-dock/releases/tag/v0.1.12'
     }
   }
   return invoke('check_app_update', { proxyUrl: proxyUrl || null })
@@ -619,9 +619,28 @@ export async function deleteClaudeAccount(accountId: string): Promise<ClaudeAcco
   return invoke('delete_claude_account', { accountId })
 }
 
-export async function loginClaudeAccount(): Promise<ClaudeAccountList> {
+export async function loginClaudeAccount(accountId: string): Promise<ClaudeAccountList> {
   if (!isTauri) return emptyClaudeAccounts()
-  return invoke('login_claude_account')
+  return invoke('login_claude_account', { accountId })
+}
+
+export async function createClaudeAccount(name: string, proxy: string): Promise<ClaudeAccountList> {
+  if (!isTauri) return emptyClaudeAccounts()
+  return invoke('create_claude_account', { name, proxy })
+}
+
+export async function verifyClaudeAccount(accountId: string): Promise<ClaudeAccountList> {
+  if (!isTauri) return emptyClaudeAccounts()
+  return invoke('verify_claude_account', { accountId })
+}
+
+export async function cancelClaudeLogin(): Promise<void> {
+  if (isTauri) await invoke('cancel_claude_login')
+}
+
+export async function updateClaudeAccount(accountId: string, name: string, proxy: string): Promise<ClaudeAccountList> {
+  if (!isTauri) return emptyClaudeAccounts()
+  return invoke('update_claude_account', { accountId, name, proxy })
 }
 
 const previewUsage = (): GrokUsage => {

@@ -14,13 +14,13 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/aodaokai52545856/agent-dock/releases/tag/v0.1.11"><img src="https://img.shields.io/badge/⬇%20Download-v0.1.11-0A0A0A?style=for-the-badge&logo=github&logoColor=white" alt="Download v0.1.11"></a>
+  <a href="https://github.com/aodaokai52545856/agent-dock/releases/tag/v0.1.12"><img src="https://img.shields.io/badge/⬇%20Download-v0.1.12-0A0A0A?style=for-the-badge&logo=github&logoColor=white" alt="Download v0.1.12"></a>
   &nbsp;
   <a href="#快速开始"><img src="https://img.shields.io/badge/Quick_Start-启动-1a1a1a?style=for-the-badge" alt="Quick Start"></a>
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.1.11-111111?style=flat-square" alt="version">
+  <img src="https://img.shields.io/badge/version-0.1.12-111111?style=flat-square" alt="version">
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-0d0d0d?style=flat-square" alt="platform">
   <img src="https://img.shields.io/badge/stack-Tauri%202%20·%20Vue%203%20·%20Rust-141414?style=flat-square" alt="stack">
   <img src="https://img.shields.io/badge/license-Apache%202.0-3d9a6a?style=flat-square" alt="license">
@@ -29,7 +29,7 @@
 <p align="center">
   <a href="#下载">下载</a>
   ·
-  <a href="#v0111-新能力">新能力</a>
+  <a href="#v0112-新能力">新能力</a>
   ·
   <a href="#能力">能力</a>
   ·
@@ -65,6 +65,27 @@
 本机已经有 `opencode`、`grok`、`kimi`、`claude`、Pi、DeepSeek、Cursor、Codex，但它们散落在各自终端和窗口里：会话难找、代理不一致、开发和审查抢同一条 thread。
 
 **Agent Dock** 把它们收进一个 frameless 深色窗口。客户只装安装包即可运行，不必装 Rust。
+
+---
+
+<a id="v0112-新能力"></a>
+
+## v0.1.12 新能力
+
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <h3>Claude 多账号独立运行</h3>
+      <p>每个账号使用独立目录保存登录、配置与历史。可编辑账号代理，为新会话选择默认账号，已有终端继续运行。</p>
+    </td>
+    <td width="50%" valign="top">
+      <h3>真实身份校验</h3>
+      <p>系统登录核对官方身份，发现缓存与凭证错配时停止启动。旧快照通过重新授权迁移，历史会话自动使用所属账号恢复。</p>
+    </td>
+  </tr>
+</table>
+
+账号管理入口：<b>系统 → Claude 账号</b>。旧账号首次使用点击「迁移并登录」。详见 [多账号使用说明](docs/claude-multi-account.md)。核心机制参考 [multi-claude](https://github.com/jakoes-wu/multi-claude)，许可见 [第三方说明](THIRD_PARTY_NOTICES.md)。
 
 ---
 
@@ -185,19 +206,19 @@
 
 ## 下载
 
-> **v0.1.11** · 跨平台安装包 · 无需本机 Rust
+> **v0.1.12** · 跨平台安装包 · 无需本机 Rust
 
 | 文件 | 平台 | 说明 | 大小约 |
 | :---: | :---: | --- | ---: |
-| [**AgentDock-0.1.11-Setup.exe**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.11/AgentDock-0.1.11-Setup.exe) | Windows | NSIS 安装包（推荐） | ~5.7 MB |
-| [**AgentDock-0.1.11.exe**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.11/AgentDock-0.1.11.exe) | Windows | 绿色便携版 | ~18 MB |
-| [**AgentDock-0.1.11.dmg**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.11/AgentDock-0.1.11.dmg) | macOS | 磁盘映像 | ~8.8 MB |
-| [**AgentDock-0.1.11.app.tar.gz**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.11/AgentDock-0.1.11.app.tar.gz) | macOS | `.app` 压缩包 | ~8.1 MB |
-| [**AgentDock-0.1.11.AppImage**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.11/AgentDock-0.1.11.AppImage) | Linux | 免安装可执行 | ~84 MB |
-| [**AgentDock-0.1.11.deb**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.11/AgentDock-0.1.11.deb) | Linux | Debian / Ubuntu | ~9.0 MB |
+| [**AgentDock-0.1.12-Setup.exe**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.12/AgentDock-0.1.12-Setup.exe) | Windows | NSIS 安装包（推荐） | ~5.7 MB |
+| [**AgentDock-0.1.12.exe**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.12/AgentDock-0.1.12.exe) | Windows | 绿色便携版 | ~18 MB |
+| [**AgentDock-0.1.12.dmg**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.12/AgentDock-0.1.12.dmg) | macOS | 磁盘映像 | ~8.8 MB |
+| [**AgentDock-0.1.12.app.tar.gz**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.12/AgentDock-0.1.12.app.tar.gz) | macOS | `.app` 压缩包 | ~8.1 MB |
+| [**AgentDock-0.1.12.AppImage**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.12/AgentDock-0.1.12.AppImage) | Linux | 免安装可执行 | ~84 MB |
+| [**AgentDock-0.1.12.deb**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.12/AgentDock-0.1.12.deb) | Linux | Debian / Ubuntu | ~9.0 MB |
 
 <p align="center">
-  <a href="https://github.com/aodaokai52545856/agent-dock/releases/tag/v0.1.11"><b>→ 打开 Releases · v0.1.11</b></a>
+  <a href="https://github.com/aodaokai52545856/agent-dock/releases/tag/v0.1.12"><b>→ 打开 Releases · v0.1.12</b></a>
 </p>
 
 **运行前提**
@@ -209,7 +230,7 @@
 | **CLI** | `opencode` / `grok` / `kimi` / `claude` 等自行安装并登录；Dock **不代登录** |
 | **编排** | 自动开发需 Cursor API Key；Codex 审查需本机已登录 Codex |
 
-> **macOS 提示：** CI 产物暂未 Apple 公证。若提示「已损坏」，终端执行 `xattr -cr ~/Downloads/AgentDock-0.1.11.dmg`，或对 app **右键 → 打开**。
+> **macOS 提示：** CI 产物暂未 Apple 公证。若提示「已损坏」，终端执行 `xattr -cr ~/Downloads/AgentDock-0.1.12.dmg`，或对 app **右键 → 打开**。
 
 ---
 
@@ -226,7 +247,7 @@
 | **文档栏** | Grok / Kimi 写出的 plan / spec / doc，可预览 Markdown（含 Mermaid），可引用对话片段 |
 | **城市时钟** | 顶部栏按城市看当地时间；搜索、大洲 / 国家分类；自选城市本机持久化 |
 | **Grok 多账号** | 切换账号会关掉旧 Grok 终端，避免混用身份 |
-| **Claude 多账号** | 切换账号会关掉旧 Claude 终端，避免混用身份 |
+| **Claude 多账号** | 独立目录登录、账号代理、多个账号同时运行；历史会话使用原账号恢复 |
 | **用量与花费** | 状态栏读取 Grok 额度与 token；DeepSeek 显示剩余人民币 |
 | **CLI 版本** | 探测、升级、卸载本机工具；可安装并启动 CC Switch |
 | **DeepSeek 密钥** | 在 Dock 管理 `.credentials.yaml`，明文不进仓库 |
@@ -279,7 +300,7 @@ npm run tauri:dev
 
 **必须在对应系统上打包**，不能从 Windows 打出 `.dmg` / `.AppImage`。产物把界面打进二进制，不再监听开发端口，落到 `release/`。
 
-版本号读 `package.json` 的 `version`。当前 `0.1.11` 会打出 `AgentDock-0.1.11-Setup.exe` 等文件名。
+版本号读 `package.json` 的 `version`。当前 `0.1.12` 会打出 `AgentDock-0.1.12-Setup.exe` 等文件名。
 
 ```bash
 npm run pack          # 当前系统

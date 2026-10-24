@@ -600,17 +600,7 @@ async function onGrokSwitched() {
 }
 
 async function onClaudeSwitched() {
-  const claudeLive = store.live.filter((item) => item.toolId === 'claude')
-  for (const item of claudeLive) {
-    await api.ptyKill(item.ptyId)
-    termRef.value?.dispose(item.ptyId)
-    markPtyExit(item.ptyId)
-  }
-  if (claudeLive.length) {
-    showToast('已切换 Claude 账号，并关掉旧终端')
-  } else {
-    showToast('已切换 Claude 账号')
-  }
+  showToast('已更新 Claude 默认账号，新会话使用此账号')
   if (store.selectedTool === 'claude') {
     void refreshSessions()
   }

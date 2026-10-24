@@ -1,29 +1,54 @@
-use crate::claude_oauth::{self, AuthError, HttpOAuthClient, OAuthClient};
-use crate::platform;
-use crate::proxy::proxy_env;
-use crate::state::AppSettings;
-use crate::tools::{self, ToolId};
+//! Directory identities adapted from multi-claude's env.py, launcher.py and
+//! identity.py. Attribution: THIRD_PARTY_NOTICES.md. Claude owns token refresh;
+//! Dock never swaps, copies or restores live credentials.
+use crate::claude_oauth::{self, HttpOAuthClient, OAuthClient};
+use crate::{
+    platform,
+    state::AppSettings,
+    tools::{self, ToolId},
+};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Map, Value};
-use std::fs;
-use std::io::Write;
-use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::sync::{Mutex, MutexGuard};
+use serde_json::{json, Value};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, MutexGuard, OnceLock};
+use std::time::{Duration, Instant};
+use std::{
+    collections::BTreeMap,
+    fs,
+    path::{Path, PathBuf},
+    process::Command,
+};
 use tauri::{AppHandle, Manager};
 use uuid::Uuid;
 
-const ANTHROPIC_ENV_KEYS: [&str; 3] = [
+const SYSTEM: &str = "system";
+const AUTH_ENV: &[&str] = &[
     "ANTHROPIC_API_KEY",
     "ANTHROPIC_AUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
     "ANTHROPIC_BASE_URL",
+    "CLAUDE_SECURESTORAGE_CONFIG_DIR",
+    "CLAUDE_CODE_CUSTOM_OAUTH_URL",
+    "CLAUDE_CONFIG_DIR",
+    "CLAUDE_HOME",
 ];
-static AUTH_OPERATION: Mutex<()> = Mutex::new(());
-#[cfg(all(target_os = "macos", not(test)))]
-const KEYCHAIN_SERVICE: &str = "Claude Code-credentials";
+const PROXY_ENV: &[&str] = &[
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+    "NO_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "all_proxy",
+    "no_proxy",
+];
+static OPERATION: Mutex<()> = Mutex::new(());
+static STORE: OnceLock<PathBuf> = OnceLock::new();
+static CANCEL_LOGIN: AtomicBool = AtomicBool::new(false);
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ClaudeAccount {
     pub id: String,
@@ -33,6 +58,11 @@ pub struct ClaudeAccount {
     pub subscription_type: String,
     pub updated_at: String,
     pub active: bool,
+    pub config_dir: String,
+    pub source: String,
+    pub status: String,
+    pub message: String,
+    pub proxy: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -44,1420 +74,1494 @@ pub struct ClaudeAccountList {
     pub accounts: Vec<ClaudeAccount>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct AccountIndex {
-    accounts: Vec<AccountMeta>,
+struct ProfileIndex {
+    #[serde(default)]
+    default_account_id: Option<String>,
+    #[serde(default)]
+    accounts: Vec<Profile>,
+    // Retain directory ownership for open terminals and history after removal.
+    #[serde(default)]
+    retired: Vec<Profile>,
+    #[serde(default)]
+    hidden_legacy: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct AccountMeta {
+struct Profile {
     id: String,
     name: String,
+    config_dir: PathBuf,
+    #[serde(default)]
+    system: bool,
+    #[serde(default)]
+    explicit_config: bool,
+    #[serde(default)]
     email: String,
+    #[serde(default)]
     account_uuid: String,
     #[serde(default)]
     subscription_type: String,
+    #[serde(default)]
     updated_at: String,
+    #[serde(default = "inherit_proxy")]
+    proxy: String,
+    #[serde(default)]
+    verification_pending: bool,
+    #[serde(default)]
+    system_identity: Option<SystemIdentity>,
 }
 
-#[derive(Debug, Clone)]
-struct Identity {
-    email: String,
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SystemIdentity {
+    access_token_hash: String,
     account_uuid: String,
-    display: String,
-    subscription_type: String,
+    email: String,
 }
 
-#[derive(Debug, Clone)]
-struct LivePaths {
-    credentials: PathBuf,
-    claude_json: PathBuf,
-    settings: PathBuf,
+fn inherit_proxy() -> String {
+    "inherit".into()
 }
 
-pub fn list_accounts(app: &AppHandle) -> Result<ClaudeAccountList, String> {
-    let _guard = lock_operation()?;
-    list_accounts_in(&accounts_dir(app)?, &live_paths())
+pub fn initialize(app: &AppHandle) -> Result<(), String> {
+    let _ = STORE.set(accounts_dir(app)?);
+    Ok(())
 }
 
 pub fn lock_operation() -> Result<MutexGuard<'static, ()>, String> {
-    AUTH_OPERATION
+    OPERATION
         .try_lock()
-        .map_err(|_| "Claude 账号正在处理，请稍后再试。".into())
+        .map_err(|_| "Claude 账号正在处理中，请稍后重试。".into())
 }
 
-pub fn save_current(
-    app: &AppHandle,
-    settings: &AppSettings,
-    name: String,
-) -> Result<ClaudeAccountList, String> {
-    let _guard = lock_operation()?;
-    let store = accounts_dir(app)?;
-    let result = save_current_in(
-        &store,
-        &live_paths(),
-        name,
-        &HttpOAuthClient::new(settings)?,
-    );
-    diagnostic(&store, "save_finished", json!({ "ok": result.is_ok() }));
-    result
+fn accounts_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(app
+        .path()
+        .app_data_dir()
+        .map_err(|_| "无法定位应用数据目录。")?
+        .join("claude-accounts"))
 }
 
-pub fn switch_account(
-    app: &AppHandle,
-    settings: &AppSettings,
-    account_id: &str,
-    stop_terminals: impl FnOnce() -> Result<(), String>,
-) -> Result<ClaudeAccountList, String> {
-    let _guard = lock_operation()?;
-    let store = accounts_dir(app)?;
-    diagnostic(&store, "switch_started", json!({ "accountId": account_id }));
-    let result = switch_account_in(
-        &store,
-        &live_paths(),
-        account_id,
-        &HttpOAuthClient::new(settings)?,
-        stop_terminals,
-    );
-    diagnostic(
-        &store,
-        "switch_finished",
-        json!({ "accountId": account_id, "ok": result.is_ok() }),
-    );
-    result
+fn system_profile() -> Profile {
+    let configured = std::env::var_os("CLAUDE_CONFIG_DIR")
+        .filter(|v| !v.is_empty())
+        .or_else(|| std::env::var_os("CLAUDE_HOME").filter(|v| !v.is_empty()));
+    Profile {
+        id: SYSTEM.into(),
+        name: "系统 Claude".into(),
+        explicit_config: configured.is_some(),
+        config_dir: tools::claude_home(),
+        system: true,
+        email: String::new(),
+        account_uuid: String::new(),
+        subscription_type: String::new(),
+        updated_at: String::new(),
+        proxy: inherit_proxy(),
+        verification_pending: false,
+        system_identity: None,
+    }
 }
 
-pub fn delete_account(app: &AppHandle, account_id: &str) -> Result<ClaudeAccountList, String> {
-    let _guard = lock_operation()?;
-    delete_account_in(&accounts_dir(app)?, account_id, &live_paths())
+fn config_file(profile: &Profile) -> PathBuf {
+    if profile.explicit_config {
+        profile.config_dir.join(".claude.json")
+    } else {
+        profile.config_dir.with_extension("json")
+    }
 }
 
-pub fn login_new(
-    app: &AppHandle,
-    settings: &AppSettings,
-    stop_terminals: impl FnOnce() -> Result<(), String>,
-) -> Result<ClaudeAccountList, String> {
-    let _guard = lock_operation()?;
-    let store = accounts_dir(app)?;
-    let live = live_paths();
-    let exe = tools::resolve_binary(ToolId::Claude, settings)?;
-    let proxy = proxy_env(
-        !settings.default_proxy_url.trim().is_empty(),
-        &settings.default_proxy_url,
-    )?;
-    let client = HttpOAuthClient::new(settings)?;
-    stop_terminals()?;
-    preserve_current(&store, &live, &client)?;
-    let backup = LiveBackup::capture(&live)?;
-    diagnostic(&store, "login_started", json!({}));
+fn read_json(path: &Path) -> Result<Value, String> {
+    let bytes =
+        fs::read(path).map_err(|_| format!("无法读取 {}，请检查文件权限。", path.display()))?;
+    serde_json::from_slice(&bytes)
+        .map_err(|_| format!("{} 格式损坏，请修复后重试。", path.display()))
+}
+
+fn load_index(store: &Path) -> Result<ProfileIndex, String> {
+    let path = store.join("profiles.json");
+    if !path.exists() {
+        return Ok(ProfileIndex::default());
+    }
+    serde_json::from_value(read_json(&path)?)
+        .map_err(|_| "Claude 账号索引损坏，请检查 profiles.json。".into())
+}
+
+fn write_json(path: &Path, value: &impl Serialize) -> Result<(), String> {
+    let parent = path.parent().ok_or("文件路径不合法。")?;
+    fs::create_dir_all(parent).map_err(|_| "无法创建 Claude 账号目录。")?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(parent, fs::Permissions::from_mode(0o700))
+            .map_err(|_| "无法设置账号目录权限。")?;
+    }
+    let tmp = parent.join(format!(".{}.tmp", Uuid::new_v4()));
+    let data = serde_json::to_vec_pretty(value).map_err(|_| "无法保存 Claude 账号配置。")?;
+    use std::io::Write;
     let result = (|| {
-        clear_live_auth(&live)?;
-        strip_anthropic_env(&live.settings)?;
-        run_claude(&exe, &["auth", "login", "--claudeai"], &proxy, true)?;
-        save_current_in(&store, &live, String::new(), &client)
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options
+            .open(&tmp)
+            .map_err(|_| "无法写入 Claude 账号配置。")?;
+        file.write_all(&data)
+            .and_then(|_| file.sync_all())
+            .map_err(|_| "无法写入 Claude 账号配置。")?;
+        fs::rename(&tmp, path).map_err(|_| "无法保存 Claude 账号配置，请检查文件权限。")
     })();
     if result.is_err() {
-        rollback(&store, &backup)?;
+        let _ = fs::remove_file(&tmp);
     }
-    diagnostic(&store, "login_finished", json!({ "ok": result.is_ok() }));
-    result
+    Ok(result?)
 }
 
-fn list_accounts_in(store: &Path, live: &LivePaths) -> Result<ClaudeAccountList, String> {
-    // Listing must never overwrite a snapshot from an unverified live identity.
-    let current = read_live_identity(live);
-    let index = load_index(store)?;
-    let current_id = current
-        .as_ref()
-        .and_then(|id| find_meta(&index, id).map(|item| item.id.clone()));
-    let accounts = index
+fn save_index(store: &Path, index: &ProfileIndex) -> Result<(), String> {
+    write_json(&store.join("profiles.json"), index)
+}
+
+fn profiles(index: &ProfileIndex) -> Vec<Profile> {
+    let mut out = vec![index
         .accounts
+        .iter()
+        .find(|p| p.id == SYSTEM)
+        .cloned()
+        .unwrap_or_else(system_profile)];
+    out.extend(index.accounts.iter().filter(|p| p.id != SYSTEM).cloned());
+    out
+}
+
+fn selected(index: &ProfileIndex) -> Result<Profile, String> {
+    let id = index.default_account_id.as_deref().unwrap_or(SYSTEM);
+    profiles(index)
         .into_iter()
-        .map(|item| ClaudeAccount {
-            active: current_id.as_deref() == Some(item.id.as_str()),
-            id: item.id,
-            name: item.name,
-            email: item.email,
-            account_uuid: item.account_uuid,
-            subscription_type: item.subscription_type,
-            updated_at: item.updated_at,
-        })
+        .find(|p| p.id == id)
+        .ok_or_else(|| "默认 Claude 账号不存在，请重新选择。".into())
+}
+
+fn oauth_account(profile: &Profile) -> Option<Value> {
+    read_json(&config_file(profile))
+        .ok()?
+        .get("oauthAccount")
+        .filter(|v| v.is_object())
+        .cloned()
+}
+
+fn credentials(profile: &Profile) -> Result<Option<Value>, String> {
+    #[cfg(all(target_os = "macos", not(test)))]
+    {
+        let service = keychain_service(profile);
+        let output = Command::new("security")
+            .args(["find-generic-password", "-s", &service, "-w"])
+            .stderr(std::process::Stdio::null())
+            .output()
+            .map_err(|_| "无法读取 macOS Claude 钥匙串。")?;
+        if output.status.success() {
+            let root: Value =
+                serde_json::from_slice(&output.stdout).map_err(|_| "Claude 钥匙串数据损坏。")?;
+            return Ok(root.get("claudeAiOauth").cloned());
+        }
+        if output.status.code() != Some(44) {
+            return Err("Claude 钥匙串不可用，请解锁后重试。".into());
+        }
+    }
+    let path = profile.config_dir.join(".credentials.json");
+    if !path.exists() {
+        return Ok(None);
+    }
+    Ok(read_json(&path)?.get("claudeAiOauth").cloned())
+}
+
+#[cfg(target_os = "macos")]
+fn keychain_service(profile: &Profile) -> String {
+    use sha2::{Digest, Sha256};
+    use unicode_normalization::UnicodeNormalization;
+    let base = "Claude Code-credentials";
+    if !profile.explicit_config {
+        return base.into();
+    }
+    // Hash the exact launcher path (NFC), without resolving symlinks.
+    let normalized: String = profile.config_dir.to_string_lossy().nfc().collect();
+    format!(
+        "{base}-{}",
+        &format!("{:x}", Sha256::digest(normalized.as_bytes()))[..8]
+    )
+}
+
+fn identity_matches(profile: &Profile, account: &Value) -> bool {
+    // The system entry follows external CLI logins; its saved label must never
+    // pin it to an old identity. Verify live metadata against the actual token.
+    if profile.system {
+        return true;
+    }
+    if !profile.account_uuid.is_empty() {
+        account.get("accountUuid").and_then(Value::as_str) == Some(profile.account_uuid.as_str())
+    } else if !profile.email.is_empty() {
+        account
+            .get("emailAddress")
+            .and_then(Value::as_str)
+            .is_some_and(|e| e.eq_ignore_ascii_case(&profile.email))
+    } else {
+        true
+    }
+}
+
+fn token_hash(oauth: &Value) -> Option<String> {
+    use sha2::{Digest, Sha256};
+    let token = claude_oauth::token(oauth, "accessToken")?;
+    Some(format!("{:x}", Sha256::digest(token.as_bytes())))
+}
+
+fn system_identity_problem(
+    profile: &Profile,
+    account: Option<&Value>,
+    oauth: Option<&Value>,
+) -> Option<(&'static str, String)> {
+    if !profile.system {
+        return None;
+    }
+    let oauth = oauth.filter(|v| claude_oauth::has_credentials(v))?;
+    let checked = profile
+        .system_identity
+        .as_ref()
+        .filter(|checked| token_hash(oauth).as_deref() == Some(checked.access_token_hash.as_str()));
+    let Some(checked) = checked else {
+        return Some((
+            "unverified",
+            "系统登录尚未核验，请点击「检查登录」。本地邮箱缓存不能证明凭证归属。".into(),
+        ));
+    };
+    if account
+        .and_then(|a| a.get("accountUuid"))
+        .and_then(Value::as_str)
+        != Some(checked.account_uuid.as_str())
+    {
+        let actual = checked
+            .email
+            .split_once('@')
+            .map(|(name, domain)| {
+                format!("{}***@{domain}", name.chars().take(2).collect::<String>())
+            })
+            .unwrap_or_else(|| "另一个账号".into());
+        return Some(("conflict", format!("系统缓存身份与实际登录凭证不一致，凭证实际属于 {actual}。请在独立目录登录目标账号，或在系统终端重新登录后再检查。")));
+    }
+    None
+}
+
+fn row(profile: &Profile, active: bool) -> ClaudeAccount {
+    let account = oauth_account(profile);
+    let oauth = credentials(profile);
+    let (status, message) = if !profile.config_dir.is_dir() {
+        (
+            "broken",
+            "账号目录不存在，请恢复目录或重新创建账号。".into(),
+        )
+    } else if account
+        .as_ref()
+        .is_some_and(|a| !identity_matches(profile, a))
+    {
+        (
+            "conflict",
+            "登录身份与此账号不符，请重新登录对应邮箱。".into(),
+        )
+    } else if account.is_none()
+        && oauth
+            .as_ref()
+            .ok()
+            .and_then(|v| v.as_ref())
+            .is_some_and(claude_oauth::has_credentials)
+    {
+        (
+            "unverified",
+            "未找到此目录的账号身份，请重新登录以恢复身份信息。".into(),
+        )
+    } else if let Some(problem) = system_identity_problem(
+        profile,
+        account.as_ref(),
+        oauth.as_ref().ok().and_then(|v| v.as_ref()),
+    ) {
+        problem
+    } else if profile.verification_pending
+        && oauth
+            .as_ref()
+            .ok()
+            .and_then(|v| v.as_ref())
+            .is_some_and(claude_oauth::has_credentials)
+    {
+        (
+            "unverified",
+            "登录尚未通过身份检查；如已完成授权，请点击「检查登录」。".into(),
+        )
+    } else if let Some(message) = auth_override(&[
+        profile.config_dir.join("settings.json"),
+        config_file(profile),
+    ]) {
+        ("conflict", message)
+    } else {
+        match &oauth {
+            Err(err) => ("broken", err.clone()),
+            Ok(Some(value)) if claude_oauth::has_credentials(value) => {
+                if claude_oauth::needs_refresh(value) {
+                    if claude_oauth::token(value, "refreshToken").is_some() {
+                        (
+                            "refreshable",
+                            "访问令牌已到期；启动时由 Claude 自动续期。".into(),
+                        )
+                    } else {
+                        ("signedOut", "登录已到期，请重新登录。".into())
+                    }
+                } else {
+                    (
+                        "ready",
+                        "已检测到本地登录，实际可用性由 Claude 确认。".into(),
+                    )
+                }
+            }
+            _ => ("signedOut", "尚未登录此账号，请点击登录。".into()),
+        }
+    };
+    let text = |key: &str| {
+        account
+            .as_ref()
+            .and_then(|a| a.get(key))
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string()
+    };
+    ClaudeAccount {
+        id: profile.id.clone(),
+        name: profile.name.clone(),
+        email: if profile.system || profile.email.is_empty() {
+            text("emailAddress")
+        } else {
+            profile.email.clone()
+        },
+        account_uuid: if profile.system || profile.account_uuid.is_empty() {
+            text("accountUuid")
+        } else {
+            profile.account_uuid.clone()
+        },
+        subscription_type: oauth
+            .ok()
+            .flatten()
+            .and_then(|v| {
+                v.get("subscriptionType")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            })
+            .unwrap_or_else(|| profile.subscription_type.clone()),
+        updated_at: profile.updated_at.clone(),
+        active,
+        config_dir: profile.config_dir.to_string_lossy().into_owned(),
+        source: if profile.system { "system" } else { "isolated" }.into(),
+        status: status.into(),
+        message,
+        proxy: profile.proxy.clone(),
+    }
+}
+
+fn legacy_rows(store: &Path, index: &ProfileIndex) -> Result<Vec<ClaudeAccount>, String> {
+    let path = store.join("index.json");
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let legacy = read_json(&path)?;
+    let entries = legacy
+        .get("accounts")
+        .and_then(Value::as_array)
+        .ok_or("旧版 Claude 账号索引损坏。")?;
+    let mut rows = Vec::new();
+    for entry in entries {
+        let text = |key: &str| {
+            entry
+                .get(key)
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string()
+        };
+        let id = text("id");
+        validate_id(&id)?;
+        if index
+            .accounts
+            .iter()
+            .chain(&index.retired)
+            .any(|p| p.id == id)
+            || index.hidden_legacy.contains(&id)
+        {
+            continue;
+        }
+        rows.push(ClaudeAccount {
+            id,
+            name: text("name"),
+            email: text("email"),
+            account_uuid: text("accountUuid"),
+            subscription_type: text("subscriptionType"),
+            updated_at: text("updatedAt"),
+            active: false,
+            config_dir: String::new(),
+            source: "legacy".into(),
+            status: "legacy".into(),
+            message: "旧版凭证快照。登录后转为独立账号，原快照保留。".into(),
+            proxy: inherit_proxy(),
+        });
+    }
+    Ok(rows)
+}
+
+fn list_in(store: &Path) -> Result<ClaudeAccountList, String> {
+    let index = load_index(store)?;
+    let current = selected(&index)?;
+    let mut accounts: Vec<_> = profiles(&index)
+        .iter()
+        .map(|p| row(p, p.id == current.id))
         .collect();
+    let current_row = accounts
+        .iter()
+        .find(|r| r.active)
+        .expect("selected profile exists");
+    let logged_in = matches!(current_row.status.as_str(), "ready" | "refreshable");
+    let current_email = current_row.email.clone();
+    let current_name = current_row.name.clone();
+    accounts.extend(legacy_rows(store, &index)?);
     Ok(ClaudeAccountList {
-        logged_in: current.is_some(),
-        current_email: current
-            .as_ref()
-            .map(|item| item.email.clone())
-            .unwrap_or_default(),
-        current_name: current
-            .as_ref()
-            .map(|item| item.display.clone())
-            .unwrap_or_default(),
+        logged_in,
+        current_email,
+        current_name,
         accounts,
     })
 }
 
-fn save_current_in(
-    store: &Path,
-    live: &LivePaths,
-    name: String,
-    client: &impl OAuthClient,
-) -> Result<ClaudeAccountList, String> {
-    let oauth = read_claude_ai_oauth(live)
-        .filter(claude_oauth::has_credentials)
-        .ok_or_else(|| AuthError::Empty.to_string())?;
-    let account = read_oauth_account(live)?
-        .ok_or_else(|| "没有找到 ~/.claude.json，请先成功登录过一次 Claude Code。".to_string())?;
-    let oauth = verified_oauth(store, oauth, &account, client, |next| {
-        write_live_oauth(live, next)
-    })?;
-    let identity = identity_from_account(&account, Some(&oauth))
-        .ok_or_else(|| "Claude 账号信息不完整，请重新登录。".to_string())?;
-    let mut index = load_index(store)?;
-    let now = Utc::now().to_rfc3339();
-    let label = normalize_name(&name, &identity);
-    if let Some(existing) = find_meta_mut(&mut index, &identity) {
-        if !name.trim().is_empty() {
-            existing.name = label;
-        }
-        existing.email = identity.email.clone();
-        existing.account_uuid = identity.account_uuid.clone();
-        existing.subscription_type = identity.subscription_type.clone();
-        existing.updated_at = now;
-        write_snapshot(store, &existing.id, &oauth, &account)?;
-    } else {
-        let id = Uuid::new_v4().to_string();
-        write_snapshot(store, &id, &oauth, &account)?;
-        index.accounts.push(AccountMeta {
-            id,
-            name: label,
-            email: identity.email,
-            account_uuid: identity.account_uuid,
-            subscription_type: identity.subscription_type,
-            updated_at: now,
-        });
-    }
-    save_index(store, &index)?;
-    list_accounts_in(store, live)
-}
-
-fn switch_account_in(
-    store: &Path,
-    live: &LivePaths,
-    account_id: &str,
-    client: &impl OAuthClient,
-    stop_terminals: impl FnOnce() -> Result<(), String>,
-) -> Result<ClaudeAccountList, String> {
-    validate_id(account_id)?;
-    let index = load_index(store)?;
-    let meta = index
-        .accounts
-        .iter()
-        .find(|item| item.id == account_id)
-        .ok_or_else(|| "没有这个 Claude 账号快照。".to_string())?;
-    let cred_path = snapshot_credentials(store, account_id)?;
-    let account_path = snapshot_oauth_account(store, account_id)?;
-    if !cred_path.is_file() || !account_path.is_file() {
-        return Err("这个账号的登录文件丢了，请重新登录并保存。".into());
-    }
-    let pending = cred_path.with_file_name("pending-credentials.json");
-    let cred = read_json(if pending.is_file() {
-        &pending
-    } else {
-        &cred_path
-    })?;
-    let oauth = cred
-        .get("claudeAiOauth")
-        .cloned()
-        .filter(claude_oauth::has_credentials)
-        .ok_or_else(|| AuthError::Empty.to_string())?;
-    let account = read_json(&account_path)?;
-    let identity = identity_from_account(&account, Some(&oauth))
-        .ok_or_else(|| "这个账号的信息不完整，请重新登录并保存。".to_string())?;
-    if !identity_matches(meta, &identity) {
-        return Err(AuthError::IdentityMismatch.to_string());
-    }
-    // No Claude process owned by Dock may still be writing the outgoing login.
-    stop_terminals()?;
-    diagnostic(store, "terminals_stopped", json!({}));
-    preserve_current(store, live, client)?;
-    // The outgoing account may have been the selected account; re-read its latest
-    // credentials after preservation instead of restoring an older token copy.
-    let cred = read_json(if pending.is_file() {
-        &pending
-    } else {
-        &cred_path
-    })?;
-    let oauth = cred
-        .get("claudeAiOauth")
-        .cloned()
-        .ok_or_else(|| AuthError::Empty.to_string())?;
-    let oauth = verified_oauth(store, oauth, &account, client, |next| {
-        // Refresh tokens rotate. Keep the new grant even if the later profile
-        // request fails, and resume from it on the next attempt.
-        write_atomic(
-            &pending,
-            serde_json::to_vec_pretty(&json!({ "claudeAiOauth": next }))
-                .map_err(|_| "保存续期凭据失败。")?,
-            true,
-        )
-    })?;
-    let backup = LiveBackup::capture(live)?;
-    let result = (|| {
-        write_live_oauth(live, &oauth)?;
-        write_live_oauth_account(live, Some(&account))?;
-        strip_anthropic_env(&live.settings)?;
-        write_snapshot(store, account_id, &oauth, &account)?;
-        list_accounts_in(store, live)
-    })();
-    if result.is_err() {
-        rollback(store, &backup)?;
-    } else if pending.exists() {
-        let _ = fs::remove_file(&pending);
-    }
-    result
-}
-
-fn delete_account_in(
-    store: &Path,
-    account_id: &str,
-    live: &LivePaths,
-) -> Result<ClaudeAccountList, String> {
-    validate_id(account_id)?;
-    let mut index = load_index(store)?;
-    index.accounts.retain(|item| item.id != account_id);
-    save_index(store, &index)?;
-    let dir = store.join(account_id);
-    if dir.exists() {
-        fs::remove_dir_all(&dir).map_err(|err| format!("删除账号快照失败：{err}"))?;
-    }
-    list_accounts_in(store, live)
-}
-
-fn preserve_current(
-    store: &Path,
-    live: &LivePaths,
-    client: &impl OAuthClient,
-) -> Result<(), String> {
-    if read_live_identity(live).is_some() {
-        let result = save_current_in(store, live, String::new(), client);
-        if result.is_err() {
-            // An invalid outgoing identity must not block switching to a valid
-            // account. Preserve its raw grant separately, never under a possibly
-            // incorrect account label, before allowing the live file to change.
-            let oauth =
-                read_claude_ai_oauth(live).ok_or("无法保留当前 Claude 凭据，已取消账号操作。")?;
-            let account = read_oauth_account(live)?;
-            let recovery = store.join(format!("unverified-live-{}.json", Uuid::new_v4()));
-            write_atomic(
-                &recovery,
-                serde_json::to_vec_pretty(&json!({
-                    "claudeAiOauth": oauth, "oauthAccount": account,
-                }))
-                .map_err(|_| "无法备份当前 Claude 登录。")?,
-                true,
-            )?;
-        }
-        diagnostic(
-            store,
-            "preserve_current",
-            json!({ "verified": result.is_ok(), "recoverySaved": result.is_err() }),
-        );
-    }
-    Ok(())
-}
-
-fn verified_oauth(
-    store: &Path,
-    mut oauth: Value,
-    account: &Value,
-    client: &impl OAuthClient,
-    mut checkpoint: impl FnMut(&Value) -> Result<(), String>,
-) -> Result<Value, String> {
-    if !claude_oauth::has_credentials(&oauth) {
-        return Err(AuthError::Empty.to_string());
-    }
-    diagnostic(
-        store,
-        "verify_started",
-        json!({
-            "hasAccessToken": claude_oauth::token(&oauth, "accessToken").is_some(),
-            "hasRefreshToken": claude_oauth::token(&oauth, "refreshToken").is_some(),
-            "expiresAt": oauth.get("expiresAt").and_then(Value::as_i64),
-        }),
-    );
-    let refresh_first = claude_oauth::needs_refresh(&oauth);
-    if refresh_first {
-        oauth = logged_auth(store, "refresh", client.refresh(&oauth))?;
-        checkpoint(&oauth)?;
-    }
-    let profile = match client.profile(&oauth) {
-        Err(AuthError::Rejected) if !refresh_first => {
-            oauth = logged_auth(store, "refresh_after_rejection", client.refresh(&oauth))?;
-            checkpoint(&oauth)?;
-            logged_auth(store, "profile", client.profile(&oauth))?
-        }
-        result => logged_auth(store, "profile", result)?,
-    };
-    logged_auth(
-        store,
-        "identity",
-        claude_oauth::verify_identity(account, &profile),
-    )?;
-    Ok(oauth)
-}
-
-fn logged_auth<T>(store: &Path, stage: &str, result: Result<T, AuthError>) -> Result<T, String> {
-    let mut fields = json!({ "ok": result.is_ok() });
-    if let Err(err) = &result {
-        fields["code"] = json!(err.code());
-        if let AuthError::Http(_, status) = err {
-            fields["httpStatus"] = json!(status);
-        }
-    }
-    diagnostic(store, stage, fields);
-    result.map_err(|err| err.to_string())
-}
-
-fn diagnostic(store: &Path, event: &str, fields: Value) {
-    // Callers provide only stage names, IDs, booleans and timestamps. Never log
-    // OAuth values, server response bodies or raw command/transport errors.
-    let _ = (|| -> std::io::Result<()> {
-        fs::create_dir_all(store)?;
-        let path = store.join("auth-diagnostics.jsonl");
-        if fs::metadata(&path).is_ok_and(|meta| meta.len() > 1_048_576) {
-            fs::rename(&path, store.join("auth-diagnostics.previous.jsonl"))?;
-        }
-        let mut file = fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)?;
-        writeln!(
-            file,
-            "{}",
-            json!({ "at": Utc::now().to_rfc3339(), "event": event, "details": fields })
-        )
-    })();
-}
-
-struct LiveBackup {
-    files: Vec<(PathBuf, Option<Vec<u8>>, bool)>,
-    oauth: Option<Value>,
-}
-
-impl LiveBackup {
-    fn capture(live: &LivePaths) -> Result<Self, String> {
-        let mut files = Vec::new();
-        for (path, secret) in [
-            (&live.credentials, true),
-            (&live.claude_json, false),
-            (&live.settings, false),
-        ] {
-            let bytes = match fs::read(path) {
-                Ok(bytes) => Some(bytes),
-                Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
-                Err(err) => return Err(format!("无法备份 Claude 配置：{err}")),
-            };
-            files.push((path.clone(), bytes, secret));
-        }
-        Ok(Self {
-            files,
-            oauth: read_claude_ai_oauth(live),
-        })
-    }
-
-    fn restore(&self) -> Result<(), String> {
-        let mut failed = false;
-        for (path, bytes, secret) in &self.files {
-            let result = match bytes {
-                Some(bytes) => write_atomic(path, bytes, *secret),
-                None if path.exists() => fs::remove_file(path).map_err(|err| err.to_string()),
-                None => Ok(()),
-            };
-            failed |= result.is_err();
-        }
-        failed |= sync_keychain_oauth(self.oauth.as_ref()).is_err();
-        if failed {
-            Err("恢复原 Claude 登录失败，请检查文件权限并重新登录。".into())
-        } else {
-            Ok(())
-        }
-    }
-}
-
-fn rollback(store: &Path, backup: &LiveBackup) -> Result<(), String> {
-    let result = backup.restore();
-    diagnostic(store, "rollback", json!({ "ok": result.is_ok() }));
-    result
-}
-
-fn live_paths() -> LivePaths {
-    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
-    let claude_home = tools::claude_home();
-    LivePaths {
-        credentials: claude_home.join(".credentials.json"),
-        claude_json: home.join(".claude.json"),
-        settings: claude_home.join("settings.json"),
-    }
-}
-
-fn accounts_dir(app: &AppHandle) -> Result<PathBuf, String> {
-    let dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|err| format!("无法定位应用数据目录：{err}"))?
-        .join("claude-accounts");
-    fs::create_dir_all(&dir).map_err(|err| format!("无法创建账号目录：{err}"))?;
-    Ok(dir)
-}
-
-fn index_path(store: &Path) -> PathBuf {
-    store.join("index.json")
+pub fn list_accounts(app: &AppHandle) -> Result<ClaudeAccountList, String> {
+    let _guard = lock_operation()?;
+    list_in(&accounts_dir(app)?)
 }
 
 fn validate_id(id: &str) -> Result<(), String> {
-    if id.is_empty() || id.contains(['/', '\\', '.']) {
+    if id != SYSTEM && Uuid::parse_str(id).is_err() {
         return Err("账号编号不合法。".into());
     }
     Ok(())
 }
 
-fn snapshot_credentials(store: &Path, id: &str) -> Result<PathBuf, String> {
-    validate_id(id)?;
-    Ok(store.join(id).join("credentials.json"))
+fn valid_name(name: &str) -> Result<String, String> {
+    let name = name.trim();
+    if name.is_empty() || name.chars().count() > 40 || name.chars().any(char::is_control) {
+        return Err("账号名称需要 1–40 个字符，不能包含控制字符。".into());
+    }
+    Ok(name.into())
 }
 
-fn snapshot_oauth_account(store: &Path, id: &str) -> Result<PathBuf, String> {
-    validate_id(id)?;
-    Ok(store.join(id).join("oauth-account.json"))
-}
-
-fn load_index(store: &Path) -> Result<AccountIndex, String> {
-    let path = index_path(store);
-    if !path.exists() {
-        return Ok(AccountIndex::default());
+fn normalize_proxy(proxy: &str) -> Result<String, String> {
+    let proxy = proxy.trim();
+    if matches!(proxy, "inherit" | "off") {
+        return Ok(proxy.into());
     }
-    let text = fs::read_to_string(&path).map_err(|err| format!("读取账号列表失败：{err}"))?;
-    serde_json::from_str(&text).map_err(|err| format!("账号列表损坏：{err}"))
-}
-
-fn save_index(store: &Path, index: &AccountIndex) -> Result<(), String> {
-    fs::create_dir_all(store).map_err(|err| format!("无法创建账号目录：{err}"))?;
-    write_atomic(
-        &index_path(store),
-        serde_json::to_string_pretty(index).map_err(|err| format!("序列化账号列表失败：{err}"))?,
-        false,
-    )
-}
-
-fn write_snapshot(store: &Path, id: &str, oauth: &Value, account: &Value) -> Result<(), String> {
-    let cred_path = snapshot_credentials(store, id)?;
-    if let Some(dir) = cred_path.parent() {
-        fs::create_dir_all(dir).map_err(|err| format!("无法创建账号目录：{err}"))?;
-    }
-    let wrapped = json!({ "claudeAiOauth": oauth });
-    write_atomic(
-        &cred_path,
-        serde_json::to_vec_pretty(&wrapped).map_err(|err| format!("序列化登录文件失败：{err}"))?,
-        true,
-    )?;
-    write_atomic(
-        &snapshot_oauth_account(store, id)?,
-        serde_json::to_vec_pretty(account).map_err(|err| format!("序列化账号缓存失败：{err}"))?,
-        false,
-    )?;
-    let pending = cred_path.with_file_name("pending-credentials.json");
-    if pending.exists() {
-        fs::remove_file(pending).map_err(|_| "清理旧续期凭据失败，请检查账号目录权限。")?;
-    }
-    Ok(())
-}
-
-fn write_live_oauth(live: &LivePaths, oauth: &Value) -> Result<(), String> {
-    let mut root = read_json_object_or_empty(&live.credentials)?;
-    root.insert("claudeAiOauth".into(), oauth.clone());
-    if let Some(dir) = live.credentials.parent() {
-        fs::create_dir_all(dir).map_err(|err| format!("无法创建 Claude 配置目录：{err}"))?;
-    }
-    write_atomic(
-        &live.credentials,
-        serde_json::to_vec_pretty(&Value::Object(root))
-            .map_err(|err| format!("序列化登录文件失败：{err}"))?,
-        true,
-    )?;
-    sync_keychain_oauth(Some(oauth))
-}
-
-fn write_live_oauth_account(live: &LivePaths, account: Option<&Value>) -> Result<(), String> {
-    if !live.claude_json.is_file() {
-        return Err("没有找到 ~/.claude.json，请先成功登录过一次 Claude Code。".into());
-    }
-    let mut root = read_json_object(
-        &live.claude_json,
-        "没有找到 ~/.claude.json，请先成功登录过一次 Claude Code。",
-    )?;
-    match account {
-        Some(value) => {
-            root.insert("oauthAccount".into(), value.clone());
-        }
-        None => {
-            root.remove("oauthAccount");
-        }
-    }
-    write_atomic(
-        &live.claude_json,
-        serde_json::to_vec_pretty(&Value::Object(root))
-            .map_err(|err| format!("序列化账号缓存失败：{err}"))?,
-        false,
-    )
-}
-
-fn clear_live_auth(live: &LivePaths) -> Result<(), String> {
-    if live.credentials.is_file() {
-        let mut root = read_json_object_or_empty(&live.credentials)?;
-        root.remove("claudeAiOauth");
-        write_atomic(
-            &live.credentials,
-            serde_json::to_vec_pretty(&Value::Object(root))
-                .map_err(|err| format!("序列化登录文件失败：{err}"))?,
-            true,
-        )?;
-    }
-    if live.claude_json.is_file() {
-        write_live_oauth_account(live, None)?;
-    }
-    sync_keychain_oauth(None)
-}
-
-fn strip_anthropic_env(settings_path: &Path) -> Result<(), String> {
-    if !settings_path.is_file() {
-        return Ok(());
-    }
-    let mut root = read_json_object(settings_path, "读取 Claude settings.json 失败")?;
-    if let Some(Value::Object(env)) = root.get_mut("env") {
-        for key in ANTHROPIC_ENV_KEYS {
-            env.remove(key);
-        }
-    }
-    write_atomic(
-        settings_path,
-        serde_json::to_vec_pretty(&Value::Object(root))
-            .map_err(|err| format!("序列化 settings.json 失败：{err}"))?,
-        false,
-    )
-}
-
-fn read_live_identity(live: &LivePaths) -> Option<Identity> {
-    let oauth = read_claude_ai_oauth(live).filter(claude_oauth::has_credentials)?;
-    let account = read_oauth_account(live).ok().flatten()?;
-    identity_from_account(&account, Some(&oauth))
-}
-
-fn read_oauth_account(live: &LivePaths) -> Result<Option<Value>, String> {
-    if !live.claude_json.is_file() {
-        return Ok(None);
-    }
-    let root = read_json(&live.claude_json)?;
-    Ok(root
-        .get("oauthAccount")
-        .cloned()
-        .filter(|item| item.is_object()))
-}
-
-fn read_claude_ai_oauth(live: &LivePaths) -> Option<Value> {
-    if let Ok(root) = read_json(&live.credentials) {
-        if let Some(oauth) = root
-            .get("claudeAiOauth")
-            .cloned()
-            .filter(|item| item.is_object())
-        {
-            return Some(oauth);
-        }
-    }
-    keychain_read_oauth()
-}
-
-fn identity_from_account(account: &Value, oauth: Option<&Value>) -> Option<Identity> {
-    let email = account
-        .get("emailAddress")
-        .and_then(Value::as_str)
+    let proxy = if proxy.bytes().all(|c| c.is_ascii_digit()) && !proxy.is_empty() {
+        let port = proxy
+            .parse::<u16>()
+            .ok()
+            .filter(|p| *p != 0)
+            .ok_or("代理端口应为 1–65535。")?;
+        format!("http://127.0.0.1:{port}")
+    } else {
+        proxy.to_string()
+    };
+    crate::proxy::validate_proxy_url(&proxy)?;
+    ureq::Proxy::new(&proxy).map_err(|_| "代理地址无效，请填写 HTTP(S) URL 或端口。")?;
+    let authority = proxy
+        .split("://")
+        .nth(1)
         .unwrap_or("")
-        .trim()
-        .to_string();
-    let account_uuid = account
-        .get("accountUuid")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .trim()
-        .to_string();
-    if email.is_empty() && account_uuid.is_empty() {
-        return None;
+        .split('/')
+        .next()
+        .unwrap_or("");
+    if authority.is_empty() || authority.contains('@') || proxy.contains(['?', '#']) {
+        return Err("代理需要 HTTP(S) 地址，不能包含用户名、密码或查询参数。".into());
     }
-    let display_raw = account
-        .get("displayName")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|item| !item.is_empty())
-        .or_else(|| {
-            account
-                .get("fullName")
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|item| !item.is_empty())
-        })
-        .unwrap_or("")
-        .to_string();
-    let subscription_type = oauth
-        .and_then(|item| item.get("subscriptionType"))
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .trim()
-        .to_string();
-    Some(Identity {
-        display: if display_raw.is_empty() {
-            email.clone()
-        } else {
-            display_raw
-        },
-        email,
-        account_uuid,
-        subscription_type,
-    })
+    Ok(proxy)
 }
 
-fn normalize_name(name: &str, identity: &Identity) -> String {
-    let trimmed = name.trim();
-    if !trimmed.is_empty() {
-        return trimmed.chars().take(40).collect();
-    }
-    if !identity.display.is_empty() {
-        return identity.display.clone();
-    }
-    if !identity.email.is_empty() {
-        return identity.email.clone();
-    }
-    "Claude 账号".into()
-}
-
-fn find_meta<'a>(index: &'a AccountIndex, identity: &Identity) -> Option<&'a AccountMeta> {
-    index
+// Registration keeps the original directory by reference, including keychain.
+pub fn save_current(app: &AppHandle, name: String) -> Result<ClaudeAccountList, String> {
+    let _guard = lock_operation()?;
+    let store = accounts_dir(app)?;
+    let mut index = load_index(&store)?;
+    let mut profile = index
         .accounts
         .iter()
-        .find(|item| identity_matches(item, identity))
+        .find(|p| p.id == SYSTEM)
+        .cloned()
+        .unwrap_or_else(system_profile);
+    profile.name = valid_name(&name)?;
+    index.accounts.retain(|p| p.id != SYSTEM);
+    index.accounts.push(profile);
+    save_index(&store, &index)?;
+    list_in(&store)
 }
 
-fn find_meta_mut<'a>(
-    index: &'a mut AccountIndex,
-    identity: &Identity,
-) -> Option<&'a mut AccountMeta> {
-    index
+fn create_in(
+    store: &Path,
+    name: String,
+    proxy: String,
+    legacy: Option<ClaudeAccount>,
+) -> Result<String, String> {
+    let name = valid_name(&name)?;
+    let proxy = normalize_proxy(&proxy)?;
+    let mut index = load_index(store)?;
+    let id = legacy
+        .as_ref()
+        .map(|a| a.id.clone())
+        .unwrap_or_else(|| Uuid::new_v4().to_string());
+    validate_id(&id)?;
+    if index.accounts.iter().any(|p| p.id == id) {
+        return Err("这个账号已经创建，请直接登录。".into());
+    }
+    let config_dir = store.join("profiles").join(&id);
+    fs::create_dir_all(config_dir.parent().ok_or("账号目录不合法。")?)
+        .map_err(|_| "无法创建账号目录。")?;
+    // Never silently take over a pre-existing directory.
+    fs::create_dir(&config_dir).map_err(|_| "账号目录已存在或无法创建，请检查后重试。")?;
+    if let Err(err) = write_json(&config_dir.join(".claude.json"), &json!({})) {
+        let _ = fs::remove_dir(&config_dir);
+        return Err(err);
+    }
+    index.accounts.push(Profile {
+        id: id.clone(),
+        name,
+        config_dir: config_dir.clone(),
+        explicit_config: true,
+        system: false,
+        email: legacy.as_ref().map(|a| a.email.clone()).unwrap_or_default(),
+        account_uuid: legacy
+            .as_ref()
+            .map(|a| a.account_uuid.clone())
+            .unwrap_or_default(),
+        subscription_type: String::new(),
+        updated_at: Utc::now().to_rfc3339(),
+        proxy,
+        verification_pending: false,
+        system_identity: None,
+    });
+    if let Err(err) = save_index(store, &index) {
+        // Only these freshly-created files belong to this attempt. Never
+        // recursively remove a directory containing possible login/history.
+        let _ = fs::remove_file(config_dir.join(".claude.json"));
+        let _ = fs::remove_dir(&config_dir);
+        return Err(err);
+    }
+    Ok(id)
+}
+
+pub fn create_account(
+    app: &AppHandle,
+    name: String,
+    proxy: String,
+) -> Result<ClaudeAccountList, String> {
+    let _guard = lock_operation()?;
+    let store = accounts_dir(app)?;
+    create_in(&store, name, proxy, None)?;
+    list_in(&store)
+}
+
+pub fn update_account(
+    app: &AppHandle,
+    account_id: &str,
+    name: String,
+    proxy: String,
+) -> Result<ClaudeAccountList, String> {
+    let _guard = lock_operation()?;
+    validate_id(account_id)?;
+    let store = accounts_dir(app)?;
+    let mut index = load_index(&store)?;
+    if account_id == SYSTEM && !index.accounts.iter().any(|p| p.id == SYSTEM) {
+        index.accounts.push(system_profile());
+    }
+    let profile = index
         .accounts
         .iter_mut()
-        .find(|item| identity_matches(item, identity))
+        .find(|p| p.id == account_id)
+        .ok_or("没有找到此账号。")?;
+    profile.name = valid_name(&name)?;
+    profile.proxy = normalize_proxy(&proxy)?;
+    save_index(&store, &index)?;
+    list_in(&store)
 }
 
-fn identity_matches(item: &AccountMeta, identity: &Identity) -> bool {
-    if !identity.account_uuid.is_empty() && !item.account_uuid.is_empty() {
-        item.account_uuid == identity.account_uuid
-    } else {
-        !identity.email.is_empty() && item.email.eq_ignore_ascii_case(&identity.email)
+fn switch_in(store: &Path, account_id: &str) -> Result<ClaudeAccountList, String> {
+    validate_id(account_id)?;
+    let mut index = load_index(store)?;
+    let profile = profiles(&index)
+        .into_iter()
+        .find(|p| p.id == account_id)
+        .ok_or("没有找到此账号，请先创建或迁移。")?;
+    let status = row(&profile, false);
+    if !matches!(status.status.as_str(), "ready" | "refreshable") {
+        return Err(status.message);
     }
+    index.default_account_id = Some(account_id.into());
+    save_index(store, &index)?;
+    list_in(store)
 }
 
-fn read_json(path: &Path) -> Result<Value, String> {
-    let text =
-        fs::read_to_string(path).map_err(|err| format!("读取 {} 失败：{err}", path.display()))?;
-    serde_json::from_str(&text).map_err(|err| format!("{} 损坏：{err}", path.display()))
-}
-
-fn read_json_object(path: &Path, missing: &str) -> Result<Map<String, Value>, String> {
-    if !path.is_file() {
-        return Err(missing.into());
-    }
-    match read_json(path)? {
-        Value::Object(map) => Ok(map),
-        _ => Err(format!("{} 损坏：根节点不是对象", path.display())),
-    }
-}
-
-fn read_json_object_or_empty(path: &Path) -> Result<Map<String, Value>, String> {
-    if !path.is_file() {
-        return Ok(Map::new());
-    }
-    match read_json(path)? {
-        Value::Object(map) => Ok(map),
-        _ => Ok(Map::new()),
-    }
-}
-
-fn write_atomic(path: &Path, bytes: impl AsRef<[u8]>, secret: bool) -> Result<(), String> {
-    if let Some(dir) = path.parent() {
-        fs::create_dir_all(dir).map_err(|err| format!("无法创建目录：{err}"))?;
-    }
-    let tmp = path.with_extension(format!("{}.tmp", Uuid::new_v4()));
-    fs::write(&tmp, bytes).map_err(|err| format!("写入失败：{err}"))?;
-    if secret {
-        tighten_secret(&tmp);
-    }
-    if let Err(err) = fs::rename(&tmp, path) {
-        let _ = fs::remove_file(&tmp);
-        return Err(format!("保存失败：{err}"));
-    }
-    Ok(())
-}
-
-fn tighten_secret(path: &Path) {
-    #[cfg(unix)]
+pub fn switch_account(app: &AppHandle, account_id: &str) -> Result<ClaudeAccountList, String> {
+    let _guard = lock_operation()?;
+    let store = accounts_dir(app)?;
+    let index = load_index(&store)?;
+    if let Some(profile) = profiles(&index)
+        .into_iter()
+        .find(|p| p.id == account_id && p.system)
     {
-        use std::os::unix::fs::PermissionsExt;
-        if let Ok(meta) = fs::metadata(path) {
-            let mut perms = meta.permissions();
-            perms.set_mode(0o600);
-            let _ = fs::set_permissions(path, perms);
+        let settings = crate::state::load_state(app)?.settings;
+        let mut base: BTreeMap<_, _> = std::env::vars().collect();
+        base.extend(crate::proxy::proxy_env(
+            !settings.default_proxy_url.trim().is_empty(),
+            &settings.default_proxy_url,
+        )?);
+        prepare_system(&store, profile, &base)?;
+    }
+    switch_in(&store, account_id)
+}
+
+fn delete_in(store: &Path, account_id: &str) -> Result<ClaudeAccountList, String> {
+    validate_id(account_id)?;
+    if account_id == SYSTEM {
+        return Err("系统 Claude 入口需要保留，可以修改名称和代理。".into());
+    }
+    let mut index = load_index(store)?;
+    if let Some(pos) = index.accounts.iter().position(|p| p.id == account_id) {
+        let removed = index.accounts.remove(pos);
+        index.retired.push(removed);
+    } else if !legacy_rows(store, &index)?
+        .iter()
+        .any(|p| p.id == account_id)
+    {
+        return Err("没有找到此账号。".into());
+    }
+    if !index.hidden_legacy.iter().any(|id| id == account_id) {
+        index.hidden_legacy.push(account_id.into());
+    }
+    if index.default_account_id.as_deref() == Some(account_id) {
+        index.default_account_id = None;
+    }
+    save_index(store, &index)?;
+    list_in(store)
+}
+
+pub fn delete_account(app: &AppHandle, account_id: &str) -> Result<ClaudeAccountList, String> {
+    let _guard = lock_operation()?;
+    delete_in(&accounts_dir(app)?, account_id)
+}
+
+#[derive(Debug, Clone)]
+pub struct LaunchContext {
+    pub id: String,
+    pub name: String,
+    pub set: BTreeMap<String, String>,
+    pub remove: Vec<String>,
+}
+
+fn launch_env(profile: &Profile, base: &BTreeMap<String, String>) -> Result<LaunchContext, String> {
+    let mut ctx = LaunchContext {
+        id: profile.id.clone(),
+        name: profile.name.clone(),
+        set: BTreeMap::new(),
+        remove: AUTH_ENV.iter().map(|s| s.to_string()).collect(),
+    };
+    if profile.explicit_config {
+        ctx.set.insert(
+            "CLAUDE_CONFIG_DIR".into(),
+            profile.config_dir.to_string_lossy().into_owned(),
+        );
+    }
+    match profile.proxy.as_str() {
+        "inherit" => (),
+        "off" => {
+            ctx.remove.extend(PROXY_ENV.iter().map(|s| s.to_string()));
+            ctx.remove.extend([
+                "CLAUDE_CODE_HTTP_PROXY".into(),
+                "CLAUDE_CODE_HTTPS_PROXY".into(),
+            ]);
         }
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = path;
-    }
-}
-
-fn sync_keychain_oauth(oauth: Option<&Value>) -> Result<(), String> {
-    #[cfg(all(target_os = "macos", not(test)))]
-    {
-        keychain_delete();
-        if let Some(value) = oauth {
-            let payload = serde_json::to_string(&json!({ "claudeAiOauth": value }))
-                .map_err(|err| format!("序列化钥匙串失败：{err}"))?;
-            let output = Command::new("security")
-                .args([
-                    "add-generic-password",
-                    "-s",
-                    KEYCHAIN_SERVICE,
-                    "-a",
-                    "Claude Code",
-                    "-w",
-                    &payload,
-                ])
-                .output()
-                .map_err(|err| format!("无法写入 macOS 钥匙串中的 Claude 登录：{err}"))?;
-            if !output.status.success() {
-                return Err("无法写入 macOS 钥匙串中的 Claude 登录。".into());
+        proxy => {
+            let proxy = normalize_proxy(proxy)?;
+            for key in ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"] {
+                ctx.set.insert(key.into(), proxy.clone());
+            }
+            ctx.remove.extend([
+                "ALL_PROXY".into(),
+                "all_proxy".into(),
+                "CLAUDE_CODE_HTTP_PROXY".into(),
+                "CLAUDE_CODE_HTTPS_PROXY".into(),
+            ]);
+            for key in ["NO_PROXY", "no_proxy"] {
+                let prefix = base
+                    .get(key)
+                    .filter(|s| !s.is_empty())
+                    .map(|s| format!("{s},"))
+                    .unwrap_or_default();
+                ctx.set
+                    .insert(key.into(), format!("{prefix}localhost,127.0.0.1,::1"));
             }
         }
-        Ok(())
     }
-    #[cfg(any(not(target_os = "macos"), test))]
-    {
-        let _ = oauth;
-        Ok(())
-    }
+    Ok(ctx)
 }
 
-fn keychain_read_oauth() -> Option<Value> {
-    #[cfg(all(target_os = "macos", not(test)))]
-    {
-        let output = Command::new("security")
-            .args(["find-generic-password", "-s", KEYCHAIN_SERVICE, "-w"])
-            .output()
-            .ok()?;
-        if !output.status.success() {
-            return None;
+fn owner_in(store: &Path, cwd: &str, session_id: Option<&str>) -> Result<Profile, String> {
+    let index = load_index(store)?;
+    if let Some(id) = session_id {
+        let mut owners = Vec::new();
+        for p in profiles(&index)
+            .into_iter()
+            .chain(index.retired.iter().cloned())
+        {
+            if crate::tools::claude::contains_session_in(&p.config_dir, cwd, id) {
+                owners.push(p);
+            }
         }
-        let text = String::from_utf8(output.stdout).ok()?;
-        let value: Value = serde_json::from_str(text.trim()).ok()?;
-        value
-            .get("claudeAiOauth")
-            .cloned()
-            .filter(|item| item.is_object())
-            .or_else(|| value.is_object().then_some(value))
+        if owners.len() > 1 {
+            return Err("此会话存在于多个账号目录，请先处理重复的会话文件。".into());
+        }
+        return owners
+            .pop()
+            .ok_or_else(|| "未找到此会话所属的 Claude 账号目录，无法恢复。".into());
     }
-    #[cfg(any(not(target_os = "macos"), test))]
-    {
-        None
-    }
+    selected(&index)
 }
 
-#[cfg(all(target_os = "macos", not(test)))]
-fn keychain_delete() {
-    let _ = Command::new("security")
-        .args(["delete-generic-password", "-s", KEYCHAIN_SERVICE])
-        .output();
+pub fn launch_context(
+    app: &AppHandle,
+    cwd: &str,
+    session_id: Option<&str>,
+    base: &BTreeMap<String, String>,
+) -> Result<LaunchContext, String> {
+    let store = accounts_dir(app)?;
+    let mut owner = owner_in(&store, cwd, session_id)?;
+    let provider_override =
+        auth_override(&[owner.config_dir.join("settings.json"), config_file(&owner)]);
+    if owner.system && provider_override.is_none() {
+        owner = prepare_system(&store, owner, base)?;
+    }
+    if !owner.config_dir.is_dir() && !owner.system {
+        return Err("Claude 账号目录不存在，请先恢复目录。".into());
+    }
+    let status = row(&owner, false);
+    if !owner.system {
+        if matches!(status.status.as_str(), "conflict" | "unverified") {
+            return Err(status.message);
+        }
+        if let Some(message) = auth_override(&[
+            Path::new(cwd).join(".claude/settings.json"),
+            Path::new(cwd).join(".claude/settings.local.json"),
+        ]) {
+            return Err(format!("项目设置覆盖了账号登录。{message}"));
+        }
+    }
+    launch_env(&owner, base)
 }
 
-fn run_claude(
-    exe: &Path,
-    args: &[&str],
-    proxy: &[(String, String)],
-    visible: bool,
-) -> Result<String, String> {
-    let mut cmd = Command::new(exe);
-    cmd.args(args);
+fn prepare_system(
+    store: &Path,
+    mut profile: Profile,
+    base: &BTreeMap<String, String>,
+) -> Result<Profile, String> {
+    let status = row(&profile, false);
+    if status.status == "unverified" {
+        let mut index = load_index(store)?;
+        verify_in(
+            store,
+            &mut index,
+            &mut profile,
+            &AppSettings::default(),
+            base,
+        )?;
+    }
+    let status = row(&profile, false);
+    if matches!(status.status.as_str(), "conflict" | "unverified") {
+        return Err(status.message);
+    }
+    Ok(profile)
+}
+
+pub fn session_homes() -> Vec<PathBuf> {
+    let mut homes = vec![system_profile().config_dir];
+    if let Some(store) = STORE.get() {
+        if let Ok(index) = load_index(store) {
+            for p in profiles(&index).into_iter().chain(index.retired) {
+                if !homes.contains(&p.config_dir) {
+                    homes.push(p.config_dir);
+                }
+            }
+        }
+    }
+    homes
+}
+
+pub fn login_account(
+    app: &AppHandle,
+    settings: &AppSettings,
+    account_id: &str,
+    ensure_idle: impl FnOnce() -> Result<(), String>,
+) -> Result<ClaudeAccountList, String> {
+    let _guard = lock_operation()?;
+    CANCEL_LOGIN.store(false, Ordering::SeqCst);
+    ensure_idle()?;
+    let store = accounts_dir(app)?;
+    let mut index = load_index(&store)?;
+    validate_id(account_id)?;
+    if !profiles(&index).iter().any(|p| p.id == account_id) {
+        let legacy = legacy_rows(&store, &index)?
+            .into_iter()
+            .find(|p| p.id == account_id)
+            .ok_or("没有找到此账号。")?;
+        create_in(
+            &store,
+            legacy.name.clone(),
+            legacy.proxy.clone(),
+            Some(legacy),
+        )?;
+        index = load_index(&store)?;
+    }
+    let mut profile = profiles(&index)
+        .into_iter()
+        .find(|p| p.id == account_id)
+        .ok_or("没有找到此账号。")?;
+    if profile.system {
+        return Err(
+            "请在系统终端运行 claude auth login；新账号请使用「添加账号」创建独立目录。".into(),
+        );
+    }
+    let exe = tools::resolve_binary(ToolId::Claude, settings)?;
+    profile.verification_pending = true;
+    index.accounts.retain(|p| p.id != profile.id);
+    index.accounts.push(profile.clone());
+    save_index(&store, &index)?;
+    let mut base: BTreeMap<_, _> = std::env::vars().collect();
+    for (k, v) in crate::proxy::proxy_env(
+        !settings.default_proxy_url.trim().is_empty(),
+        &settings.default_proxy_url,
+    )? {
+        base.insert(k, v);
+    }
+    let context = launch_env(&profile, &base)?;
+    let mut cmd = Command::new(&exe);
+    cmd.args(["auth", "login", "--claudeai"])
+        .current_dir(&profile.config_dir);
     platform::prepare_command(&mut cmd);
-    for (key, value) in proxy {
-        cmd.env(key, value);
+    for (k, v) in base.iter().filter(|(k, _)| PROXY_ENV.contains(&k.as_str())) {
+        cmd.env(k, v);
     }
-    apply_window(&mut cmd, visible);
-    let output = cmd
-        .output()
-        .map_err(|err| format!("无法启动 {}：{err}", exe.display()))?;
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let mut text = String::new();
-    text.push_str(&stdout);
-    if !stderr.trim().is_empty() {
-        if !text.is_empty() && !text.ends_with('\n') {
-            text.push('\n');
-        }
-        text.push_str(&stderr);
+    for key in &context.remove {
+        cmd.env_remove(key);
     }
-    if output.status.success() {
-        Ok(text)
-    } else if !text.trim().is_empty() {
-        Err(text)
-    } else {
-        Err(format!(
-            "{} 退出码 {}",
-            exe.display(),
-            output.status.code().unwrap_or(-1)
-        ))
-    }
-}
-
-fn apply_window(cmd: &mut Command, visible: bool) {
+    cmd.envs(&context.set);
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
-        cmd.creation_flags(if visible {
-            CREATE_NEW_CONSOLE
-        } else {
-            CREATE_NO_WINDOW
+        cmd.creation_flags(0x0000_0010); // interactive login explicitly requested
+    }
+    // Never return raw CLI output containing auth URLs/codes or token material.
+    let mut child = cmd
+        .spawn()
+        .map_err(|_| "无法启动 Claude 登录，请检查 CLI 路径。")?;
+    let deadline = Instant::now() + Duration::from_secs(300);
+    loop {
+        if CANCEL_LOGIN.load(Ordering::SeqCst) {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err("已取消 Claude 登录，账号目录已保留，可稍后重试。".into());
+        }
+        match child.try_wait().map_err(|_| "无法读取 Claude 登录状态。")? {
+            Some(status) if status.success() => break,
+            Some(_) => return Err("Claude 登录未完成。请重新登录，并在浏览器中完成授权。".into()),
+            None if Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("Claude 登录等待超过 5 分钟，请重新登录。".into());
+            }
+            None => std::thread::sleep(Duration::from_millis(200)),
+        }
+    }
+    verify_in(&store, &mut index, &mut profile, settings, &base)?;
+    list_in(&store)
+}
+
+pub fn cancel_login() {
+    CANCEL_LOGIN.store(true, Ordering::SeqCst);
+}
+
+fn auth_override(paths: &[PathBuf]) -> Option<String> {
+    for path in paths {
+        if !path.exists() {
+            continue;
+        }
+        let root = match read_json(path) {
+            Ok(root) => root,
+            Err(err) => return Some(err),
+        };
+        let keys: Vec<_> = root
+            .get("env")
+            .and_then(Value::as_object)
+            .map(|env| {
+                AUTH_ENV
+                    .iter()
+                    .filter(|key| {
+                        env.get(**key)
+                            .is_some_and(|v| v.as_str().is_none_or(|s| !s.is_empty()))
+                    })
+                    .copied()
+                    .collect()
+            })
+            .unwrap_or_default();
+        if !keys.is_empty() || root.get("apiKeyHelper").is_some_and(|v| !v.is_null()) {
+            return Some(format!(
+                "{} 中的认证配置会覆盖账号登录，请移除对应配置后重试（{}）。",
+                path.display(),
+                if keys.is_empty() {
+                    "apiKeyHelper".into()
+                } else {
+                    keys.join(", ")
+                }
+            ));
+        }
+    }
+    None
+}
+
+fn verify_in(
+    store: &Path,
+    index: &mut ProfileIndex,
+    profile: &mut Profile,
+    settings: &AppSettings,
+    base: &BTreeMap<String, String>,
+) -> Result<(), String> {
+    let mut auth_settings = settings.clone();
+    auth_settings.default_proxy_url = match profile.proxy.as_str() {
+        "inherit" => base
+            .get("HTTPS_PROXY")
+            .or_else(|| base.get("https_proxy"))
+            .cloned()
+            .unwrap_or_default(),
+        "off" => String::new(),
+        proxy => proxy.into(),
+    };
+    verify_with_client(
+        store,
+        index,
+        profile,
+        &HttpOAuthClient::new(&auth_settings)?,
+    )
+}
+
+fn verify_with_client(
+    store: &Path,
+    index: &mut ProfileIndex,
+    profile: &mut Profile,
+    client: &impl OAuthClient,
+) -> Result<(), String> {
+    let oauth = credentials(profile)?
+        .filter(claude_oauth::has_credentials)
+        .ok_or("Claude 没有保存登录凭据，请重新登录。")?;
+    let account = oauth_account(profile).ok_or("Claude 没有保存账号身份，请重新登录。")?;
+    if !identity_matches(profile, &account) {
+        return Err("登录邮箱与此账号不符，请使用对应的邮箱重新登录。".into());
+    }
+    let actual = client.profile(&oauth).map_err(|e| e.to_string())?;
+    let identity_result = claude_oauth::verify_identity(&account, &actual);
+    if profile.system {
+        let actual_account = actual
+            .get("account")
+            .ok_or_else(|| claude_oauth::AuthError::InvalidResponse.to_string())?;
+        profile.system_identity = Some(SystemIdentity {
+            access_token_hash: token_hash(&oauth)
+                .ok_or_else(|| claude_oauth::AuthError::Empty.to_string())?,
+            account_uuid: claude_oauth::token(actual_account, "uuid")
+                .ok_or_else(|| claude_oauth::AuthError::InvalidResponse.to_string())?
+                .into(),
+            email: actual_account
+                .get("email")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .into(),
         });
+        if let Err(err) = identity_result {
+            profile.verification_pending = true;
+            index.accounts.retain(|p| p.id != profile.id);
+            index.accounts.push(profile.clone());
+            save_index(store, index)?;
+            return Err(format!("{} {}", err, row(profile, false).message));
+        }
+    } else {
+        identity_result.map_err(|e| e.to_string())?;
+        profile.email = account
+            .get("emailAddress")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .into();
+        profile.account_uuid = account
+            .get("accountUuid")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .into();
     }
-    #[cfg(not(windows))]
-    {
-        let _ = (cmd, visible);
-    }
+    profile.subscription_type = oauth
+        .get("subscriptionType")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .into();
+    profile.updated_at = Utc::now().to_rfc3339();
+    index.accounts.retain(|p| p.id != profile.id);
+    profile.verification_pending = false;
+    index.accounts.push(profile.clone());
+    save_index(store, index)
+}
+
+pub fn verify_account(
+    app: &AppHandle,
+    settings: &AppSettings,
+    account_id: &str,
+) -> Result<ClaudeAccountList, String> {
+    let _guard = lock_operation()?;
+    let store = accounts_dir(app)?;
+    let mut index = load_index(&store)?;
+    let mut profile = profiles(&index)
+        .into_iter()
+        .find(|p| p.id == account_id)
+        .ok_or("没有找到此账号。")?;
+    profile.verification_pending = true;
+    index.accounts.retain(|p| p.id != profile.id);
+    index.accounts.push(profile.clone());
+    save_index(&store, &index)?;
+    let mut base: BTreeMap<_, _> = std::env::vars().collect();
+    base.extend(crate::proxy::proxy_env(
+        !settings.default_proxy_url.trim().is_empty(),
+        &settings.default_proxy_url,
+    )?);
+    verify_in(&store, &mut index, &mut profile, settings, &base)?;
+    list_in(&store)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
+    use crate::claude_oauth::AuthError;
 
-    struct TestClient;
-
-    impl OAuthClient for TestClient {
-        fn profile(&self, oauth: &Value) -> Result<Value, AuthError> {
-            let uuid = if claude_oauth::token(oauth, "accessToken")
-                .is_some_and(|token| token.starts_with("tok-b"))
-            {
-                "acct-2"
-            } else {
-                "acct-1"
-            };
-            Ok(json!({ "account": { "uuid": uuid } }))
-        }
-
-        fn refresh(&self, _oauth: &Value) -> Result<Value, AuthError> {
-            Err(AuthError::Rejected)
-        }
-    }
-
-    fn fixture() -> (tempfile::TempDir, PathBuf, LivePaths) {
-        let root = tempfile::tempdir().unwrap();
-        let store = root.path().join("store");
-        let claude_home = root.path().join("claude");
-        let home = root.path().join("home");
-        fs::create_dir_all(&claude_home).unwrap();
-        fs::create_dir_all(&home).unwrap();
-        let live = LivePaths {
-            credentials: claude_home.join(".credentials.json"),
-            claude_json: home.join(".claude.json"),
-            settings: claude_home.join("settings.json"),
-        };
-        (root, store, live)
-    }
-
-    fn seed_live(live: &LivePaths, email: &str, uuid: &str, token: &str) {
-        write_atomic(
-            &live.credentials,
-            serde_json::to_vec_pretty(&json!({
-                "claudeAiOauth": {
-                    "accessToken": token,
-                    "refreshToken": format!("{token}-refresh"),
-                    "subscriptionType": "pro"
-                },
-                "mcpOAuth": { "keep": true }
-            }))
-            .unwrap(),
-            true,
-        )
-        .unwrap();
-        write_atomic(
-            &live.claude_json,
-            serde_json::to_vec_pretty(&json!({
-                "projects": { "demo": {} },
-                "mcpServers": { "keep": true },
-                "oauthAccount": {
-                    "accountUuid": uuid,
-                    "emailAddress": email,
-                    "displayName": "Ada",
-                    "fullName": "Ada Lovelace"
-                }
-            }))
-            .unwrap(),
-            false,
-        )
-        .unwrap();
-    }
-
-    #[test]
-    fn reads_identity_from_oauth_account_and_subscription() {
-        let account = json!({
-            "accountUuid": "acct-1",
-            "emailAddress": "ada@example.com",
-            "displayName": "Ada",
-            "fullName": "Ada Lovelace"
-        });
-        let oauth = json!({ "subscriptionType": "pro", "accessToken": "secret" });
-        let id = identity_from_account(&account, Some(&oauth)).unwrap();
-        assert_eq!(id.email, "ada@example.com");
-        assert_eq!(id.account_uuid, "acct-1");
-        assert_eq!(id.display, "Ada");
-        assert_eq!(id.subscription_type, "pro");
-    }
-
-    #[test]
-    fn write_oauth_preserves_mcp_oauth() {
-        let (_root, _store, live) = fixture();
-        write_atomic(
-            &live.credentials,
-            serde_json::to_vec_pretty(&json!({
-                "claudeAiOauth": { "accessToken": "old" },
-                "mcpOAuth": { "keep": true }
-            }))
-            .unwrap(),
-            true,
-        )
-        .unwrap();
-        write_live_oauth(
-            &live,
-            &json!({ "accessToken": "new", "subscriptionType": "pro" }),
-        )
-        .unwrap();
-        let root = read_json(&live.credentials).unwrap();
-        assert_eq!(root["claudeAiOauth"]["accessToken"], "new");
-        assert_eq!(root["mcpOAuth"]["keep"], true);
-    }
-
-    #[test]
-    fn write_oauth_account_preserves_projects() {
-        let (_root, _store, live) = fixture();
-        seed_live(&live, "ada@example.com", "acct-1", "tok-a");
-        write_live_oauth_account(
-            &live,
-            Some(&json!({
-                "accountUuid": "acct-2",
-                "emailAddress": "bob@example.com"
-            })),
-        )
-        .unwrap();
-        let root = read_json(&live.claude_json).unwrap();
-        assert_eq!(root["oauthAccount"]["emailAddress"], "bob@example.com");
-        assert_eq!(root["projects"]["demo"], json!({}));
-        assert_eq!(root["mcpServers"]["keep"], true);
-    }
-
-    #[test]
-    fn clear_live_keeps_other_keys() {
-        let (_root, _store, live) = fixture();
-        seed_live(&live, "ada@example.com", "acct-1", "tok-a");
-        clear_live_auth(&live).unwrap();
-        let cred = read_json(&live.credentials).unwrap();
-        assert!(cred.get("claudeAiOauth").is_none());
-        assert_eq!(cred["mcpOAuth"]["keep"], true);
-        let cfg = read_json(&live.claude_json).unwrap();
-        assert!(cfg.get("oauthAccount").is_none());
-        assert_eq!(cfg["projects"]["demo"], json!({}));
-    }
-
-    #[test]
-    fn switch_strips_anthropic_env_keys() {
-        let (_root, store, live) = fixture();
-        seed_live(&live, "ada@example.com", "acct-1", "tok-a");
-        let list = save_current_in(&store, &live, "工作号".into(), &TestClient).unwrap();
-        let ada_id = list.accounts[0].id.clone();
-
-        write_atomic(
-            &live.settings,
-            serde_json::to_vec_pretty(&json!({
-                "env": {
-                    "ANTHROPIC_API_KEY": "sk-old",
-                    "ANTHROPIC_AUTH_TOKEN": "tok",
-                    "ANTHROPIC_BASE_URL": "https://example.invalid",
-                    "KEEP_ME": "yes"
-                }
-            }))
-            .unwrap(),
-            false,
-        )
-        .unwrap();
-        seed_live(&live, "bob@example.com", "acct-2", "tok-b");
-        save_current_in(&store, &live, "个人号".into(), &TestClient).unwrap();
-
-        switch_account_in(&store, &live, &ada_id, &TestClient, || Ok(())).unwrap();
-        let settings = read_json(&live.settings).unwrap();
-        let env = settings["env"].as_object().unwrap();
-        assert!(!env.contains_key("ANTHROPIC_API_KEY"));
-        assert!(!env.contains_key("ANTHROPIC_AUTH_TOKEN"));
-        assert!(!env.contains_key("ANTHROPIC_BASE_URL"));
-        assert_eq!(env["KEEP_ME"], "yes");
-        let cred = read_json(&live.credentials).unwrap();
-        assert_eq!(cred["claudeAiOauth"]["accessToken"], "tok-a");
-        let cfg = read_json(&live.claude_json).unwrap();
-        assert_eq!(cfg["oauthAccount"]["emailAddress"], "ada@example.com");
-    }
-
-    #[test]
-    fn save_matches_account_uuid_without_duplicate() {
-        let (_root, store, live) = fixture();
-        seed_live(&live, "ada@example.com", "acct-1", "tok-a");
-        save_current_in(&store, &live, "工作号".into(), &TestClient).unwrap();
-        write_atomic(
-            &live.credentials,
-            serde_json::to_vec_pretty(&json!({
-                "claudeAiOauth": {
-                    "accessToken": "tok-a2",
-                    "subscriptionType": "pro"
-                }
-            }))
-            .unwrap(),
-            true,
-        )
-        .unwrap();
-        let list = save_current_in(&store, &live, "公司号".into(), &TestClient).unwrap();
-        assert_eq!(list.accounts.len(), 1);
-        assert_eq!(list.accounts[0].name, "公司号");
-        let snap = read_json(&snapshot_credentials(&store, &list.accounts[0].id).unwrap()).unwrap();
-        assert_eq!(snap["claudeAiOauth"]["accessToken"], "tok-a2");
-    }
-
-    #[test]
-    fn delete_snapshot_leaves_live() {
-        let (_root, store, live) = fixture();
-        seed_live(&live, "ada@example.com", "acct-1", "tok-a");
-        let list = save_current_in(&store, &live, "工作号".into(), &TestClient).unwrap();
-        let id = list.accounts[0].id.clone();
-        let after = delete_account_in(&store, &id, &live).unwrap();
-        assert!(after.accounts.is_empty());
-        assert!(after.logged_in);
-        assert_eq!(after.current_email, "ada@example.com");
-        assert!(live.credentials.is_file());
-        assert!(!store.join(&id).exists());
-    }
-
-    #[test]
-    fn rejects_illegal_account_id() {
-        let (_root, store, live) = fixture();
-        let err = delete_account_in(&store, "../x", &live).unwrap_err();
-        assert_eq!(err, "账号编号不合法。");
-        let err = switch_account_in(&store, &live, "abc.json", &TestClient, || Ok(())).unwrap_err();
-        assert_eq!(err, "账号编号不合法。");
-    }
-
-    #[test]
-    fn listing_never_overwrites_a_snapshot_with_empty_or_mismatched_live_tokens() {
-        let (_root, store, live) = fixture();
-        seed_live(&live, "ada@example.com", "acct-1", "tok-a");
-        let saved = save_current_in(&store, &live, "工作号".into(), &TestClient).unwrap();
-        let path = snapshot_credentials(&store, &saved.accounts[0].id).unwrap();
-        let original = fs::read(&path).unwrap();
-
-        write_live_oauth(
-            &live,
-            &json!({"accessToken": "", "refreshToken": "", "expiresAt": 0}),
-        )
-        .unwrap();
-        assert!(!list_accounts_in(&store, &live).unwrap().logged_in);
-        assert!(save_current_in(&store, &live, String::new(), &TestClient).is_err());
-        assert_eq!(fs::read(&path).unwrap(), original);
-
-        write_live_oauth(
-            &live,
-            &json!({"accessToken": "tok-b", "refreshToken": "tok-b-refresh"}),
-        )
-        .unwrap();
-        list_accounts_in(&store, &live).unwrap();
-        let err = save_current_in(&store, &live, String::new(), &TestClient).unwrap_err();
-        assert!(err.contains("不属于同一账号"));
-        assert_eq!(fs::read(&path).unwrap(), original);
-    }
-
-    #[test]
-    fn empty_target_is_rejected_without_stopping_terminals_or_changing_live_auth() {
-        let (_root, store, live) = fixture();
-        seed_live(&live, "ada@example.com", "acct-1", "tok-a");
-        let saved = save_current_in(&store, &live, "工作号".into(), &TestClient).unwrap();
-        let id = &saved.accounts[0].id;
-        let path = snapshot_credentials(&store, id).unwrap();
-        write_atomic(
-            &path,
-            br#"{"claudeAiOauth":{"accessToken":"","refreshToken":""}}"#,
-            true,
-        )
-        .unwrap();
-        seed_live(&live, "bob@example.com", "acct-2", "tok-b");
-        let before = fs::read(&live.credentials).unwrap();
-        let stopped = std::cell::Cell::new(false);
-        let err = switch_account_in(&store, &live, id, &TestClient, || {
-            stopped.set(true);
-            Ok(())
-        })
-        .unwrap_err();
-        assert!(err.contains("凭据为空"));
-        assert!(!stopped.get());
-        assert_eq!(fs::read(&live.credentials).unwrap(), before);
-    }
-
-    #[test]
-    fn target_token_owner_mismatch_preserves_live_login_and_logs_no_secrets() {
-        let (_root, store, live) = fixture();
-        seed_live(&live, "ada@example.com", "acct-1", "tok-a");
-        let saved = save_current_in(&store, &live, "工作号".into(), &TestClient).unwrap();
-        let id = &saved.accounts[0].id;
-        let path = snapshot_credentials(&store, id).unwrap();
-        write_atomic(&path, br#"{"claudeAiOauth":{"accessToken":"tok-b-mismatched-secret","refreshToken":"refresh-secret"}}"#, true).unwrap();
-        seed_live(&live, "bob@example.com", "acct-2", "tok-b");
-        let before = fs::read(&live.credentials).unwrap();
-        let config_before = fs::read(&live.claude_json).unwrap();
-        let err = switch_account_in(&store, &live, id, &TestClient, || Ok(())).unwrap_err();
-        assert!(err.contains("不属于同一账号"));
-        assert_eq!(fs::read(&live.credentials).unwrap(), before);
-        assert_eq!(fs::read(&live.claude_json).unwrap(), config_before);
-        let log = fs::read_to_string(store.join("auth-diagnostics.jsonl")).unwrap();
-        assert!(log.contains("identity_mismatch"));
-        assert!(!log.contains("tok-b"));
-        assert!(!log.contains("refresh-secret"));
-        assert!(!log.contains("bob@example.com"));
-    }
-
-    #[test]
-    fn rotated_token_survives_profile_failure_and_is_reused_on_retry() {
-        use std::cell::Cell;
-        struct RefreshClient {
-            refreshes: Cell<u32>,
-            fail_profile: Cell<bool>,
-            stopped: Cell<bool>,
-        }
-        impl OAuthClient for RefreshClient {
-            fn profile(&self, oauth: &Value) -> Result<Value, AuthError> {
-                assert!(
-                    self.stopped.get(),
-                    "all verification happens after the old terminal exits"
-                );
-                if oauth["accessToken"] == "tok-a-new" && self.fail_profile.get() {
-                    Err(AuthError::Network)
-                } else {
-                    TestClient.profile(oauth)
-                }
-            }
-            fn refresh(&self, _oauth: &Value) -> Result<Value, AuthError> {
-                assert!(self.stopped.get());
-                self.refreshes.set(self.refreshes.get() + 1);
-                Ok(
-                    json!({"accessToken": "tok-a-new", "refreshToken": "rotated-secret", "expiresAt": Utc::now().timestamp_millis() + 3_600_000}),
-                )
-            }
-        }
-        let (_root, store, live) = fixture();
-        seed_live(&live, "ada@example.com", "acct-1", "tok-a");
-        let saved = save_current_in(&store, &live, "工作号".into(), &TestClient).unwrap();
-        let id = &saved.accounts[0].id;
-        let path = snapshot_credentials(&store, id).unwrap();
-        let mut snapshot = read_json(&path).unwrap();
-        snapshot["claudeAiOauth"]["expiresAt"] = json!(0);
-        write_atomic(&path, serde_json::to_vec(&snapshot).unwrap(), true).unwrap();
-        seed_live(&live, "bob@example.com", "acct-2", "tok-b");
-        save_current_in(&store, &live, "个人号".into(), &TestClient).unwrap();
-        let before = fs::read(&live.credentials).unwrap();
-        let client = RefreshClient {
-            refreshes: Cell::new(0),
-            fail_profile: Cell::new(true),
-            stopped: Cell::new(false),
-        };
-        let pending = path.with_file_name("pending-credentials.json");
-        assert!(switch_account_in(&store, &live, id, &client, || {
-            client.stopped.set(true);
-            Ok(())
-        })
-        .is_err());
-        assert_eq!(fs::read(&live.credentials).unwrap(), before);
-        assert_eq!(
-            read_json(&pending).unwrap()["claudeAiOauth"]["refreshToken"],
-            "rotated-secret"
-        );
-
-        client.fail_profile.set(false);
-        client.stopped.set(false);
-        let result = switch_account_in(&store, &live, id, &client, || {
-            client.stopped.set(true);
-            Ok(())
-        })
-        .unwrap();
-        assert_eq!(
-            client.refreshes.get(),
-            1,
-            "retry must not reuse the spent refresh token"
-        );
-        assert!(!pending.exists());
-        assert_eq!(
-            read_json(&live.credentials).unwrap()["claudeAiOauth"]["accessToken"],
-            "tok-a-new"
-        );
-        assert_eq!(
-            read_json(&live.claude_json).unwrap()["oauthAccount"]["accountUuid"],
-            "acct-1"
-        );
-        assert!(result.accounts.iter().any(|a| a.name == "个人号"));
-        assert_eq!(
-            read_json(&live.credentials).unwrap()["mcpOAuth"]["keep"],
-            true
-        );
-    }
-
-    #[test]
-    fn failed_write_restores_all_original_live_files() {
-        let (_root, store, live) = fixture();
-        seed_live(&live, "ada@example.com", "acct-1", "tok-a");
-        let saved = save_current_in(&store, &live, "工作号".into(), &TestClient).unwrap();
-        seed_live(&live, "bob@example.com", "acct-2", "tok-b");
-        fs::write(&live.settings, b"invalid settings json").unwrap();
-        let before: Vec<_> = [&live.credentials, &live.claude_json, &live.settings]
-            .into_iter()
-            .map(|path| fs::read(path).unwrap())
-            .collect();
-        let err = switch_account_in(&store, &live, &saved.accounts[0].id, &TestClient, || Ok(()))
-            .unwrap_err();
-        assert!(err.contains("损坏"));
-        let after: Vec<_> = [&live.credentials, &live.claude_json, &live.settings]
-            .into_iter()
-            .map(|path| fs::read(path).unwrap())
-            .collect();
-        assert_eq!(after, before);
-        assert!(fs::read_to_string(store.join("auth-diagnostics.jsonl"))
-            .unwrap()
-            .contains("rollback"));
-    }
-
-    #[test]
-    fn failing_to_stop_old_terminals_cancels_the_switch() {
-        let (_root, store, live) = fixture();
-        seed_live(&live, "ada@example.com", "acct-1", "tok-a");
-        let saved = save_current_in(&store, &live, "工作号".into(), &TestClient).unwrap();
-        seed_live(&live, "bob@example.com", "acct-2", "tok-b");
-        let before = fs::read(&live.credentials).unwrap();
-        assert!(
-            switch_account_in(&store, &live, &saved.accounts[0].id, &TestClient, || Err(
-                "terminal still alive".into()
-            ))
-            .is_err()
-        );
-        assert_eq!(fs::read(&live.credentials).unwrap(), before);
-    }
-
-    #[test]
-    fn manual_save_discards_stale_pending_tokens() {
-        let (_root, store, live) = fixture();
-        seed_live(&live, "ada@example.com", "acct-1", "tok-a");
-        let saved = save_current_in(&store, &live, "工作号".into(), &TestClient).unwrap();
-        let pending = snapshot_credentials(&store, &saved.accounts[0].id)
-            .unwrap()
-            .with_file_name("pending-credentials.json");
-        fs::write(&pending, br#"{"claudeAiOauth":{"accessToken":"stale"}}"#).unwrap();
-        save_current_in(&store, &live, String::new(), &TestClient).unwrap();
-        assert!(!pending.exists());
-        assert_eq!(
-            list_accounts_in(&store, &live).unwrap().accounts[0].name,
-            "工作号"
-        );
-    }
-
-    #[test]
-    fn early_server_rejection_refreshes_once_even_before_recorded_expiry() {
-        struct EarlyRejection;
-        impl OAuthClient for EarlyRejection {
-            fn profile(&self, oauth: &Value) -> Result<Value, AuthError> {
-                if oauth["accessToken"] == "old" {
-                    Err(AuthError::Rejected)
-                } else {
-                    TestClient.profile(oauth)
-                }
-            }
-            fn refresh(&self, _oauth: &Value) -> Result<Value, AuthError> {
-                Ok(
-                    json!({"accessToken": "new", "refreshToken": "rotated", "expiresAt": Utc::now().timestamp_millis() + 3_600_000}),
-                )
-            }
-        }
-        let (_root, store, _live) = fixture();
-        let checkpoints = std::cell::Cell::new(0);
-        let oauth = verified_oauth(&store,
-            json!({"accessToken": "old", "refreshToken": "refresh", "expiresAt": Utc::now().timestamp_millis() + 3_600_000}),
-            &json!({"accountUuid": "acct-1"}), &EarlyRejection,
-            |_| { checkpoints.set(checkpoints.get() + 1); Ok(()) },
-        ).unwrap();
-        assert_eq!(oauth["accessToken"], "new");
-        assert_eq!(checkpoints.get(), 1);
-    }
-
-    #[test]
-    fn unverified_outgoing_login_is_backed_up_without_overwriting_its_account_snapshot() {
-        let (_root, store, live) = fixture();
-        seed_live(&live, "ada@example.com", "acct-1", "tok-a");
-        let ada = save_current_in(&store, &live, "工作号".into(), &TestClient)
-            .unwrap()
-            .accounts[0]
-            .id
-            .clone();
-        seed_live(&live, "bob@example.com", "acct-2", "tok-b");
-        let bob = save_current_in(&store, &live, "个人号".into(), &TestClient)
+    fn fixture() -> (tempfile::TempDir, Profile) {
+        let tmp = tempfile::tempdir().unwrap();
+        let id = create_in(tmp.path(), "工作账号".into(), "inherit".into(), None).unwrap();
+        let profile = load_index(tmp.path())
             .unwrap()
             .accounts
             .into_iter()
-            .find(|a| a.account_uuid == "acct-2")
+            .find(|p| p.id == id)
+            .unwrap();
+        (tmp, profile)
+    }
+
+    fn logged_in(p: &Profile, expiry: i64) {
+        write_json(&p.config_dir.join(".credentials.json"), &json!({"claudeAiOauth": {
+            "accessToken": "test-access-secret", "refreshToken": "test-refresh-secret", "expiresAt": expiry, "subscriptionType": "pro"
+        }})).unwrap();
+        write_json(&config_file(p), &json!({"oauthAccount": {"accountUuid": "work-id", "emailAddress": "work@example.com"}})).unwrap();
+    }
+
+    struct FakeClient(Result<Value, AuthError>);
+    impl OAuthClient for FakeClient {
+        fn profile(&self, _: &Value) -> Result<Value, AuthError> {
+            self.0.clone()
+        }
+    }
+
+    #[test]
+    fn new_profiles_have_separate_empty_directories_and_private_settings() {
+        let (tmp, first) = fixture();
+        let id = create_in(tmp.path(), "个人账号".into(), "7891".into(), None).unwrap();
+        let index = load_index(tmp.path()).unwrap();
+        let second = index.accounts.iter().find(|p| p.id == id).unwrap();
+        assert_ne!(first.config_dir, second.config_dir);
+        assert_eq!(second.proxy, "http://127.0.0.1:7891");
+        assert!(!first.config_dir.join(".credentials.json").exists());
+        assert!(!second.config_dir.join("settings.json").exists());
+        assert_eq!(row(&first, false).status, "signedOut");
+    }
+
+    #[test]
+    fn launch_environment_removes_credentials_and_keeps_identity_local() {
+        let (_, first) = fixture();
+        let base = BTreeMap::from([
+            ("ANTHROPIC_API_KEY".into(), "global-secret".into()),
+            ("HTTPS_PROXY".into(), "http://127.0.0.1:7890".into()),
+        ]);
+        let ctx = launch_env(&first, &base).unwrap();
+        for key in AUTH_ENV {
+            assert!(ctx.remove.contains(&key.to_string()));
+        }
+        assert_eq!(
+            ctx.set["CLAUDE_CONFIG_DIR"],
+            first.config_dir.to_string_lossy()
+        );
+        assert!(!ctx.set.values().any(|v| v.contains("global-secret")));
+        assert!(!ctx.set.contains_key("HTTPS_PROXY"));
+        let default = launch_env(&system_profile(), &base).unwrap();
+        if !system_profile().explicit_config {
+            assert!(!default.set.contains_key("CLAUDE_CONFIG_DIR"));
+        }
+    }
+
+    #[test]
+    fn proxies_override_project_proxy_and_off_removes_all_inherited_variants() {
+        let (_, mut p) = fixture();
+        p.proxy = "http://127.0.0.1:7901".into();
+        let base = BTreeMap::from([("NO_PROXY".into(), "internal.example".into())]);
+        let ctx = launch_env(&p, &base).unwrap();
+        assert_eq!(ctx.set["HTTPS_PROXY"], p.proxy);
+        assert_eq!(
+            ctx.set["NO_PROXY"],
+            "internal.example,localhost,127.0.0.1,::1"
+        );
+        assert!(ctx.remove.contains(&"ALL_PROXY".into()));
+        p.proxy = "off".into();
+        let off = launch_env(&p, &base).unwrap();
+        for key in PROXY_ENV {
+            assert!(off.remove.contains(&key.to_string()));
+        }
+        assert!(off.remove.contains(&"CLAUDE_CODE_HTTPS_PROXY".into()));
+        assert!(!off.set.contains_key("HTTPS_PROXY"));
+    }
+
+    #[test]
+    fn proxy_validation_rejects_secrets_socks_and_invalid_ports() {
+        for proxy in [
+            "0",
+            "65536",
+            "socks5://127.0.0.1:7890",
+            "http://user:secret@host:80",
+            "http://host:80?token=secret",
+            "http://",
+            "http://host\n",
+        ] {
+            // Surrounding whitespace is trimmed; embedded control chars are not.
+            if proxy == "http://host\n" {
+                continue;
+            }
+            assert!(normalize_proxy(proxy).is_err(), "accepted {proxy}");
+        }
+        assert!(normalize_proxy("http://ho\nst:80").is_err());
+        assert_eq!(normalize_proxy("7901").unwrap(), "http://127.0.0.1:7901");
+    }
+
+    #[test]
+    fn listing_is_read_only_and_expired_tokens_are_refreshable() {
+        let (tmp, p) = fixture();
+        logged_in(&p, 0);
+        let path = p.config_dir.join(".credentials.json");
+        let before = fs::read(&path).unwrap();
+        assert_eq!(
+            list_in(tmp.path())
+                .unwrap()
+                .accounts
+                .iter()
+                .find(|r| r.id == p.id)
+                .unwrap()
+                .status,
+            "refreshable"
+        );
+        assert_eq!(fs::read(&path).unwrap(), before);
+        assert!(!fs::read_to_string(tmp.path().join("profiles.json"))
             .unwrap()
-            .id;
-        let bob_path = snapshot_credentials(&store, &bob).unwrap();
-        let original = fs::read(&bob_path).unwrap();
-        write_live_oauth(
-            &live,
-            &json!({"accessToken": "tok-a", "refreshToken": "tok-a-refresh"}),
+            .contains("test-refresh-secret"));
+    }
+
+    #[test]
+    fn switching_only_updates_default_and_does_not_write_either_identity() {
+        let (tmp, p) = fixture();
+        logged_in(&p, i64::MAX);
+        let id = create_in(tmp.path(), "个人".into(), "off".into(), None).unwrap();
+        let second = load_index(tmp.path())
+            .unwrap()
+            .accounts
+            .into_iter()
+            .find(|p| p.id == id)
+            .unwrap();
+        logged_in(&second, i64::MAX);
+        let first_bytes = fs::read(p.config_dir.join(".credentials.json")).unwrap();
+        let second_bytes = fs::read(second.config_dir.join(".credentials.json")).unwrap();
+        switch_in(tmp.path(), &p.id).unwrap();
+        switch_in(tmp.path(), &second.id).unwrap();
+        assert_eq!(
+            selected(&load_index(tmp.path()).unwrap()).unwrap().id,
+            second.id
+        );
+        assert_eq!(
+            fs::read(p.config_dir.join(".credentials.json")).unwrap(),
+            first_bytes
+        );
+        assert_eq!(
+            fs::read(second.config_dir.join(".credentials.json")).unwrap(),
+            second_bytes
+        );
+    }
+
+    #[test]
+    fn empty_credentials_and_wrong_identity_cannot_be_selected() {
+        let (tmp, mut p) = fixture();
+        assert!(switch_in(tmp.path(), &p.id).is_err());
+        logged_in(&p, i64::MAX);
+        p.account_uuid = "another-account".into();
+        save_index(
+            tmp.path(),
+            &ProfileIndex {
+                accounts: vec![p.clone()],
+                ..Default::default()
+            },
         )
         .unwrap();
-        switch_account_in(&store, &live, &ada, &TestClient, || Ok(())).unwrap();
-        assert_eq!(fs::read(&bob_path).unwrap(), original);
-        let recovery = fs::read_dir(&store)
-            .unwrap()
-            .filter_map(Result::ok)
-            .find(|e| {
-                e.file_name()
-                    .to_string_lossy()
-                    .starts_with("unverified-live-")
-            })
-            .unwrap()
-            .path();
+        assert_eq!(row(&p, false).status, "conflict");
+        assert!(switch_in(tmp.path(), &p.id).is_err());
+    }
+
+    #[test]
+    fn credentials_without_account_metadata_are_not_reported_as_ready() {
+        let (tmp, p) = fixture();
+        logged_in(&p, i64::MAX);
+        fs::remove_file(config_file(&p)).unwrap();
+        assert_eq!(row(&p, false).status, "unverified");
+        assert!(switch_in(tmp.path(), &p.id).is_err());
+    }
+
+    #[test]
+    fn duplicate_session_ids_are_rejected_instead_of_using_default_account() {
+        let (tmp, p) = fixture();
+        let cwd = "D:/project";
+        let id = create_in(tmp.path(), "个人".into(), "off".into(), None).unwrap();
+        let index = load_index(tmp.path()).unwrap();
+        let second = index.accounts.iter().find(|a| a.id == id).unwrap();
+        for profile in [&p, second] {
+            let project = profile
+                .config_dir
+                .join("projects")
+                .join(crate::tools::claude::encode_project_dir(cwd));
+            fs::create_dir_all(&project).unwrap();
+            fs::write(project.join("same-id.jsonl"), "").unwrap();
+        }
+        assert!(owner_in(tmp.path(), cwd, Some("same-id")).is_err());
+    }
+
+    #[test]
+    fn server_verification_failure_never_marks_login_ready_or_copies_tokens() {
+        let (tmp, mut p) = fixture();
+        logged_in(&p, i64::MAX);
+        p.verification_pending = true;
+        let mut index = ProfileIndex {
+            accounts: vec![p.clone()],
+            ..Default::default()
+        };
+        save_index(tmp.path(), &index).unwrap();
+        let before = fs::read(p.config_dir.join(".credentials.json")).unwrap();
+        for result in [
+            Err(AuthError::Network),
+            Ok(json!({"account": {"uuid": "wrong-id"}})),
+        ] {
+            assert!(
+                verify_with_client(tmp.path(), &mut index, &mut p, &FakeClient(result)).is_err()
+            );
+            assert_eq!(row(&p, false).status, "unverified");
+            assert!(switch_in(tmp.path(), &p.id).is_err());
+        }
+        verify_with_client(
+            tmp.path(),
+            &mut index,
+            &mut p,
+            &FakeClient(Ok(json!({"account": {"uuid": "work-id"}}))),
+        )
+        .unwrap();
+        assert_eq!(row(&p, false).status, "ready");
+        assert_eq!(p.account_uuid, "work-id");
         assert_eq!(
-            read_json(&recovery).unwrap()["claudeAiOauth"]["accessToken"],
-            "tok-a"
+            fs::read(p.config_dir.join(".credentials.json")).unwrap(),
+            before
         );
+    }
+
+    #[test]
+    fn system_usage_cache_cannot_validate_the_actual_token_owner() {
+        let (tmp, mut p) = fixture();
+        p.id = SYSTEM.into();
+        p.system = true;
+        logged_in(&p, i64::MAX);
+        let metadata = json!({
+            "oauthAccount": {"accountUuid": "work-id", "emailAddress": "work@example.com"},
+            "cachedUsageUtilization": {"accountUuid": "work-id", "utilization": {"five_hour": {"utilization": 2}}}
+        });
+        write_json(&config_file(&p), &metadata).unwrap();
+        let mut index = ProfileIndex {
+            accounts: vec![p.clone()],
+            ..Default::default()
+        };
+        save_index(tmp.path(), &index).unwrap();
+        assert_eq!(row(&p, false).status, "unverified");
+        assert!(switch_in(tmp.path(), SYSTEM).is_err());
+        let original_credentials = fs::read(p.config_dir.join(".credentials.json")).unwrap();
+        let original_metadata = fs::read(config_file(&p)).unwrap();
+        let actual = FakeClient(Ok(
+            json!({"account": {"uuid": "another-id", "email": "actual@gmx.es"}}),
+        ));
+        assert!(verify_with_client(tmp.path(), &mut index, &mut p, &actual).is_err());
+        let reloaded = load_index(tmp.path()).unwrap().accounts.remove(0);
+        let result = row(&reloaded, false);
+        assert_eq!(result.status, "conflict");
+        assert!(result.message.contains("ac***@gmx.es"));
+        assert!(prepare_system(tmp.path(), reloaded, &BTreeMap::new()).is_err());
         assert_eq!(
-            read_json(&live.claude_json).unwrap()["oauthAccount"]["accountUuid"],
-            "acct-1"
+            fs::read(p.config_dir.join(".credentials.json")).unwrap(),
+            original_credentials
         );
+        assert_eq!(fs::read(config_file(&p)).unwrap(), original_metadata);
+        let saved = fs::read_to_string(tmp.path().join("profiles.json")).unwrap();
+        assert!(!saved.contains("test-access-secret"));
+        assert!(!saved.contains("test-refresh-secret"));
+    }
+
+    #[test]
+    fn system_verification_survives_restart_and_invalidates_when_credentials_change() {
+        let (tmp, mut p) = fixture();
+        p.id = SYSTEM.into();
+        p.system = true;
+        logged_in(&p, i64::MAX);
+        let mut index = ProfileIndex {
+            accounts: vec![p.clone()],
+            ..Default::default()
+        };
+        let actual = FakeClient(Ok(
+            json!({"account": {"uuid": "work-id", "email": "work@example.com"}}),
+        ));
+        verify_with_client(tmp.path(), &mut index, &mut p, &actual).unwrap();
+        let mut reloaded = load_index(tmp.path()).unwrap().accounts.remove(0);
+        assert_eq!(row(&reloaded, false).status, "ready");
+        assert!(
+            reloaded.account_uuid.is_empty(),
+            "the system entry must follow future legitimate CLI logins"
+        );
+        let path = reloaded.config_dir.join(".credentials.json");
+        let mut root = read_json(&path).unwrap();
+        root["claudeAiOauth"]["accessToken"] = json!("new-token-for-an-unknown-account");
+        write_json(&path, &root).unwrap();
+        assert_eq!(row(&reloaded, false).status, "unverified");
+        // A token change also invalidates a previously recorded mismatch.
+        reloaded.system_identity.as_mut().unwrap().account_uuid = "another-id".into();
+        assert_eq!(row(&reloaded, false).status, "unverified");
+    }
+
+    #[test]
+    fn legacy_migration_preserves_original_and_requires_fresh_login() {
+        let tmp = tempfile::tempdir().unwrap();
+        let id = Uuid::new_v4().to_string();
+        write_json(&tmp.path().join("index.json"), &json!({"accounts": [{"id": id, "name": "旧工作号", "email": "work@example.com", "accountUuid": "work-id"}]})).unwrap();
+        write_json(
+            &tmp.path().join(&id).join("credentials.json"),
+            &json!({"claudeAiOauth": {"accessToken": "broken-legacy-secret"}}),
+        )
+        .unwrap();
+        let original = fs::read(tmp.path().join(&id).join("credentials.json")).unwrap();
+        let legacy = legacy_rows(tmp.path(), &ProfileIndex::default())
+            .unwrap()
+            .remove(0);
+        create_in(
+            tmp.path(),
+            legacy.name.clone(),
+            "inherit".into(),
+            Some(legacy),
+        )
+        .unwrap();
+        let p = load_index(tmp.path()).unwrap().accounts.remove(0);
+        assert_eq!(p.account_uuid, "work-id");
+        assert!(!p.config_dir.join(".credentials.json").exists());
+        assert_eq!(
+            fs::read(tmp.path().join(&id).join("credentials.json")).unwrap(),
+            original
+        );
+        assert!(legacy_rows(tmp.path(), &load_index(tmp.path()).unwrap())
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn removing_keeps_login_and_history_and_resets_default() {
+        let (tmp, p) = fixture();
+        logged_in(&p, i64::MAX);
+        fs::write(p.config_dir.join("history.jsonl"), "history-sentinel").unwrap();
+        switch_in(tmp.path(), &p.id).unwrap();
+        delete_in(tmp.path(), &p.id).unwrap();
+        assert!(p.config_dir.join(".credentials.json").exists());
+        assert_eq!(
+            fs::read_to_string(p.config_dir.join("history.jsonl")).unwrap(),
+            "history-sentinel"
+        );
+        let index = load_index(tmp.path()).unwrap();
+        assert_eq!(selected(&index).unwrap().id, SYSTEM);
+        assert!(index.accounts.is_empty());
+        assert_eq!(index.retired[0].id, p.id);
+    }
+
+    #[test]
+    fn resuming_uses_original_owner_after_default_changes_and_removal() {
+        let (tmp, p) = fixture();
+        let cwd = "D:/project";
+        let projects = p
+            .config_dir
+            .join("projects")
+            .join(crate::tools::claude::encode_project_dir(cwd));
+        fs::create_dir_all(&projects).unwrap();
+        fs::write(projects.join("session-1.jsonl"), "").unwrap();
+        assert_eq!(
+            owner_in(tmp.path(), cwd, Some("session-1")).unwrap().id,
+            p.id
+        );
+        assert_eq!(owner_in(tmp.path(), cwd, None).unwrap().id, SYSTEM);
+        delete_in(tmp.path(), &p.id).unwrap();
+        assert_eq!(
+            owner_in(tmp.path(), cwd, Some("session-1")).unwrap().id,
+            p.id
+        );
+        assert!(owner_in(tmp.path(), cwd, Some("missing")).is_err());
+    }
+
+    #[test]
+    fn invalid_ids_cannot_escape_store_and_corrupt_index_is_not_overwritten() {
+        for id in ["../escape", "C:\\escape", "..", "", "system/child"] {
+            assert!(validate_id(id).is_err());
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("profiles.json"), "invalid-index").unwrap();
+        assert!(list_in(tmp.path()).is_err());
+        assert!(create_in(tmp.path(), "账号".into(), "inherit".into(), None).is_err());
+        assert_eq!(
+            fs::read_to_string(tmp.path().join("profiles.json")).unwrap(),
+            "invalid-index"
+        );
+    }
+
+    #[test]
+    fn settings_override_detection_reports_keys_without_exposing_values() {
+        let (tmp, p) = fixture();
+        logged_in(&p, i64::MAX);
+        let settings = p.config_dir.join("settings.json");
+        write_json(
+            &settings,
+            &json!({"env": {"ANTHROPIC_API_KEY": "secret-api-value"}}),
+        )
+        .unwrap();
+        let problem = auth_override(&[settings]).unwrap();
+        assert!(problem.contains("ANTHROPIC_API_KEY"));
+        assert!(!problem.contains("secret-api-value"));
+        assert_eq!(row(&p, false).status, "conflict");
+        assert!(switch_in(tmp.path(), &p.id).is_err());
     }
 }

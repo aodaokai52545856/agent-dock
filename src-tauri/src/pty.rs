@@ -63,6 +63,7 @@ struct LivePty {
     key: String,
     project_id: String,
     tool_id: ToolId,
+    claude_account_id: Option<String>,
     session_id: Option<String>,
     title: String,
     opened_at: i64,
@@ -76,6 +77,11 @@ pub struct PtyHub {
 }
 
 impl PtyHub {
+    pub fn claude_account_running(&self, id: &str) -> bool {
+        let mut sessions = self.sessions.lock().expect("pty lock");
+        reap_dead(&mut sessions);
+        sessions.values().any(|pty| pty.claude_account_id.as_deref() == Some(id))
+    }
     pub fn new() -> Arc<Self> {
         Arc::new(Self {
             sessions: Mutex::new(HashMap::new()),
@@ -144,43 +150,6 @@ impl PtyHub {
         Ok(())
     }
 
-    pub fn stop_tool(&self, app: &AppHandle, tool_id: ToolId) -> Result<(), String> {
-        let mut sessions = self.sessions.lock().map_err(|_| "终端状态不可用，请重启应用。")?;
-        let ids: Vec<String> = sessions.values().filter(|pty| pty.tool_id == tool_id)
-            .map(|pty| pty.id.clone()).collect();
-        for id in ids {
-            let pty = sessions.get_mut(&id).expect("selected pty");
-            if pty.child.try_wait().map_err(|_| "无法检查旧 Claude 终端，请先手动关闭。")?.is_none() {
-                #[cfg(windows)]
-                {
-                    // Killing only the PowerShell parent leaves claude.exe able
-                    // to refresh/write credentials during the account swap.
-                    let pid = pty.child.process_id().ok_or("无法定位旧 Claude 终端进程。")?;
-                    let mut cmd = std::process::Command::new("taskkill.exe");
-                    cmd.args(["/PID", &pid.to_string(), "/T", "/F"]);
-                    platform::apply_no_window(&mut cmd);
-                    let output = cmd.output().map_err(|_| "无法关闭旧 Claude 终端进程树，请先手动关闭。")?;
-                    if !output.status.success() && pty.child.try_wait().ok().flatten().is_none() {
-                        return Err("旧 Claude 终端尚未关闭，已取消账号操作。".into());
-                    }
-                }
-                #[cfg(not(windows))]
-                pty.child.kill().map_err(|_| "无法关闭旧 Claude 终端，已取消账号操作。")?;
-
-                let deadline = std::time::Instant::now() + Duration::from_secs(5);
-                while pty.child.try_wait().map_err(|_| "无法确认旧 Claude 终端已退出。")?.is_none() {
-                    if std::time::Instant::now() >= deadline {
-                        return Err("等待旧 Claude 终端退出超时，已取消账号操作。".into());
-                    }
-                    thread::sleep(Duration::from_millis(25));
-                }
-            }
-            sessions.remove(&id);
-            let _ = app.emit("pty-exit", PtyExit { pty_id: id });
-        }
-        Ok(())
-    }
-
     pub fn open(
         &self,
         app: AppHandle,
@@ -223,6 +192,11 @@ impl PtyHub {
         }
         let exe = tools::resolve_binary(tool_id, &state.settings)?;
         let env_pairs = proxy_env(project.proxy_enabled, &project.proxy_url)?;
+        let claude = if tool_id == ToolId::Claude {
+            let mut base = std::env::vars().collect::<std::collections::BTreeMap<_, _>>();
+            base.extend(env_pairs.iter().cloned());
+            Some(crate::claude_accounts::launch_context(&app, &project.path, session_id.as_deref(), &base)?)
+        } else { None };
         let extra_args = {
             let mut args = tools::launch_args_for(tool_id, session_id.as_deref(), Some(&exe));
             args.extend(claude_theme_args(tool_id, ui_theme));
@@ -255,6 +229,10 @@ impl PtyHub {
             }
             ShellKind::Fish | ShellKind::Posix => build_posix_launch(&exe, &extra_args),
         };
+        let launch = match &claude {
+            Some(context) => claude_launch_env(&launch, kind, context),
+            None => launch,
+        };
         let mut cmd = CommandBuilder::new(&shell);
         apply_shell_args(&mut cmd, kind, &shell, &launch);
         cmd.cwd(&project.path);
@@ -277,6 +255,10 @@ impl PtyHub {
         }
         for (env_key, value) in env_pairs {
             cmd.env(env_key, value);
+        }
+        if let Some(context) = &claude {
+            for key in &context.remove { cmd.env_remove(key); }
+            for (key, value) in &context.set { cmd.env(key, value); }
         }
 
         let child = pair
@@ -302,6 +284,10 @@ impl PtyHub {
         } else {
             title
         };
+        let display_title = match &claude {
+            Some(context) => format!("{} · {}", context.name, display_title),
+            None => display_title,
+        };
 
         {
             let mut sessions = self.sessions.lock().expect("pty lock");
@@ -312,6 +298,7 @@ impl PtyHub {
                     key: key.clone(),
                     project_id: project_id.to_string(),
                     tool_id,
+                    claude_account_id: claude.as_ref().map(|c| c.id.clone()),
                     session_id: resolved_session.clone(),
                     title: display_title.clone(),
                     opened_at,
@@ -447,6 +434,25 @@ enum ShellKind {
     PowerShell,
     Fish,
     Posix,
+}
+
+// Reapply isolation after shell startup files. Otherwise a login shell's
+// profile can silently replace the account or put a global API token back.
+fn claude_launch_env(launch: &str, kind: ShellKind, ctx: &crate::claude_accounts::LaunchContext) -> String {
+    match kind {
+        ShellKind::PowerShell => {
+            let mut prefix = String::new();
+            for key in &ctx.remove { prefix.push_str(&format!("Remove-Item -LiteralPath 'Env:{key}' -ErrorAction SilentlyContinue; ")); }
+            for (key, value) in &ctx.set { prefix.push_str(&format!("$env:{key}={}; ", ps_single_quote(value))); }
+            format!("{prefix}{launch}")
+        }
+        ShellKind::Fish | ShellKind::Posix => {
+            let mut prefix = vec!["env".to_string()];
+            for key in &ctx.remove { prefix.extend(["-u".into(), posix_single_quote(key)]); }
+            for (key, value) in &ctx.set { prefix.push(posix_single_quote(&format!("{key}={value}"))); }
+            format!("{} {launch}", prefix.join(" "))
+        }
+    }
 }
 
 fn shell_kind(shell: &str) -> ShellKind {
@@ -674,6 +680,40 @@ pub fn decode_utf8_stream(pending: &mut Vec<u8>, incoming: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn claude_shell_launch_applies_isolation_after_profile_with_quoted_values() {
+        let context = crate::claude_accounts::LaunchContext {
+            id: "test".into(), name: "工作".into(),
+            remove: vec!["ANTHROPIC_API_KEY".into(), "CLAUDE_CONFIG_DIR".into()],
+            set: std::collections::BTreeMap::from([("CLAUDE_CONFIG_DIR".into(), "C:/profiles/O'Brien work".into())]),
+        };
+        let ps = claude_launch_env("& 'claude.exe'", ShellKind::PowerShell, &context);
+        assert!(ps.contains("'C:/profiles/O''Brien work'"));
+        assert!(ps.ends_with("& 'claude.exe'"));
+        let sh = claude_launch_env("'claude'", ShellKind::Posix, &context);
+        assert!(sh.starts_with("env -u 'ANTHROPIC_API_KEY'"));
+        assert!(sh.ends_with(" 'claude'"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn native_powershell_process_cannot_inherit_another_claude_identity() {
+        let context = crate::claude_accounts::LaunchContext {
+            id: "test".into(), name: "工作".into(),
+            remove: vec!["ANTHROPIC_API_KEY".into(), "CLAUDE_CONFIG_DIR".into(), "HTTPS_PROXY".into()],
+            set: std::collections::BTreeMap::from([("CLAUDE_CONFIG_DIR".into(), "C:/profiles/O'Brien work".into())]),
+        };
+        let probe = "@{ config=$env:CLAUDE_CONFIG_DIR; key=$env:ANTHROPIC_API_KEY; proxy=$env:HTTPS_PROXY } | ConvertTo-Json -Compress";
+        let launch = claude_launch_env(probe, ShellKind::PowerShell, &context);
+        let output = std::process::Command::new("powershell.exe").args(["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", &launch])
+            .env("ANTHROPIC_API_KEY", "fake-global-secret").env("CLAUDE_CONFIG_DIR", "wrong-account").env("HTTPS_PROXY", "http://wrong-proxy:1234")
+            .output().unwrap();
+        assert!(output.status.success());
+        let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(result["config"], "C:/profiles/O'Brien work");
+        assert!(result["key"].is_null()); assert!(result["proxy"].is_null());
+    }
 
     #[test]
     fn windows_cmd_line_quotes_spaces() {
