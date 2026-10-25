@@ -78,6 +78,8 @@ async function sendResult() {
 }
 
 function onKey(ev: KeyboardEvent) {
+  if (store.appMode !== 'console') return
+  if (ev.target instanceof Element && ev.target.closest('[aria-modal="true"]')) return
   if (ev.key === 'Escape' && open.value) {
     ev.preventDefault()
     close()

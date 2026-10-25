@@ -57,13 +57,14 @@ test('warns when the weekly pool is almost gone', () => {
 })
 
 test('formats a compact status line', () => {
-  const now = Date.parse('2026-09-11T08:00:00+08:00')
+  const now = new Date(2026, 8, 11, 8).getTime()
+  const resetsAt = new Date(2026, 8, 15, 9, 53).toISOString()
   const line = formatUsageLine({
     ...sample(),
-    resetsAt: '2026-09-15T09:53:00+08:00'
+    resetsAt
   })
   assert.match(line, /Grok 剩 58%/)
-  assert.match(formatResetAt('2026-09-15T09:53:00+08:00', now), /9\/15/)
+  assert.equal(formatResetAt(resetsAt, now), '9/15 09:53 重置')
   assert.match(formatUsageLine(sample({ prepaidBalance: 12.5 })), /额度 12.50/)
 })
 

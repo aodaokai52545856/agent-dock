@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { relativeTime } from '../lib/format'
-import { clampOverlayBox, endPaneAnim, layout, sidebarHeadCompact, sidebarPaneWidth, sidebarToolFilterUsesMark, toggleProjects } from '../lib/layout'
+import { clampOverlayBox, endPaneAnim, layout, sidebarPaneWidth, toggleProjects } from '../lib/layout'
 import { isFixedDshSession } from '../lib/dsh'
 import { isPendingSessionId } from '../lib/liveBind'
 import {
@@ -68,7 +68,6 @@ const collapsedGroups = ref(
 const toolFilterOptions = computed(() => [{ id: 'all' as const, label: '全部' }, ...TOOLS])
 const liveFilter = computed(() => store.sessionLiveOnly)
 const liveFilterLabel = computed(() => sessionLiveFilterLabel(liveFilter.value))
-const compactHead = computed(() => sidebarHeadCompact(layout.sidebarWidth))
 const filterLabel = computed(
   () => toolFilterOptions.value.find((option) => option.id === store.sessionToolFilter)?.label ?? '全部'
 )
@@ -76,9 +75,6 @@ const filterToolId = computed(() => {
   const id = store.sessionToolFilter
   return id === 'all' ? undefined : id
 })
-const filterUsesMark = computed(
-  () => Boolean(filterToolId.value) && sidebarToolFilterUsesMark(layout.sidebarWidth, filterLabel.value)
-)
 
 const visibleTools = computed(() => {
   const listed = (id: ToolId) =>
@@ -104,7 +100,10 @@ const groups = computed(() =>
       ),
       error: liveFilter.value ? undefined : store.sessionErrors[tool.id]
     }))
-    .filter((group) => !liveFilter.value || group.sessions.length)
+    .filter((group) => group.sessions.length || (!liveFilter.value && (
+      group.error || store.sessionLoading[group.tool.id] ||
+      (!store.sessionQuery.trim() && store.sessionToolFilter !== 'all')
+    )))
 )
 
 const showGroupHeads = computed(() =>
@@ -216,7 +215,7 @@ function pickLiveFilter() {
   setSessionLiveOnly(!store.sessionLiveOnly)
 }
 
-function menuBox(event: MouseEvent, height: number) {
+function menuBox(event: Pick<MouseEvent, 'clientX' | 'clientY'>, height: number) {
   return clampOverlayBox(
     { x: event.clientX, y: event.clientY, width: MENU_WIDTH, height },
     {
@@ -232,7 +231,8 @@ function openMenu(event: MouseEvent, sessionId: string, toolId: ToolId) {
   event.stopPropagation()
   closeFilter()
   projectMenu.value = null
-  const pos = menuBox(event, MENU_HEIGHT)
+  const rect = event.type === 'click' ? (event.currentTarget as HTMLElement).getBoundingClientRect() : null
+  const pos = menuBox(rect ? { clientX: rect.right, clientY: rect.bottom } : event, MENU_HEIGHT)
   menu.value = {
     x: pos.x,
     y: pos.y,
@@ -400,6 +400,8 @@ function commitRename(sessionId: string, toolId: ToolId) {
 }
 
 function onKey(event: KeyboardEvent) {
+  if (store.appMode !== 'console') return
+  if (event.target instanceof Element && event.target.closest('[aria-modal="true"]')) return
   if (filterOpen.value) {
     if (event.key === 'Escape') {
       closeFilter()
@@ -557,24 +559,24 @@ onUnmounted(() => {
       </div>
 
       <div class="block block--sessions">
-        <div class="block-head" :class="{ 'is-compact': compactHead }">
+        <div class="block-head session-head">
           <div class="block-head-start">
             <p class="kicker">会话</p>
             <div class="tool-picker" @click.stop>
               <button
                 type="button"
                 class="tool-picker-btn"
-                :class="{ 'is-open': filterOpen, 'is-mark': filterUsesMark }"
+                :class="{ 'is-open': filterOpen }"
                 aria-haspopup="listbox"
                 :aria-expanded="filterOpen"
                 :aria-label="'筛选会话工具，当前' + filterLabel"
                 :title="filterLabel"
                 @click="toggleFilter"
               >
-                <span v-if="filterUsesMark && filterToolId" class="tool-picker-mark" aria-hidden="true">
+                <span v-if="filterToolId" class="tool-picker-mark" aria-hidden="true">
                   <ToolMark :id="filterToolId" />
                 </span>
-                <span v-else class="tool-picker-label">{{ filterLabel }}</span>
+                <span class="tool-picker-label">{{ filterLabel }}</span>
                 <svg class="tool-picker-chevron" viewBox="0 0 12 12" aria-hidden="true">
                   <path d="M2.4 4.2L6 7.8l3.6-3.6" />
                 </svg>
@@ -670,8 +672,10 @@ onUnmounted(() => {
         </div>
 
         <div v-else-if="!store.selectedProjectId" class="muted pad">点上面的项目，或新建会话时再选。</div>
-        <div v-else-if="!groups.length" class="muted session-empty">
-          {{ liveFilter ? '还没有打开的会话' : '暂无会话' }}
+        <div v-else-if="!groups.length" class="muted session-empty" role="status">
+          <p>{{ store.sessionQuery.trim() ? '未找到匹配的会话' : liveFilter ? '还没有打开的会话' : '暂无会话' }}</p>
+          <button v-if="store.sessionQuery.trim()" type="button" class="btn btn-ghost btn-small" @click="store.sessionQuery = ''">清除搜索</button>
+          <button v-else type="button" class="btn btn-ghost btn-small" @click="$emit('create')">新建会话</button>
         </div>
 
         <div v-else class="session-pane" :class="{ 'is-busy': store.sessionRefreshBusy }">
@@ -749,10 +753,22 @@ onUnmounted(() => {
                     />
                     <span class="row-time">{{ relativeTime(session.updatedAt) }}</span>
                   </button>
+                  <button
+                    v-if="!selecting && renaming !== session.id"
+                    type="button"
+                    class="row-more"
+                    :aria-label="'会话操作：' + session.title"
+                    aria-haspopup="menu"
+                    :aria-expanded="menu?.sessionId === session.id && menu?.toolId === session.toolId"
+                    title="会话操作"
+                    @click="openMenu($event, session.id, session.toolId)"
+                  >
+                    <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="3" cy="8" r="1" /><circle cx="8" cy="8" r="1" /><circle cx="13" cy="8" r="1" /></svg>
+                  </button>
                 </div>
               </li>
             </ul>
-            <p v-else-if="!hideGroupBody(group.tool.id)" class="muted group-empty">暂无会话</p>
+            <p v-else-if="!hideGroupBody(group.tool.id)" class="muted group-empty">{{ store.sessionLoading[group.tool.id] ? '正在读取…' : '暂无会话' }}</p>
           </section>
         </div>
           <div v-if="store.sessionRefreshBusy" class="session-mask" role="status" aria-live="polite">
@@ -926,6 +942,24 @@ onUnmounted(() => {
   height: 32px;
 }
 
+.session-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  height: auto;
+  min-height: 64px;
+  flex-shrink: 0;
+  column-gap: 8px;
+  row-gap: 0;
+}
+
+.session-head .block-head-start { display: contents; }
+.session-head .kicker { grid-area: 1 / 1; overflow: visible; }
+.session-head .batch-btn { grid-area: 1 / 2; }
+.session-head .refresh-btn { grid-area: 1 / 3; }
+.session-head .tool-picker { grid-area: 2 / 1; }
+.session-head .live-filter { grid-area: 2 / 2 / 3 / 4; justify-self: end; }
+.session-head .tool-picker-btn { width: 100%; padding-left: 0; }
+
 .fold-btn {
   display: inline-flex;
   align-items: center;
@@ -967,10 +1001,6 @@ onUnmounted(() => {
 .tool-picker {
   position: relative;
   min-width: 0;
-}
-
-.tool-picker:has(.is-mark) {
-  flex-shrink: 0;
 }
 
 .live-filter {
@@ -1027,10 +1057,6 @@ onUnmounted(() => {
   white-space: nowrap;
 }
 
-.block-head.is-compact .live-filter-label {
-  display: none;
-}
-
 .live-filter-count {
   min-width: 16px;
   height: 16px;
@@ -1058,11 +1084,6 @@ onUnmounted(() => {
   font-size: 12px;
   line-height: 20px;
   white-space: nowrap;
-}
-
-.tool-picker-btn.is-mark {
-  flex-shrink: 0;
-  padding-left: 8px;
 }
 
 .tool-picker-label {
@@ -1123,21 +1144,8 @@ onUnmounted(() => {
   margin: 0;
   font-size: 12px;
   line-height: 20px;
-  color: var(--ad-faint);
-  max-width: 3em;
-  overflow: hidden;
+  color: var(--ad-muted);
   white-space: nowrap;
-  transition:
-    max-width var(--ad-transition),
-    opacity var(--ad-transition),
-    margin var(--ad-transition);
-}
-
-.block-head.is-compact .kicker {
-  max-width: 0;
-  opacity: 0;
-  margin: 0;
-  pointer-events: none;
 }
 
 .text-btn {
@@ -1193,17 +1201,9 @@ onUnmounted(() => {
     opacity var(--ad-transition);
 }
 
-.block-head.is-compact .refresh-icon {
+.refresh-btn.is-scanning .refresh-icon {
   width: 14px;
   opacity: 1;
-}
-
-.block-head.is-compact .refresh-label {
-  max-width: 0;
-  opacity: 0;
-}
-
-.refresh-btn.is-scanning .refresh-icon {
   animation: ad-scan-spin 700ms linear infinite;
 }
 
@@ -1407,11 +1407,16 @@ onUnmounted(() => {
   flex: 1;
   min-height: 0;
   display: flex;
+  flex-direction: column;
+  gap: 8px;
   align-items: center;
   justify-content: center;
   padding: 12px;
   text-align: center;
+  white-space: normal;
 }
+
+.session-empty p { margin: 0; }
 
 .session-pane {
   position: relative;
@@ -1428,29 +1433,30 @@ onUnmounted(() => {
   padding: 8px 12px 16px;
 }
 
-.session-pane.is-busy .groups {
-  visibility: hidden;
-}
-
 .session-mask {
   position: absolute;
-  inset: 0;
+  bottom: 8px;
+  left: 50%;
+  transform: translateX(-50%);
   z-index: 2;
   display: flex;
-  flex-direction: column;
   align-items: center;
   justify-content: center;
   gap: 8px;
-  /* Extra fill stacked on --ad-sidebar reads darker than the rest of the rail. */
-  background: transparent;
+  padding: 8px 12px;
+  border: 1px solid var(--ad-border);
+  border-radius: var(--ad-radius-control);
+  background: var(--ad-float-solid);
+  white-space: nowrap;
+  pointer-events: none;
   color: var(--ad-muted);
   font-size: 12px;
   line-height: 18px;
 }
 
 .session-mask .scan-spin {
-  width: 18px;
-  height: 18px;
+  width: 12px;
+  height: 12px;
 }
 
 .group {
@@ -1468,7 +1474,7 @@ onUnmounted(() => {
   border-radius: var(--ad-radius-control);
   font-size: 11px;
   line-height: 20px;
-  color: var(--ad-faint);
+  color: var(--ad-muted);
 }
 
 .group-title:hover {
@@ -1580,7 +1586,16 @@ onUnmounted(() => {
   line-height: 20px;
   color: var(--ad-muted);
   font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+  white-space: nowrap;
 }
+
+.row-more { flex-shrink: 0; width: 24px; height: 28px; margin-right: 4px; padding: 4px; border-radius: 4px; opacity: 0; color: var(--ad-muted); }
+.row-more svg { width: 16px; height: 16px; fill: currentColor; }
+.row:hover .row-more, .row:focus-within .row-more { opacity: 1; }
+.row-more:hover { color: var(--ad-text); background: var(--ad-hover); }
+.group-error p { white-space: normal; overflow-wrap: anywhere; }
+@media (hover: none) { .row-more { opacity: 1; } }
 
 .rename {
   flex: 1;

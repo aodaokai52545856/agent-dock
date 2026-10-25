@@ -277,10 +277,19 @@ onUnmounted(() => {
   right: 0;
   z-index: 50;
   width: min(372px, calc(100vw - 24px));
+  max-height: calc(100vh - 72px);
+  overflow: auto;
+  overscroll-behavior: contain;
   padding: 10px;
   background: var(--ad-float-solid);
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
+}
+
+@media (max-width: 900px) {
+  .kicker { display: none; }
+  .file-btn { padding-inline: 8px; }
+  .clock-name { max-width: 3em; }
 }
 
 .readout-top {

@@ -860,7 +860,7 @@ const confirmCopy = () => {
       @close="confirmOpen = false"
       @confirm="onConfirm"
     />
-    <TextConvertFab />
+    <TextConvertFab v-show="store.appMode === 'console'" />
     <div v-if="store.toast" class="toast" role="status">{{ store.toast }}</div>
     <button
       v-if="store.doneNotice"
@@ -985,13 +985,17 @@ const confirmCopy = () => {
   top: 52px;
   left: 50%;
   transform: translateX(-50%);
-  background: var(--ad-raised);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  max-width: calc(100vw - 32px);
+  max-height: calc(100vh - 80px);
+  overflow: auto;
+  overflow-wrap: anywhere;
+  background: var(--ad-float-solid);
+  border: 1px solid var(--ad-border-strong);
   border-radius: var(--ad-radius-pill);
   box-shadow: var(--ad-shadow-menu);
   padding: 8px 16px;
   font-size: 13px;
-  z-index: 38;
+  z-index: 100;
 }
 
 .done-toast {

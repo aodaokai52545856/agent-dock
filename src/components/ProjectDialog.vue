@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { open as pickDirectory } from '@tauri-apps/plugin-dialog'
-import { computed, reactive, watch } from 'vue'
+import { computed, nextTick, reactive, ref, watch } from 'vue'
 import * as api from '../lib/api'
 import type { Project, ProjectDraft } from '../lib/types'
 
@@ -21,11 +21,13 @@ const form = reactive({
   proxyEnabled: false,
   proxyUrl: '',
   pathError: '',
+  nameError: '',
   proxyError: '',
   saving: false
 })
 
 const title = computed(() => (props.project ? '编辑项目' : '添加项目'))
+const formEl = ref<HTMLFormElement>()
 
 watch(
   () => [props.visible, props.project] as const,
@@ -36,6 +38,7 @@ watch(
     form.proxyEnabled = props.project?.proxyEnabled ?? false
     form.proxyUrl = props.project?.proxyUrl || props.defaultProxyUrl
     form.pathError = ''
+    form.nameError = ''
     form.proxyError = ''
     form.saving = false
   }
@@ -46,13 +49,28 @@ async function pickFolder() {
     form.pathError = '请在桌面窗口里选择文件夹'
     return
   }
-  const selected = await pickDirectory({ directory: true, multiple: false, title: '选择项目文件夹' })
-  if (typeof selected !== 'string' || !selected) return
-  form.path = selected
-  form.pathError = ''
-  if (!form.name.trim()) {
-    form.name = await api.folderLabel(selected)
+  try {
+    const selected = await pickDirectory({ directory: true, multiple: false, title: '选择项目文件夹' })
+    if (typeof selected !== 'string' || !selected) return
+    form.path = selected
+    form.pathError = ''
+    if (!form.name.trim()) {
+      form.name = await api.folderLabel(selected)
+      form.nameError = ''
+    }
+  } catch (err) {
+    form.pathError = err instanceof Error ? err.message : '无法打开文件夹选择器，请重试或粘贴路径'
   }
+}
+
+function validateName() {
+  form.nameError = form.name.trim() ? '' : '请填写项目名称'
+  return !form.nameError
+}
+
+function validatePath() {
+  form.pathError = form.path.trim() ? '' : '请选择文件夹或粘贴项目路径'
+  return !form.pathError
 }
 
 function validateProxy() {
@@ -74,15 +92,14 @@ function validateProxy() {
 }
 
 function submit() {
-  if (!form.path.trim()) {
-    form.pathError = '请选择项目文件夹'
+  if (form.saving) return
+  const pathValid = validatePath()
+  const nameValid = validateName()
+  const proxyValid = validateProxy()
+  if (!pathValid || !nameValid || !proxyValid) {
+    void nextTick(() => formEl.value?.querySelector<HTMLElement>('[aria-invalid="true"]')?.focus())
     return
   }
-  if (!form.name.trim()) {
-    form.pathError = '项目名称不能为空'
-    return
-  }
-  if (!validateProxy()) return
   form.saving = true
   emit('save', {
     name: form.name.trim(),
@@ -96,27 +113,32 @@ function stopSave() {
   form.saving = false
 }
 
+function close() {
+  if (!form.saving) emit('close')
+}
+
 defineExpose({ stopSave })
 </script>
 
 <template>
-  <div v-if="visible" class="ad-mask" @click.self="emit('close')">
-    <div class="ad-dialog dialog" role="dialog" aria-modal="true" :aria-label="title">
+  <div v-if="visible" class="ad-mask" @click.self="close">
+    <form ref="formEl" v-modal="close" class="ad-dialog dialog" role="dialog" aria-modal="true" :aria-label="title" @submit.prevent="submit">
       <h2>{{ title }}</h2>
       <label class="field">
         <span>文件夹 <i>*</i></span>
         <div class="path-row">
-          <input v-model="form.path" readonly placeholder="选择代码目录" />
-          <button type="button" class="btn btn-ghost" @click="pickFolder">选择文件夹</button>
+          <input v-model="form.path" data-modal-initial aria-label="项目文件夹" :aria-invalid="!!form.pathError" :disabled="form.saving" placeholder="粘贴项目路径或选择文件夹" @blur="validatePath" @input="form.pathError = ''" />
+          <button type="button" class="btn btn-ghost" :disabled="form.saving" @click="pickFolder">选择文件夹</button>
         </div>
-        <p v-if="form.pathError" class="field-error">{{ form.pathError }}</p>
+        <p :class="form.pathError ? 'field-error' : 'help'">{{ form.pathError || '支持直接粘贴本机文件夹的完整路径。' }}</p>
       </label>
       <label class="field">
         <span>名称 <i>*</i></span>
-        <input v-model="form.name" maxlength="60" placeholder="显示在左侧的项目名" />
+        <input v-model="form.name" maxlength="60" :aria-invalid="!!form.nameError" :disabled="form.saving" placeholder="显示在左侧的项目名" @blur="validateName" @input="form.nameError = ''" />
+        <p :class="form.nameError ? 'field-error' : 'help'">{{ form.nameError || '最多 60 个字符，用于左侧项目列表。' }}</p>
       </label>
       <label class="switch">
-        <input v-model="form.proxyEnabled" type="checkbox" />
+        <input v-model="form.proxyEnabled" type="checkbox" :disabled="form.saving" />
         <span class="switch-ui" aria-hidden="true" />
         <span>使用代理</span>
       </label>
@@ -124,20 +146,20 @@ defineExpose({ stopSave })
         <span>代理地址</span>
         <input
           v-model="form.proxyUrl"
-          :disabled="!form.proxyEnabled"
+          :disabled="!form.proxyEnabled || form.saving"
+          :aria-invalid="!!form.proxyError"
           placeholder="http://127.0.0.1:7890"
           @blur="validateProxy"
         />
-        <p class="help">只作用于这个项目打开的终端，不改系统环境变量。</p>
-        <p v-if="form.proxyError" class="field-error">{{ form.proxyError }}</p>
+        <p :class="form.proxyError ? 'field-error' : 'help'">{{ form.proxyError || '只作用于这个项目打开的终端，不改系统环境变量。' }}</p>
       </label>
       <div class="actions">
-        <button type="button" class="btn btn-ghost" :disabled="form.saving" @click="emit('close')">取消</button>
-        <button type="button" class="btn btn-primary" :disabled="form.saving" @click="submit">
+        <button type="button" class="btn btn-ghost" :disabled="form.saving" @click="close">取消</button>
+        <button type="submit" class="btn btn-primary" :disabled="form.saving">
           {{ form.saving ? '保存中…' : '保存项目' }}
         </button>
       </div>
-    </div>
+    </form>
   </div>
 </template>
 
@@ -172,18 +194,24 @@ h2 {
 
 .path-row input {
   flex: 1;
+  min-width: 0;
 }
+
+[aria-invalid='true'] { border-color: var(--ad-error); }
 
 .switch {
   margin-bottom: 16px;
 }
 
-.help {
+.help,
+.field-error {
   margin: 0;
   font-size: 12px;
   line-height: 20px;
   color: var(--ad-muted);
 }
+
+.field-error { color: var(--ad-error); }
 
 .actions {
   display: flex;

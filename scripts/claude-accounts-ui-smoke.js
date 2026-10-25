@@ -52,9 +52,10 @@ async page => {
     if (!vueUrl) throw new Error('Could not resolve the component Vue runtime')
     const { createApp, h, ref } = await import(vueUrl)
     const { default: Dialog } = await import('/src/components/ClaudeAccountDialog.vue')
+    const { modal } = await import('/src/lib/modal.ts')
     await import('/src/styles/global.css')
     const open = ref(false)
-    createApp({ render: () => h(Dialog, { open: open.value, onClose: () => { open.value = false }, onSwitched: () => state.calls.push({ command: 'switched-event' }) }) }).mount('#app')
+    createApp({ render: () => h(Dialog, { open: open.value, onClose: () => { open.value = false }, onSwitched: () => state.calls.push({ command: 'switched-event' }) }) }).directive('modal', modal).mount('#app')
     open.value = true
   })
   const dialog = page.getByRole('dialog', { name: 'Claude 账号' })

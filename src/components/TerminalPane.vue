@@ -522,6 +522,7 @@ defineExpose({ ensureHost, show, dispose: disposeHost, fitActive })
   display: flex;
   background: transparent;
   overflow: hidden;
+  container-type: inline-size;
 }
 
 .mount {
@@ -540,18 +541,19 @@ defineExpose({ ensureHost, show, dispose: disposeHost, fitActive })
 .empty {
   flex: 1;
   min-height: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  overflow: auto;
   padding: 24px;
   background: var(--ad-editor);
 }
 
 .hero {
-  width: min(780px, 100%);
+  width: min(660px, 100%);
+  min-height: 100%;
+  margin: auto;
   display: flex;
   flex-direction: column;
   align-items: center;
+  justify-content: center;
   text-align: center;
 }
 
@@ -569,19 +571,20 @@ defineExpose({ ensureHost, show, dispose: disposeHost, fitActive })
 }
 
 .empty-title {
-  margin: 0 0 36px;
+  margin: 0 0 24px;
   max-width: 28ch;
   font-family: var(--ad-display);
-  font-size: 28px;
-  line-height: 36px;
+  font-size: 22px;
+  line-height: 30px;
   font-weight: 500;
   letter-spacing: -0.02em;
+  overflow-wrap: anywhere;
 }
 
 .tiles {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 16px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
   width: 100%;
 }
 
@@ -590,10 +593,10 @@ defineExpose({ ensureHost, show, dispose: disposeHost, fitActive })
   flex-direction: column;
   align-items: center;
   gap: 8px;
-  min-height: 112px;
-  padding: 20px 12px 16px;
-  border: 1px solid transparent;
-  border-radius: 18px;
+  min-height: 96px;
+  padding: 16px 12px;
+  border: 1px solid var(--ad-border);
+  border-radius: var(--ad-radius-control);
   background: var(--ad-hover);
   color: var(--ad-text);
 }
@@ -619,10 +622,14 @@ defineExpose({ ensureHost, show, dispose: disposeHost, fitActive })
   color: var(--ad-muted);
 }
 
-@media (max-width: 900px) {
+@container (max-width: 640px) {
   .tiles {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+}
+
+@container (max-width: 360px) {
+  .tiles { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 720px) {

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, reactive, watch } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import {
   CODE_FONTS,
   CONTENT_FONTS,
@@ -36,6 +36,14 @@ const emit = defineEmits<{
   close: []
   save: [settings: AppSettings]
 }>()
+
+const section = ref('appearance')
+const discardOpen = ref(false)
+const sections = [
+  { id: 'appearance', label: '外观' },
+  { id: 'tools', label: '终端与工具' },
+  { id: 'automation', label: '自动化' }
+]
 
 function syncForm() {
   const look = sanitizeLookSettings(props.settings)
@@ -91,6 +99,17 @@ const form = reactive({
 })
 syncForm()
 
+const configDirty = computed(() =>
+  (['cursorApiKey', 'codexPath', 'claudePath', 'piPath', 'dshPath'] as const)
+    .some(key => form[key] !== (props.settings[key] ?? ''))
+)
+
+function requestClose() {
+  if (form.saving) return
+  if (configDirty.value) discardOpen.value = true
+  else emit('close')
+}
+
 const resolved = computed(() => resolvedTheme(form.uiTheme, systemPrefersLight()))
 const defaults = computed(() => themeDefaults(resolved.value))
 const themeTitle = computed(() => (resolved.value === 'light' ? '浅色主题' : '深色主题'))
@@ -110,6 +129,7 @@ watch(
   () => props.open,
   (open) => {
     if (open) {
+      discardOpen.value = false
       hydrating = true
       try {
         syncForm()
@@ -173,6 +193,7 @@ function setColor(key: 'accent' | 'background' | 'foreground', value: string) {
 }
 
 function submit() {
+  if (form.saving) return
   const size = Number(form.terminalFontSize) || 14
   form.saving = true
   emit('save', {
@@ -195,14 +216,20 @@ defineExpose({ stopSave })
 </script>
 
 <template>
-  <div v-if="open" class="ad-mask ad-mask--flush" @click.self="emit('close')">
-    <aside class="ad-drawer drawer" aria-label="设置">
+  <div v-if="open" class="ad-mask ad-mask--flush" @click.self="requestClose">
+    <aside v-modal="requestClose" class="ad-drawer drawer" role="dialog" aria-modal="true" aria-label="设置">
       <header>
         <h2>设置</h2>
-        <button type="button" class="btn btn-ghost btn-small" @click="emit('close')">关闭</button>
+        <button type="button" class="btn btn-ghost btn-small" :disabled="form.saving" @click="requestClose">关闭</button>
       </header>
 
-      <p class="section">外观</p>
+      <div class="settings-nav" role="group" aria-label="设置分类">
+        <button v-for="item in sections" :key="item.id" type="button" :aria-pressed="section === item.id" :class="{ active: section === item.id }" @click="section = item.id">{{ item.label }}</button>
+      </div>
+
+      <div class="settings-body">
+      <section v-show="section === 'appearance'" aria-label="外观设置">
+      <p class="section">主题与界面</p>
       <div class="themes" role="radiogroup" aria-label="主题">
         <button
           v-for="item in UI_THEMES"
@@ -289,6 +316,7 @@ defineExpose({ stopSave })
             class="switch"
             :class="{ on: form.translucentSidebar }"
             role="switch"
+            aria-label="半透明侧栏"
             :aria-checked="form.translucentSidebar"
             @click="form.translucentSidebar = !form.translucentSidebar"
           />
@@ -322,11 +350,6 @@ defineExpose({ stopSave })
       </div>
 
       <label class="field">
-        <span>终端字号</span>
-        <input v-model.number="form.terminalFontSize" type="number" min="10" max="22" />
-      </label>
-      <p class="hint">只影响右侧命令行窗口的字号，改完立刻生效。代码字体在上面外观里选。</p>
-      <label class="field">
         <span>界面透明度 <em>{{ form.uiOpacity }}%</em></span>
         <input
           v-model.number="form.uiOpacity"
@@ -347,7 +370,16 @@ defineExpose({ stopSave })
           step="1"
         />
       </label>
-      <p class="hint">数字越大，背后内容越糊。拉到 0 就是清透，不再在桌面上再套一层霜。外观、透明度和毛玻璃拖动即生效，并自动写入本机。</p>
+      <p class="hint">数值越大，背景越模糊；设为 0 关闭模糊。外观调整立即生效并自动保存。</p>
+      </section>
+
+      <section v-show="section === 'tools'" aria-label="终端与工具设置">
+      <p class="section">终端显示</p>
+      <label class="field">
+        <span>终端字号</span>
+        <input v-model.number="form.terminalFontSize" type="number" min="10" max="22" />
+      </label>
+      <p class="hint">调整后立即生效并自动保存。代码字体可在「外观」中设置。</p>
       <label class="look-row glass-row">
         <span>Grok 跟随窗口玻璃</span>
         <button
@@ -355,11 +387,14 @@ defineExpose({ stopSave })
           class="switch"
           :class="{ on: form.grokFollowGlass }"
           role="switch"
+          aria-label="Grok 跟随窗口玻璃"
           :aria-checked="form.grokFollowGlass"
           @click="form.grokFollowGlass = !form.grokFollowGlass"
         />
       </label>
-      <p class="hint">打开后，Dock 里新开的 Grok 使用官方 terminal 主题（不涂实色底）。不改 ~/.grok/config.toml，外面单独跑 grok 不受影响。已开的会话要关掉重开。</p>
+      <p class="hint">新建 Grok 会话时使用透明终端主题。此项自动保存，已打开的会话需重开后生效。</p>
+      <p class="section">工具路径</p>
+      <p class="hint">留空时自动查找已安装的工具。修改路径后点击下方「保存设置」。</p>
       <label class="field">
         <span>Claude Code 路径</span>
         <input v-model="form.claudePath" type="text" placeholder="留空则从 PATH 查找 claude" />
@@ -376,17 +411,29 @@ defineExpose({ stopSave })
         <span>Codex 路径</span>
         <input v-model="form.codexPath" type="text" placeholder="留空则从 PATH 查找 codex" />
       </label>
-      <p class="hint">编排里的 Codex 节点用 `codex app-server` 列线程并做 detached 审查，不点桌面窗口，也不走内嵌终端。</p>
+      <p class="hint">Codex 用于编排中的线程读取和自动审查。</p>
+      </section>
+
+      <section v-show="section === 'automation'" aria-label="自动化设置">
+      <p class="section">Cursor 自动开发</p>
       <label class="field">
         <span>Cursor API Key</span>
         <input v-model="form.cursorApiKey" type="password" autocomplete="off" placeholder="只用于自动开发，可留空" />
       </label>
       <p class="hint">写在本机配置里。Cursor SDK 与 IDE 订阅分开计费。只有通道选 Cursor SDK 的开发者节点才需要。</p>
-      <div class="actions">
-        <button type="button" class="btn btn-primary" :disabled="form.saving" @click="submit">
-          {{ form.saving ? '保存中…' : '保存' }}
-        </button>
+      </section>
       </div>
+
+      <footer class="settings-footer">
+        <template v-if="discardOpen">
+          <p role="alert">工具配置尚未保存，要放弃修改并关闭吗？</p>
+          <div class="footer-actions"><button type="button" class="btn btn-ghost btn-small" @click="discardOpen = false">继续编辑</button><button type="button" class="btn btn-danger btn-small" @click="emit('close')">放弃修改</button></div>
+        </template>
+        <template v-else>
+          <p>{{ configDirty ? '工具配置有未保存的修改' : section === 'appearance' ? '外观调整会自动保存' : '配置已保存' }}</p>
+          <button type="button" class="btn btn-primary btn-small" :disabled="form.saving || !configDirty" @click="submit">{{ form.saving ? '保存中…' : '保存设置' }}</button>
+        </template>
+      </footer>
     </aside>
   </div>
 </template>
@@ -394,7 +441,20 @@ defineExpose({ stopSave })
 <style scoped>
 .drawer {
   width: 480px;
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
 }
+
+.settings-nav { display: flex; gap: 4px; padding: 0 20px 12px; flex-shrink: 0; border-bottom: 1px solid var(--ad-border); }
+.settings-nav button { flex: 1; height: 32px; border-radius: var(--ad-radius-control); color: var(--ad-muted); white-space: nowrap; }
+.settings-nav button:hover { background: var(--ad-hover); color: var(--ad-text); }
+.settings-nav button.active { background: var(--ad-selected); color: var(--ad-text); font-weight: 600; }
+.settings-body { flex: 1; min-height: 0; overflow: auto; padding: 20px 24px; overscroll-behavior: contain; }
+.settings-footer { flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; padding: 16px 24px; background: var(--ad-float-solid); border-top: 1px solid var(--ad-border); }
+.settings-footer p { margin: 0; font-size: 12px; color: var(--ad-muted); }
+.footer-actions { display: flex; gap: 8px; margin-left: auto; }
 
 .look {
   margin: 8px 0 20px;
@@ -438,7 +498,8 @@ defineExpose({ stopSave })
 
 .look-row select {
   width: auto;
-  min-width: 168px;
+  min-width: min(168px, 55%);
+  max-width: 65%;
   height: 30px;
   padding: 0 28px 0 10px;
 }
@@ -499,10 +560,13 @@ defineExpose({ stopSave })
   display: flex;
   align-items: center;
   gap: 8px;
-  min-width: 168px;
+  width: 55%;
+  min-width: 0;
 }
 
 .contrast input {
+  min-width: 0;
+  width: 100%;
   flex: 1;
 }
 
@@ -635,7 +699,8 @@ header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 24px;
+  padding: 20px 24px 16px;
+  flex-shrink: 0;
 }
 
 h2 {

@@ -15,11 +15,11 @@ const emit = defineEmits<{
 
 <template>
   <div v-if="open" class="ad-mask" @click.self="emit('close')">
-    <div class="ad-dialog dialog" role="dialog" aria-modal="true">
+    <div v-modal="() => emit('close')" class="ad-dialog dialog" role="dialog" aria-modal="true" :aria-label="title">
       <h2>{{ title }}</h2>
       <p>{{ body }}</p>
       <div class="actions">
-        <button type="button" class="btn btn-ghost" @click="emit('close')">取消</button>
+        <button type="button" class="btn btn-ghost" data-modal-initial @click="emit('close')">取消</button>
         <button type="button" class="btn" :class="danger ? 'btn-danger' : 'btn-primary'" @click="emit('confirm')">
           {{ action }}
         </button>

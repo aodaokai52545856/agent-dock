@@ -394,7 +394,7 @@ async function copyCommands() {
 
 <template>
   <div v-if="open" class="ad-mask" @click.self="emit('close')">
-    <div class="ad-dialog dialog" role="dialog" aria-modal="true" aria-label="版本">
+    <div v-modal="() => emit('close')" class="ad-dialog dialog" role="dialog" aria-modal="true" aria-label="版本">
       <header>
         <h2>版本</h2>
         <button type="button" class="btn btn-ghost btn-small" @click="emit('close')">关闭</button>
@@ -690,6 +690,7 @@ h3 {
 
 .plate-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   flex-shrink: 0;
 }
@@ -740,7 +741,7 @@ h3 {
 
 .tools {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
   gap: 12px;
   margin: 0 0 16px;
   padding: 0;

@@ -94,7 +94,7 @@ function roleLabel(role: string) {
 
 <template>
   <div v-if="open" class="ad-mask" @click.self="emit('close')">
-    <div class="ad-dialog dialog" role="dialog" aria-modal="true" aria-label="引用片段">
+    <div v-modal="() => emit('close')" class="ad-dialog dialog" role="dialog" aria-modal="true" aria-label="引用片段">
       <header>
         <div>
           <h2>引用片段</h2>

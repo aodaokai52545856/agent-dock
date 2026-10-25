@@ -405,10 +405,10 @@ watch(liveCount, (n) => {
 
 <template>
   <footer class="bar">
-    <span>{{ store.projects.length }} 个项目</span>
+    <span class="project-total">{{ store.projects.length }} 个项目</span>
     <span v-if="selectedProject" class="path" :title="selectedProject.path">{{ selectedProject.path }}</span>
-    <span>{{ selectedProject?.proxyEnabled ? '代理开' : '代理关' }}</span>
-    <span v-if="store.appMode === 'bridge'">闸门 {{ GATE_LABEL[currentPipeline?.gate ?? 'idle'] }}</span>
+    <span class="proxy-state">{{ selectedProject?.proxyEnabled ? '代理开' : '代理关' }}</span>
+    <span v-if="store.appMode === 'bridge'" class="gate-state">闸门 {{ GATE_LABEL[currentPipeline?.gate ?? 'idle'] }}</span>
     <div class="live-wrap">
       <button
         v-if="liveCount"
@@ -486,7 +486,7 @@ watch(liveCount, (n) => {
         <strong>{{ peak.punch }}</strong>
       </span>
     </div>
-    <div v-if="showGrokUsage" class="live-wrap">
+    <div v-if="showGrokUsage" class="live-wrap spend-wrap">
       <button
         ref="spendBtn"
         type="button"
@@ -535,7 +535,7 @@ watch(liveCount, (n) => {
       </svg>
       文档
     </button>
-    <button type="button" class="link" @click="$emit('refresh')">
+    <button type="button" class="link" :disabled="store.appMode === 'console' ? store.sessionRefreshBusy : store.codexStatus === 'loading'" @click="$emit('refresh')">
       {{ store.appMode === 'bridge' ? '刷新线程' : '刷新会话' }}
     </button>
     <button type="button" class="link" @click="$emit('settings')">设置</button>
@@ -550,7 +550,7 @@ watch(liveCount, (n) => {
   height: 28px;
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 8px;
   padding: 0 16px;
   overflow: hidden;
   isolation: isolate;
@@ -559,17 +559,23 @@ watch(liveCount, (n) => {
   font-size: 12px;
   line-height: 20px;
   color: var(--ad-muted);
+  white-space: nowrap;
 }
 
+.bar > * { flex-shrink: 0; }
+
 .path {
+  min-width: 0;
+  flex: 0 1 auto;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  max-width: 42vw;
+  max-width: 28vw;
 }
 
 .spacer {
   flex: 1;
+  min-width: 0;
 }
 
 .usage,
@@ -578,10 +584,11 @@ watch(liveCount, (n) => {
   padding: 0 8px;
   border-radius: var(--ad-radius-control);
   color: var(--ad-muted);
+  white-space: nowrap;
 }
 
 .usage {
-  max-width: 42vw;
+  max-width: 24vw;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -597,7 +604,7 @@ watch(liveCount, (n) => {
 }
 
 .usage:hover:not(:disabled),
-.link:hover,
+.link:hover:not(:disabled),
 .link.on {
   color: var(--ad-text);
   background: var(--ad-hover);
@@ -736,10 +743,25 @@ watch(liveCount, (n) => {
 }
 
 .spend-panel {
-  max-height: min(92vh, 760px);
+  max-height: min(calc(100vh - 56px), 760px);
   overflow: auto;
   background: var(--ad-float-solid);
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
+}
+
+@media (max-width: 1100px) {
+  .path { display: none; }
+  .bar { padding-inline: 12px; gap: 4px; }
+}
+
+@media (max-width: 900px) {
+  .proxy-state, .peak { display: none; }
+}
+
+@media (max-width: 680px) {
+  .project-total, .spend-wrap { display: none; }
+  .bar { padding-inline: 8px; gap: 2px; }
+  .usage { max-width: 30vw; }
 }
 </style>

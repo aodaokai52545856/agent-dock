@@ -227,7 +227,7 @@ function close() {
 
 <template>
   <div v-if="open" class="ad-mask" @click.self="close">
-    <div class="ad-dialog dialog" role="dialog" aria-modal="true" aria-label="CC Switch">
+    <div v-modal="close" class="ad-dialog dialog" role="dialog" aria-modal="true" aria-label="CC Switch">
       <header>
         <div>
           <h2>CC Switch</h2>

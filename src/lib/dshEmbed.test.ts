@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import ts from 'typescript'
 import {
   DSH_EMBED_EDGE,
   DSH_EMBED_GUTTER,
@@ -183,10 +184,12 @@ test('DeepSeek overlay does not unmount the terminal so a live Grok TUI is not w
 
 test('opening a listed session does not rescan or retarget the sidebar filter', () => {
   const app = readFileSync(join(root, 'App.vue'), 'utf8')
-  const start = app.indexOf('async function openSession')
-  const end = app.indexOf('function onAppContextMenu')
-  assert.ok(start >= 0 && end > start)
-  const open = app.slice(start, end)
+  const script = app.match(/<script\b[^>]*>([\s\S]*?)<\/script>/)?.[1]
+  assert.ok(script, 'App script must exist')
+  const source = ts.createSourceFile('App.ts', script, ts.ScriptTarget.Latest, true)
+  const declaration = source.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === 'openSession')
+  assert.ok(declaration, 'openSession must exist')
+  const open = declaration.getText(source)
   assert.doesNotMatch(open, /setSessionToolFilter/)
   assert.doesNotMatch(open, /refreshSessions/)
   assert.doesNotMatch(open, /正在切换会话/)

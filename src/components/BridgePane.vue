@@ -143,6 +143,8 @@ function onMaxLoops(edgeId: string, event: Event) {
 }
 
 function onKey(event: KeyboardEvent) {
+  if (store.appMode !== 'bridge') return
+  if (event.target instanceof Element && event.target.closest('[aria-modal="true"]')) return
   if (event.key !== 'Escape') return
   if (!editing.value) return
   const target = event.target as HTMLElement | null
@@ -176,7 +178,7 @@ onUnmounted(() => window.removeEventListener('keydown', onKey))
           class="soft-btn"
           @click="stopSelectedFlow"
         >
-          停止本片
+          停止运行
         </button>
         <p class="badge" :data-gate="currentPipeline.gate">{{ GATE_LABEL[currentPipeline.gate] }}</p>
       </header>
@@ -287,7 +289,7 @@ onUnmounted(() => window.removeEventListener('keydown', onKey))
 
             <div class="actions">
               <button type="button" class="btn btn-primary" :disabled="busy" @click="startSelectedFlow()">
-                {{ busy ? '运行中…' : '运行本片' }}
+                {{ busy ? '运行中…' : '运行流程' }}
               </button>
               <button
                 v-if="failedNodeId"
@@ -498,7 +500,7 @@ h3 {
   padding: 10px 12px;
   border-radius: 10px;
   background: rgba(201, 162, 39, 0.12);
-  color: #e6d08a;
+  color: var(--ad-warning);
   font-size: 13px;
 }
 
@@ -618,6 +620,8 @@ h3 {
   height: 28px;
   padding: 0 8px;
 }
+
+.new-role .chip { cursor: pointer; }
 
 .activity {
   display: flex;

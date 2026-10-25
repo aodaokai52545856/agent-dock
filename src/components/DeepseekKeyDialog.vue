@@ -135,7 +135,7 @@ function openPlatform() {
 
 <template>
   <div v-if="open" class="ad-mask" @click.self="emit('close')">
-    <div class="ad-dialog dialog" role="dialog" aria-modal="true" aria-label="DeepSeek Key">
+    <div v-modal="() => emit('close')" class="ad-dialog dialog" role="dialog" aria-modal="true" aria-label="DeepSeek Key">
       <header>
         <div>
           <h2>DeepSeek Key</h2>
@@ -146,9 +146,10 @@ function openPlatform() {
 
       <section class="add">
         <div class="row">
-          <input v-model="nameDraft" maxlength="40" placeholder="名称，例如 工作号" :disabled="!!busy" />
+          <input v-model="nameDraft" maxlength="40" aria-label="Key 名称" placeholder="名称，例如 工作号" :disabled="!!busy" />
           <input
             v-model="keyDraft"
+            aria-label="DeepSeek API Key"
             type="password"
             autocomplete="off"
             spellcheck="false"
@@ -305,18 +306,24 @@ h2 {
   align-items: center;
   gap: 8px;
   font-weight: 600;
+  flex-wrap: wrap;
+  overflow-wrap: anywhere;
 }
+
+.item > div:first-child { min-width: 0; }
 
 .item-email {
   margin-top: 4px;
   font-size: 12px;
   color: var(--ad-muted);
   font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
 }
 
 .item-ops {
   display: flex;
   gap: 12px;
+  flex-shrink: 0;
 }
 
 .link {
@@ -350,5 +357,10 @@ h2 {
   display: flex;
   gap: 8px;
   margin-top: 16px;
+}
+
+@media (max-width: 680px) {
+  .add .row { flex-wrap: wrap; }
+  .add .row input { flex-basis: calc(50% - 8px); }
 }
 </style>

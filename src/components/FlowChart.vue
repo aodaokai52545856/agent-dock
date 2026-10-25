@@ -222,6 +222,8 @@ function onDeleteNode(event: Event, nodeId: string) {
 }
 
 function onKey(event: KeyboardEvent) {
+  if (store.appMode !== 'bridge') return
+  if (event.target instanceof Element && event.target.closest('[aria-modal="true"]')) return
   if (props.readonly) return
   if (event.key !== 'Delete' && event.key !== 'Backspace') return
   const target = event.target as HTMLElement | null

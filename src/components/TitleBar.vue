@@ -377,4 +377,17 @@ onUnmounted(() => {
   background: #c42b1c;
   color: #fff;
 }
+
+@media (max-width: 900px) {
+  .left { padding-left: 8px; }
+  .file-btn { padding-inline: 8px; }
+  .brand { padding-right: 4px; }
+  .drag { min-width: 8px; }
+  .modes { margin-left: 4px; }
+  .win { width: 40px; }
+}
+
+@media (max-width: 720px) {
+  .brand { display: none; }
+}
 </style>

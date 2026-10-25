@@ -27,6 +27,8 @@
   --ad-faint: color-mix(in srgb, var(--ad-text) var(--ad-ink-boost), var(--ad-faint-base));
   --ad-border: rgba(236, 236, 236, 0.096);
   --ad-border-strong: rgba(236, 236, 236, 0.168);
+  --ad-scrollbar: rgba(236, 236, 236, 0.24);
+  --ad-scrollbar-hover: rgba(236, 236, 236, 0.4);
   --ad-accent: #ececec;
   --ad-accent-hover: #ffffff;
   --ad-accent-active: #c3c4c5;
@@ -98,6 +100,8 @@ html[data-theme='light'] {
   --ad-faint-base: #5c5c5c;
   --ad-border: rgba(0, 0, 0, 0.08);
   --ad-border-strong: rgba(0, 0, 0, 0.16);
+  --ad-scrollbar: rgba(23, 23, 23, 0.24);
+  --ad-scrollbar-hover: rgba(23, 23, 23, 0.4);
   --ad-accent: #171717;
   --ad-accent-hover: #000000;
   --ad-accent-active: #333333;

@@ -18,6 +18,11 @@ function test(name: string, fn: () => void) {
   console.log(`ok ${name}`)
 }
 
+function chartPoints() {
+  const start = Date.parse('2026-09-11T00:00:00Z') / 1000
+  return previewSpend(start, start + 12 * 3600).points
+}
+
 test('compact token counts use 万 and 亿', () => {
   assert.equal(formatTokenCount(0), '0')
   assert.equal(formatTokenCount(8800), '8800')
@@ -52,7 +57,7 @@ test('today preset starts at local midnight and follows now', () => {
 })
 
 test('chart builds smooth paths and dual-axis cost', () => {
-  const chart = buildSpendChart(previewSpend().points)
+  const chart = buildSpendChart(chartPoints())
   assert.ok(chart.series.find((item) => item.key === 'cache')?.path.startsWith('M '))
   assert.ok(chart.series.find((item) => item.key === 'cost')?.dashed)
   assert.ok(chart.ticks.length >= 2)
@@ -62,7 +67,7 @@ test('chart builds smooth paths and dual-axis cost', () => {
 })
 
 test('hover picks the nearest chart sample', () => {
-  const chart = buildSpendChart(previewSpend().points)
+  const chart = buildSpendChart(chartPoints())
   const first = chart.hits[0]
   const last = chart.hits[chart.hits.length - 1]
   assert.ok(first && last)

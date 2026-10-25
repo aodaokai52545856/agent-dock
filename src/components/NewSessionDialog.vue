@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onUnmounted, reactive, ref, watch } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import ToolMark from './ToolMark.vue'
 import { TOOLS, type ToolId } from '../lib/types'
 import { store } from '../lib/store'
@@ -32,18 +32,12 @@ watch(
   () => props.open,
   (open) => {
     pickerOpen.value = false
-    window.removeEventListener('keydown', onKey)
     if (!open) return
     form.projectId = store.selectedProjectId || store.projects[0]?.id || ''
-    form.toolId = ''
+    form.toolId = store.selectedTool
     form.error = ''
-    window.addEventListener('keydown', onKey)
   }
 )
-
-onUnmounted(() => {
-  window.removeEventListener('keydown', onKey)
-})
 
 function togglePicker(event: MouseEvent) {
   event.stopPropagation()
@@ -118,13 +112,15 @@ function submit() {
   <div v-if="open" class="ad-mask" @click.self="emit('close')">
     <div
       class="ad-dialog dialog"
+      v-modal="() => emit('close')"
       role="dialog"
       aria-modal="true"
       aria-label="新建会话"
       @click="closePicker"
+      @keydown="onKey"
     >
       <h2>新建会话</h2>
-      <p class="lead">打开后挂在所选项目下。</p>
+      <p class="lead">选择项目和工具，打开一个独立会话。</p>
 
       <div v-if="!store.projects.length" class="empty">
         <p>还没有项目。先添加一个代码目录。</p>
@@ -186,6 +182,8 @@ function submit() {
               class="tool"
               :class="{ 'tool--active': form.toolId === tool.id }"
               :aria-checked="form.toolId === tool.id"
+              :data-modal-initial="form.toolId === tool.id ? '' : undefined"
+              :title="tool.hint"
               @click="pickTool(tool.id)"
             >
               <span class="tool-mark" aria-hidden="true">
@@ -251,7 +249,8 @@ h2 {
   width: 100%;
   height: 32px;
   padding: 0 8px 0 10px;
-  border: 1px solid transparent;
+  border: 1px solid var(--ad-border);
+  background: var(--ad-harbor);
   border-radius: var(--ad-radius-control);
   color: var(--ad-text);
   font-size: 12px;
@@ -321,7 +320,7 @@ h2 {
   gap: 8px;
   height: 36px;
   padding: 0 10px;
-  border: 1px solid transparent;
+  border: 1px solid var(--ad-border);
   border-radius: var(--ad-radius-control);
   color: var(--ad-muted);
   text-align: left;
@@ -334,6 +333,7 @@ h2 {
 
 .tool--active {
   background: var(--ad-selected);
+  border-color: var(--ad-border-strong);
   color: var(--ad-text);
 }
 

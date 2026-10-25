@@ -184,6 +184,7 @@ onUnmounted(() => {
   <div v-if="open" class="ad-mask" @click.self="emit('close')">
     <div
       class="ad-dialog dialog"
+      v-modal="() => emit('close')"
       role="dialog"
       aria-modal="true"
       aria-label="文档预览"

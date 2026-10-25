@@ -29,13 +29,13 @@ const live = computed(() => Boolean(activeLive.value))
     aria-label="当前启动"
   >
     <span class="ticket">
-      <strong>{{ selectedProject?.name ?? '项目' }}</strong>
+      <strong :title="selectedProject?.name">{{ selectedProject?.name ?? '项目' }}</strong>
       <span class="dot">·</span>
       <span>{{ activeLive ? toolLabel(activeLive.toolId) : selectedProject ? toolLabel(store.selectedTool) : '工具' }}</span>
       <span class="dot">·</span>
-      <span :class="{ on: selectedProject?.proxyEnabled }">{{ proxyText }}</span>
+      <span class="proxy" :class="{ on: selectedProject?.proxyEnabled }" :title="proxyText">{{ proxyText }}</span>
       <span class="dot">·</span>
-      <span class="title">{{ title }}</span>
+      <span class="title" :title="title">{{ title }}</span>
     </span>
     <div class="tools">
       <span
@@ -88,7 +88,15 @@ const live = computed(() => Boolean(activeLive.value))
 .ticket strong {
   color: var(--ad-text);
   font-weight: 600;
+  max-width: 25%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
+
+.proxy { min-width: 0; max-width: 28%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ticket > .dot { flex-shrink: 0; }
 
 .dot {
   opacity: 0.5;

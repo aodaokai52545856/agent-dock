@@ -106,7 +106,7 @@ async function removeAccount() {
 
 <template>
   <div v-if="open" class="ad-mask" @click.self="emit('close')">
-    <div class="ad-dialog dialog" role="dialog" aria-modal="true" aria-label="Grok 账号">
+    <div v-modal="() => emit('close')" class="ad-dialog dialog" role="dialog" aria-modal="true" aria-label="Grok 账号">
       <header>
         <div>
           <h2>Grok 账号</h2>
@@ -122,7 +122,7 @@ async function removeAccount() {
         </p>
         <p v-else class="muted">还没有登录</p>
         <div class="row">
-          <input v-model="nameDraft" maxlength="40" placeholder="保存时的显示名，例如 工作号" :disabled="!!busy" />
+          <input v-model="nameDraft" maxlength="40" aria-label="账号显示名" placeholder="保存时的显示名，例如 工作号" :disabled="!!busy" />
           <button type="button" class="btn btn-ghost" :disabled="!!busy || !data.loggedIn" @click="saveCurrent">
             {{ busy === 'save' ? '保存中…' : '保存当前' }}
           </button>
@@ -222,6 +222,7 @@ h2 {
 
 .current-id {
   margin: 0 0 12px;
+  overflow-wrap: anywhere;
 }
 
 .row {
@@ -263,13 +264,18 @@ h2 {
   align-items: center;
   gap: 8px;
   font-weight: 600;
+  flex-wrap: wrap;
+  overflow-wrap: anywhere;
 }
+
+.item > div:first-child { min-width: 0; }
 
 .item-email {
   margin-top: 2px;
   font-size: 12px;
   line-height: 18px;
   color: var(--ad-muted);
+  overflow-wrap: anywhere;
 }
 
 .item-ops {
@@ -304,5 +310,10 @@ h2 {
 .confirm p {
   margin: 0 0 12px;
   color: var(--ad-text);
+}
+
+@media (max-width: 680px) {
+  .current .row { flex-wrap: wrap; }
+  .current .row input { flex-basis: 100%; }
 }
 </style>
