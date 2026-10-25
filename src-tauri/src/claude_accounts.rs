@@ -1,6 +1,6 @@
 //! Directory identities adapted from multi-claude's env.py, launcher.py and
-//! identity.py. Attribution: THIRD_PARTY_NOTICES.md. Claude owns token refresh;
-//! Dock never swaps, copies or restores live credentials.
+//! identity.py. Attribution: THIRD_PARTY_NOTICES.md. Claude owns login, logout
+//! and token refresh; Dock never swaps or copies live credentials.
 use crate::claude_oauth::{self, HttpOAuthClient, OAuthClient};
 use crate::{
     platform,
@@ -350,7 +350,7 @@ fn system_identity_problem(
                 format!("{}***@{domain}", name.chars().take(2).collect::<String>())
             })
             .unwrap_or_else(|| "另一个账号".into());
-        return Some(("conflict", format!("系统缓存身份与实际登录凭证不一致，凭证实际属于 {actual}。请在独立目录登录目标账号，或在系统终端重新登录后再检查。")));
+        return Some(("conflict", format!("系统缓存身份与实际登录凭证不一致，凭证实际属于 {actual}。请在账号管理中点击「修复系统身份」，或在系统终端重新登录后再检查。")));
     }
     None
 }
@@ -759,6 +759,150 @@ pub fn delete_account(app: &AppHandle, account_id: &str) -> Result<ClaudeAccount
     delete_in(&accounts_dir(app)?, account_id)
 }
 
+pub fn clear_credentials(
+    app: &AppHandle, settings: &AppSettings, account_id: &str,
+    stop_terminals: impl FnOnce() -> Result<(), String>,
+) -> Result<ClaudeAccountList, String> {
+    let _guard = lock_operation()?;
+    let store = accounts_dir(app)?;
+    let result = clear_credentials_in(&store, account_id, stop_terminals, |profile| logout_cli(profile, settings));
+    action_log(&store, "clear_credentials", json!({"accountId": account_id, "ok": result.is_ok()}));
+    result
+}
+
+fn clear_credentials_in(
+    store: &Path, account_id: &str,
+    stop_terminals: impl FnOnce() -> Result<(), String>,
+    logout: impl FnOnce(&Profile) -> Result<(), String>,
+) -> Result<ClaudeAccountList, String> {
+    validate_id(account_id)?;
+    let mut index = load_index(store)?;
+    if let Some(mut profile) = profiles(&index).into_iter().find(|p| p.id == account_id) {
+        stop_terminals()?;
+        logout(&profile)?;
+        if credentials(&profile)?.as_ref().is_some_and(claude_oauth::has_credentials) {
+            return Err("仍检测到登录凭据，请关闭使用该目录的其他 Claude 窗口后重试。".into());
+        }
+        clear_legacy_credentials(store, account_id)?;
+        profile.system_identity = None;
+        profile.verification_pending = false;
+        profile.subscription_type.clear();
+        profile.updated_at = Utc::now().to_rfc3339();
+        index.accounts.retain(|p| p.id != account_id);
+        index.accounts.push(profile);
+        save_index(store, &index)?;
+    } else {
+        if !legacy_rows(store, &index)?.iter().any(|p| p.id == account_id) {
+            return Err("没有找到此账号。".into());
+        }
+        clear_legacy_credentials(store, account_id)?;
+    }
+    list_in(store)
+}
+
+fn clear_legacy_credentials(store: &Path, account_id: &str) -> Result<(), String> {
+    if account_id == SYSTEM { return Ok(()); }
+    for filename in ["credentials.json", "pending-credentials.json"] {
+        let path = store.join(account_id).join(filename);
+        if path.is_file() {
+            let mut root = read_json(&path)?;
+            root.as_object_mut().ok_or("旧版凭据格式损坏，无法清理。")?.remove("claudeAiOauth");
+            write_json(&path, &root)?;
+        }
+    }
+    Ok(())
+}
+
+fn logout_cli(profile: &Profile, settings: &AppSettings) -> Result<(), String> {
+    let exe = tools::resolve_binary(ToolId::Claude, settings)?;
+    let mut base: BTreeMap<_, _> = std::env::vars().collect();
+    base.extend(crate::proxy::proxy_env(!settings.default_proxy_url.trim().is_empty(), &settings.default_proxy_url)?);
+    let context = launch_env(profile, &base)?;
+    let mut cmd = Command::new(exe);
+    cmd.args(["auth", "logout"]).current_dir(&profile.config_dir);
+    platform::prepare_command(&mut cmd);
+    platform::apply_no_window(&mut cmd);
+    cmd.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+    for (key, value) in base.iter().filter(|(key, _)| PROXY_ENV.contains(&key.as_str())) { cmd.env(key, value); }
+    for key in &context.remove { cmd.env_remove(key); }
+    cmd.envs(&context.set);
+    let mut child = cmd.spawn().map_err(|_| "无法启动 Claude 退出登录，请检查 CLI 路径。")?;
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        match child.try_wait().map_err(|_| "无法读取退出登录状态。")? {
+            Some(status) if status.success() => return Ok(()),
+            Some(_) => return Err("Claude 未能清除登录，请关闭使用该目录的其他窗口后重试。".into()),
+            None if Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("退出登录超时，请检查网络后重试。".into());
+            }
+            None => std::thread::sleep(Duration::from_millis(100)),
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClaudeSessionAccounts {
+    pub source_account_id: String,
+    pub source_account_name: String,
+    pub accounts: Vec<ClaudeAccount>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClaudeContinuation {
+    pub session_id: String,
+    pub title: String,
+    pub account_id: String,
+    pub account_name: String,
+}
+
+pub fn session_accounts(app: &AppHandle, cwd: &str, session_id: &str) -> Result<ClaudeSessionAccounts, String> {
+    let _guard = lock_operation()?;
+    let store = accounts_dir(app)?;
+    let source = owner_in(&store, cwd, Some(session_id))?;
+    Ok(ClaudeSessionAccounts {
+        source_account_id: source.id, source_account_name: source.name,
+        accounts: list_in(&store)?.accounts,
+    })
+}
+
+pub fn continue_with_account(app: &AppHandle, cwd: &str, session_id: &str, account_id: &str, title: &str) -> Result<ClaudeContinuation, String> {
+    let _guard = lock_operation()?;
+    let store = accounts_dir(app)?;
+    let result = continue_in(&store, cwd, session_id, account_id, title);
+    action_log(&store, "continue_with_account", json!({"accountId": account_id, "ok": result.is_ok()}));
+    result
+}
+
+fn continue_in(store: &Path, cwd: &str, session_id: &str, account_id: &str, title: &str) -> Result<ClaudeContinuation, String> {
+    validate_id(account_id)?;
+    let source = owner_in(store, cwd, Some(session_id))?;
+    let index = load_index(store)?;
+    let target = profiles(&index).into_iter().find(|p| p.id == account_id).ok_or("目标账号不存在，请刷新账号列表。")?;
+    let status = row(&target, false);
+    if !matches!(status.status.as_str(), "ready" | "refreshable") { return Err(status.message); }
+    let title: String = title.trim().chars().filter(|c| !c.is_control()).take(120).collect();
+    let title = format!("{} · 续接", if title.is_empty() { "Claude 会话" } else { &title });
+    let copied = crate::claude_session_copy::copy_session(&source.config_dir, &target.config_dir, cwd, session_id, &title)?;
+    Ok(ClaudeContinuation { session_id: copied, title, account_id: target.id, account_name: target.name })
+}
+
+fn action_log(store: &Path, event: &str, details: Value) {
+    use std::io::Write;
+    let _ = (|| -> std::io::Result<()> {
+        fs::create_dir_all(store)?;
+        let path = store.join("auth-diagnostics.jsonl");
+        if fs::metadata(&path).is_ok_and(|m| m.len() > 1_048_576) {
+            fs::rename(&path, store.join("auth-diagnostics.previous.jsonl"))?;
+        }
+        let mut file = fs::OpenOptions::new().create(true).append(true).open(path)?;
+        writeln!(file, "{}", json!({"at": Utc::now().to_rfc3339(), "event": event, "details": details}))
+    })();
+}
+
 #[derive(Debug, Clone)]
 pub struct LaunchContext {
     pub id: String,
@@ -1042,6 +1186,11 @@ fn verify_in(
     settings: &AppSettings,
     base: &BTreeMap<String, String>,
 ) -> Result<(), String> {
+    let client = client_for(profile, settings, base)?;
+    verify_with_client(store, index, profile, &client)
+}
+
+fn client_for(profile: &Profile, settings: &AppSettings, base: &BTreeMap<String, String>) -> Result<HttpOAuthClient, String> {
     let mut auth_settings = settings.clone();
     auth_settings.default_proxy_url = match profile.proxy.as_str() {
         "inherit" => base
@@ -1052,12 +1201,7 @@ fn verify_in(
         "off" => String::new(),
         proxy => proxy.into(),
     };
-    verify_with_client(
-        store,
-        index,
-        profile,
-        &HttpOAuthClient::new(&auth_settings)?,
-    )
+    HttpOAuthClient::new(&auth_settings)
 }
 
 fn verify_with_client(
@@ -1146,6 +1290,71 @@ pub fn verify_account(
     )?);
     verify_in(&store, &mut index, &mut profile, settings, &base)?;
     list_in(&store)
+}
+
+pub fn repair_system_identity(
+    app: &AppHandle, settings: &AppSettings, stop_terminals: impl FnOnce() -> Result<(), String>,
+) -> Result<ClaudeAccountList, String> {
+    let _guard = lock_operation()?;
+    let store = accounts_dir(app)?;
+    let mut index = load_index(&store)?;
+    let mut profile = profiles(&index).into_iter().find(|p| p.system).ok_or("系统 Claude 入口不存在。")?;
+    stop_terminals()?;
+    let mut base: BTreeMap<_, _> = std::env::vars().collect();
+    base.extend(crate::proxy::proxy_env(!settings.default_proxy_url.trim().is_empty(), &settings.default_proxy_url)?);
+    let client = client_for(&profile, settings, &base)?;
+    let result = repair_system_in(&store, &mut index, &mut profile, &client);
+    action_log(&store, "repair_system_identity", json!({"ok": result.is_ok()}));
+    result?;
+    list_in(&store)
+}
+
+fn repair_system_in(store: &Path, index: &mut ProfileIndex, profile: &mut Profile, client: &impl OAuthClient) -> Result<(), String> {
+    if !profile.system { return Err("仅系统 Claude 支持同步系统身份缓存。".into()); }
+    if let Some(message) = auth_override(&[profile.config_dir.join("settings.json"), config_file(profile)]) {
+        return Err(message);
+    }
+    let oauth = credentials(profile)?.filter(claude_oauth::has_credentials)
+        .ok_or("系统 Claude 尚未登录，请先在系统终端登录。")?;
+    let hash = token_hash(&oauth).ok_or("系统访问令牌不可用，请先在系统终端重新登录。")?;
+    let actual = client.profile(&oauth).map_err(|e| e.to_string())?;
+    let account = actual.get("account").and_then(Value::as_object).ok_or("身份接口缺少账号信息，未修改系统缓存。")?;
+    let uuid = account.get("uuid").and_then(Value::as_str).filter(|s| !s.trim().is_empty())
+        .ok_or("身份接口缺少账号编号，未修改系统缓存。")?;
+    let email = account.get("email").and_then(Value::as_str).filter(|s| !s.trim().is_empty())
+        .ok_or("身份接口缺少邮箱，未修改系统缓存。")?;
+    let path = config_file(profile);
+    let mut root = if path.exists() { read_json(&path)? } else { json!({}) };
+    let object = root.as_object_mut().ok_or("系统配置格式损坏，无法修复身份。")?;
+    let mut metadata = object.get("oauthAccount")
+        .filter(|a| a.get("accountUuid").and_then(Value::as_str) == Some(uuid))
+        .cloned().unwrap_or_else(|| json!({}));
+    metadata["accountUuid"] = json!(uuid);
+    metadata["emailAddress"] = json!(email);
+    metadata["profileFetchedAt"] = json!(Utc::now().timestamp_millis());
+    for (target, source) in [("displayName", "display_name"), ("fullName", "full_name"), ("accountCreatedAt", "created_at")] {
+        if let Some(value) = account.get(source) { metadata[target] = value.clone(); }
+    }
+    if let Some(organization) = actual.get("organization").and_then(Value::as_object) {
+        for (target, source) in [("organizationUuid", "uuid"), ("organizationName", "name"), ("billingType", "billing_type")] {
+            if let Some(value) = organization.get(source) { metadata[target] = value.clone(); }
+        }
+    }
+    object.insert("oauthAccount".into(), metadata);
+    if credentials(profile)?.as_ref().and_then(token_hash).as_deref() != Some(hash.as_str()) {
+        return Err("核验期间系统登录已变化，请关闭使用系统目录的其他 Claude 窗口后重试。".into());
+    }
+    profile.system_identity = Some(SystemIdentity { access_token_hash: hash, account_uuid: uuid.into(), email: email.into() });
+    profile.verification_pending = true;
+    index.accounts.retain(|p| p.id != profile.id);
+    index.accounts.push(profile.clone());
+    save_index(store, index)?;
+    write_json(&path, &root)?;
+    profile.verification_pending = false;
+    profile.updated_at = Utc::now().to_rfc3339();
+    index.accounts.retain(|p| p.id != profile.id);
+    index.accounts.push(profile.clone());
+    save_index(store, index)
 }
 
 #[cfg(test)]
@@ -1563,5 +1772,116 @@ mod tests {
         assert!(!problem.contains("secret-api-value"));
         assert_eq!(row(&p, false).status, "conflict");
         assert!(switch_in(tmp.path(), &p.id).is_err());
+    }
+
+    #[test]
+    fn clearing_logs_out_only_selected_account_and_retains_history_and_other_credentials() {
+        let (tmp, p) = fixture();
+        logged_in(&p, i64::MAX);
+        let second_id = create_in(tmp.path(), "个人".into(), "off".into(), None).unwrap();
+        let second = load_index(tmp.path()).unwrap().accounts.into_iter().find(|a| a.id == second_id).unwrap();
+        logged_in(&second, i64::MAX);
+        let other = fs::read(second.config_dir.join(".credentials.json")).unwrap();
+        fs::write(p.config_dir.join("history.jsonl"), "history").unwrap();
+        let legacy = tmp.path().join(&p.id).join("credentials.json");
+        write_json(&legacy, &json!({"claudeAiOauth":{"accessToken":"old-secret"},"keep":"other-provider"})).unwrap();
+        let stopped = std::cell::Cell::new(false);
+        let result = clear_credentials_in(tmp.path(), &p.id, || { stopped.set(true); Ok(()) }, |profile| {
+            assert!(stopped.get());
+            assert_eq!(profile.id, p.id);
+            fs::remove_file(profile.config_dir.join(".credentials.json")).unwrap();
+            Ok(())
+        }).unwrap();
+        assert_eq!(result.accounts.iter().find(|a| a.id == p.id).unwrap().status, "signedOut");
+        assert_eq!(fs::read_to_string(p.config_dir.join("history.jsonl")).unwrap(), "history");
+        assert_eq!(fs::read(second.config_dir.join(".credentials.json")).unwrap(), other);
+        assert_eq!(read_json(&legacy).unwrap(), json!({"keep":"other-provider"}));
+    }
+
+    #[test]
+    fn clearing_aborts_when_terminal_stop_or_official_logout_fails() {
+        let (tmp, p) = fixture();
+        logged_in(&p, i64::MAX);
+        let before = fs::read(p.config_dir.join(".credentials.json")).unwrap();
+        assert!(clear_credentials_in(tmp.path(), &p.id, || Err("still running".into()), |_| panic!("logout must not run")).is_err());
+        assert!(clear_credentials_in(tmp.path(), &p.id, || Ok(()), |_| Err("logout failed".into())).is_err());
+        // A CLI success response alone is insufficient if credentials remain.
+        assert!(clear_credentials_in(tmp.path(), &p.id, || Ok(()), |_| Ok(())).is_err());
+        assert_eq!(fs::read(p.config_dir.join(".credentials.json")).unwrap(), before);
+    }
+
+    #[test]
+    fn legacy_clear_removes_both_saved_tokens_without_running_a_cli() {
+        let tmp = tempfile::tempdir().unwrap();
+        let id = Uuid::new_v4().to_string();
+        write_json(&tmp.path().join("index.json"), &json!({"accounts":[{"id":id,"name":"旧账号"}]})).unwrap();
+        for name in ["credentials.json", "pending-credentials.json"] {
+            write_json(&tmp.path().join(&id).join(name), &json!({"claudeAiOauth":{"refreshToken":"old-secret"},"keep":true})).unwrap();
+        }
+        clear_credentials_in(tmp.path(), &id, || panic!("legacy has no running profile"), |_| panic!("legacy must not log out system")).unwrap();
+        for name in ["credentials.json", "pending-credentials.json"] {
+            assert_eq!(read_json(&tmp.path().join(&id).join(name)).unwrap(), json!({"keep":true}));
+        }
+    }
+
+    #[test]
+    fn repair_replaces_stale_system_identity_only_after_verification_and_preserves_settings() {
+        let (tmp, mut p) = fixture();
+        p.id = SYSTEM.into(); p.system = true;
+        logged_in(&p, i64::MAX);
+        let original = json!({"oauthAccount":{"accountUuid":"old-id","emailAddress":"old@example.com","organizationUuid":"old-org"},"projects":{"project":{"trusted":true}},"mcpServers":{"server":{"command":"local"}}});
+        write_json(&config_file(&p), &original).unwrap();
+        let tokens = fs::read(p.config_dir.join(".credentials.json")).unwrap();
+        let mut index = ProfileIndex { accounts: vec![p.clone()], ..Default::default() };
+        for response in [Err(AuthError::Network), Ok(json!({"account":{"uuid":"actual-id"}}))] {
+            assert!(repair_system_in(tmp.path(), &mut index, &mut p, &FakeClient(response)).is_err());
+            assert_eq!(read_json(&config_file(&p)).unwrap(), original);
+        }
+        repair_system_in(tmp.path(), &mut index, &mut p, &FakeClient(Ok(json!({"account":{"uuid":"actual-id","email":"actual@example.com"}})))).unwrap();
+        let updated = read_json(&config_file(&p)).unwrap();
+        assert_eq!(updated["oauthAccount"]["accountUuid"], "actual-id");
+        assert!(updated["oauthAccount"].get("organizationUuid").is_none());
+        assert_eq!(updated["projects"], original["projects"]);
+        assert_eq!(updated["mcpServers"], original["mcpServers"]);
+        assert_eq!(row(&load_index(tmp.path()).unwrap().accounts[0], false).status, "ready");
+        assert_eq!(fs::read(p.config_dir.join(".credentials.json")).unwrap(), tokens);
+    }
+
+    #[test]
+    fn repair_rejects_token_change_during_verification_without_overwriting_cache() {
+        struct ChangingClient(PathBuf);
+        impl OAuthClient for ChangingClient {
+            fn profile(&self, _: &Value) -> Result<Value, AuthError> {
+                write_json(&self.0, &json!({"claudeAiOauth":{"accessToken":"changed-token"}})).unwrap();
+                Ok(json!({"account":{"uuid":"old-verified-id","email":"old@example.com"}}))
+            }
+        }
+        let (tmp, mut p) = fixture();
+        p.id = SYSTEM.into(); p.system = true;
+        logged_in(&p, i64::MAX);
+        let before = fs::read(config_file(&p)).unwrap();
+        let mut index = ProfileIndex::default();
+        let client = ChangingClient(p.config_dir.join(".credentials.json"));
+        assert!(repair_system_in(tmp.path(), &mut index, &mut p, &client).is_err());
+        assert_eq!(fs::read(config_file(&p)).unwrap(), before);
+    }
+
+    #[test]
+    fn cross_account_continuation_is_owned_by_target_and_default_is_unchanged() {
+        let (tmp, source) = fixture();
+        let id = Uuid::new_v4().to_string();
+        let cwd = "D:/project";
+        let project = source.config_dir.join("projects").join(crate::tools::claude::encode_project_dir(cwd));
+        fs::create_dir_all(&project).unwrap();
+        fs::write(project.join(format!("{id}.jsonl")), format!("{}\n", json!({"type":"user","sessionId":id,"message":{"content":"继续"}}))).unwrap();
+        let target_id = create_in(tmp.path(), "个人".into(), "off".into(), None).unwrap();
+        assert!(continue_in(tmp.path(), cwd, &id, &target_id, "任务").is_err());
+        let target = load_index(tmp.path()).unwrap().accounts.into_iter().find(|a| a.id == target_id).unwrap();
+        logged_in(&target, i64::MAX);
+        let copied = continue_in(tmp.path(), cwd, &id, &target_id, "任务").unwrap();
+        assert_eq!(copied.account_id, target_id);
+        assert_eq!(owner_in(tmp.path(), cwd, Some(&copied.session_id)).unwrap().id, target_id);
+        assert_eq!(owner_in(tmp.path(), cwd, Some(&id)).unwrap().id, source.id);
+        assert_eq!(selected(&load_index(tmp.path()).unwrap()).unwrap().id, SYSTEM);
     }
 }

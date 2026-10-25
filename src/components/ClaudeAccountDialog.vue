@@ -3,6 +3,7 @@ import { computed, nextTick, ref, watch } from 'vue'
 import * as api from '../lib/api'
 import type { ClaudeAccount, ClaudeAccountList } from '../lib/types'
 import { claudeStatus, proxyLabel, canUseClaudeAccount } from '../lib/claudeAccounts'
+import { modal as vModal } from '../lib/modal'
 
 const props = defineProps<{ open: boolean }>()
 const emit = defineEmits<{ close: []; switched: [] }>()
@@ -17,8 +18,8 @@ const nameDraft = ref('')
 const proxyMode = ref('inherit')
 const proxyDraft = ref('')
 const removing = ref(false)
+const confirming = ref<'clear' | 'repair' | ''>('')
 const dialog = ref<HTMLElement>()
-let previousFocus: HTMLElement | null = null
 const selected = computed(() => data.value.accounts.find(a => a.id === selectedId.value))
 const filtered = computed(() => {
   const term = query.value.trim().toLowerCase()
@@ -34,11 +35,8 @@ const formError = computed(() => {
 })
 
 watch(() => props.open, async open => {
-  if (!open) { previousFocus?.focus(); return }
-  previousFocus = document.activeElement as HTMLElement | null
-  error.value = ''; notice.value = ''; removing.value = false; query.value = ''; mode.value = 'detail'
-  await nextTick()
-  dialog.value?.focus()
+  if (!open) return
+  error.value = ''; notice.value = ''; removing.value = false; confirming.value = ''; query.value = ''; mode.value = 'detail'
   await reload()
 })
 
@@ -57,7 +55,7 @@ async function run(operation: string, task: () => Promise<void>) {
     error.value = err instanceof Error ? err.message : String(err)
     // A cancelled login may already have created an isolated profile. Keep it
     // visible so the next attempt resumes in the same directory.
-    if (operation === 'login' || operation === 'verify') {
+    if (['login', 'verify', 'clear', 'repair'].includes(operation)) {
       try { accept(await api.listClaudeAccounts()) } catch { /* preserve original error */ }
     }
   } finally { busy.value = '' }
@@ -70,12 +68,12 @@ async function reload() {
 
 function select(account: ClaudeAccount) {
   if (busy.value) return
-  selectedId.value = account.id; mode.value = 'detail'; removing.value = false; notice.value = ''; error.value = ''
+  selectedId.value = account.id; mode.value = 'detail'; removing.value = false; confirming.value = ''; notice.value = ''; error.value = ''
 }
 
 function edit(create = false) {
   if (busy.value) return
-  mode.value = create ? 'create' : 'edit'; removing.value = false; error.value = ''; notice.value = ''
+  mode.value = create ? 'create' : 'edit'; removing.value = false; confirming.value = ''; error.value = ''; notice.value = ''
   nameDraft.value = create ? '' : selected.value?.name || ''
   const proxy = create ? 'inherit' : selected.value?.proxy || 'inherit'
   proxyMode.value = ['inherit', 'off'].includes(proxy) ? proxy : 'custom'
@@ -150,21 +148,23 @@ async function copyPath() {
   if (selected.value && await api.clipboardWrite(selected.value.configDir)) notice.value = '账号目录已复制。'
 }
 
-function close() { if (!busy.value) emit('close') }
-function onKey(event: KeyboardEvent) {
-  if (event.key === 'Escape') { event.stopPropagation(); close() }
-  if (event.key !== 'Tab') return
-  const items = [...(dialog.value?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled), [tabindex="0"]') || [])]
-  const first = items[0], last = items[items.length - 1]
-  if (!first || !last) return
-  if (event.shiftKey && (document.activeElement === first || document.activeElement === dialog.value)) { event.preventDefault(); last.focus() }
-  else if (!event.shiftKey && (document.activeElement === last || document.activeElement === dialog.value)) { event.preventDefault(); first.focus() }
+async function confirmAction() {
+  const account = selected.value
+  const action = confirming.value
+  if (!account || !action) return
+  await run(action, async () => {
+    accept(action === 'clear' ? await api.clearClaudeCredentials(account.id) : await api.repairClaudeSystemIdentity())
+    confirming.value = ''
+    notice.value = action === 'clear' ? '登录凭证已清除，会话历史保留。再次使用此账号前需要重新登录。' : '系统身份已与当前实际登录账号同步，可以重新打开会话。'
+  })
 }
+
+function close() { if (!busy.value) emit('close') }
 </script>
 
 <template>
   <div v-if="open" class="ad-mask" @click.self="close">
-    <div ref="dialog" class="ad-dialog claude-dialog" role="dialog" aria-modal="true" aria-labelledby="claude-accounts-title" tabindex="-1" :aria-busy="!!busy" @keydown="onKey">
+    <div v-modal="close" ref="dialog" class="ad-dialog claude-dialog" role="dialog" aria-modal="true" aria-labelledby="claude-accounts-title" tabindex="-1" :aria-busy="!!busy">
       <header class="dialog-head">
         <div class="heading">
           <span class="claude-mark" aria-hidden="true">✳</span>
@@ -238,13 +238,22 @@ function onKey(event: KeyboardEvent) {
             </dl>
             <div v-if="selected.source === 'system'" class="form-note">此入口使用本机原有 Claude 目录。添加其他账号时选择「添加账号」，在新目录中完成登录。</div>
             <div class="detail-actions">
+              <button v-if="selected.source === 'system' && ['conflict', 'unverified'].includes(selected.status)" type="button" class="btn btn-primary" :disabled="!!busy || !api.isTauri" @click="confirming = 'repair'; removing = false">修复系统身份</button>
               <button v-if="selected.status === 'unverified' || selected.source === 'system'" type="button" class="btn" :class="canUseClaudeAccount(selected) ? 'btn-ghost' : 'btn-primary'" :disabled="!!busy || !api.isTauri" @click="verify">{{ busy === 'verify' ? '检查中…' : '检查登录' }}</button>
               <button v-if="canUseClaudeAccount(selected)" type="button" class="btn btn-primary" :disabled="!!busy || selected.active || !api.isTauri" @click="useAccount">{{ busy === 'switch' ? '设置中…' : selected.active ? '已设为默认' : '设为默认账号' }}</button>
               <button v-if="selected.source !== 'system'" type="button" class="btn" :class="canUseClaudeAccount(selected) || selected.status === 'unverified' ? 'btn-ghost' : 'btn-primary'" :disabled="!!busy || !api.isTauri" @click="login">{{ busy === 'login' ? '等待授权…' : selected.source === 'legacy' ? '迁移并登录' : canUseClaudeAccount(selected) ? '重新登录' : '登录账号' }}</button>
               <button v-if="selected.source !== 'legacy'" type="button" class="btn btn-ghost" :disabled="!!busy || !api.isTauri" @click="edit()">编辑</button>
             </div>
+            <div class="credential-zone">
+              <button v-if="!confirming" type="button" class="text-button danger" :disabled="!!busy || !api.isTauri" @click="confirming = 'clear'; removing = false">清除登录凭证</button>
+              <div v-else class="remove-confirm" role="alert">
+                <template v-if="confirming === 'clear'"><strong>清除「{{ selected.name }}」的登录凭证？</strong><p>此账号在 Agent Dock 中运行的终端将关闭，登录状态将被清除，会话历史继续保留。{{ selected.source === 'system' ? '此操作也会影响共用系统目录的其他 Claude 窗口，请先关闭这些窗口。' : '' }}</p></template>
+                <template v-else><strong>同步系统 Claude 的实际身份？</strong><p>将通过 Claude 身份接口核验当前凭证，并修正系统缓存的账号信息。系统账号在 Agent Dock 中运行的终端将关闭；请先关闭其他共用系统目录的 Claude 窗口。</p></template>
+                <div class="actions"><button type="button" class="btn btn-ghost btn-small" :disabled="!!busy" @click="confirming = ''">取消</button><button type="button" class="btn btn-small" :class="confirming === 'clear' ? 'btn-danger' : 'btn-primary'" :disabled="!!busy" @click="confirmAction">{{ busy === 'clear' ? '清除中…' : busy === 'repair' ? '修复中…' : confirming === 'clear' ? '确认清除凭证' : '核验并修复' }}</button></div>
+              </div>
+            </div>
             <div v-if="selected.source !== 'system'" class="remove-zone">
-              <button v-if="!removing" type="button" class="text-button danger" :disabled="!!busy || !api.isTauri" @click="removing = true">移出账号列表</button>
+              <button v-if="!removing" type="button" class="text-button danger" :disabled="!!busy || !api.isTauri" @click="removing = true; confirming = ''">移出账号列表</button>
               <div v-else class="remove-confirm" role="alert">
                 <p>将「{{ selected.name }}」移出列表？登录目录和历史会保留{{ selected.active ? '，新会话将回到系统 Claude' : '' }}。</p>
                 <div class="actions"><button type="button" class="btn btn-ghost btn-small" :disabled="!!busy" @click="removing = false">取消</button><button type="button" class="btn btn-danger btn-small" :disabled="!!busy" @click="remove">{{ busy === 'remove' ? '移除中…' : '移出列表' }}</button></div>
@@ -260,6 +269,8 @@ function onKey(event: KeyboardEvent) {
 </template>
 
 <style scoped>
+.credential-zone { margin-top: 24px; }
+.credential-zone .remove-confirm strong { display: block; margin-bottom: 8px; }
 .claude-dialog { width: 880px; max-width: calc(100vw - 48px); max-height: calc(100vh - 48px); padding: 0; overflow: auto; outline: none; }
 .dialog-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 24px; }
 .heading { display: flex; align-items: center; gap: 16px; }

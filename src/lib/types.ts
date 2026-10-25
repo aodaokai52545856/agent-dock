@@ -289,6 +289,19 @@ export interface ClaudeAccountList {
   accounts: ClaudeAccount[]
 }
 
+export interface ClaudeSessionAccounts {
+  sourceAccountId: string
+  sourceAccountName: string
+  accounts: ClaudeAccount[]
+}
+
+export interface ClaudeContinuation {
+  sessionId: string
+  title: string
+  accountId: string
+  accountName: string
+}
+
 export interface DshBalance {
   ok: boolean
   available: boolean | null

@@ -44,6 +44,7 @@ const emit = defineEmits<{
   delete: [payload: { sessionId: string; toolId: ToolId }]
   'delete-many': [payload: { sessionId: string; toolId: ToolId }[]]
   cite: [payload: { sessionId: string; toolId: ToolId }]
+  'continue-claude': [payload: { sessionId: string; toolId: ToolId }]
 }>()
 
 defineProps<{
@@ -325,9 +326,14 @@ function menuCanCite() {
   return Boolean(menu.value && !menuPending() && (menu.value.toolId === 'grokbuild' || menu.value.toolId === 'kimi'))
 }
 
+function menuCanContinueClaude() {
+  return Boolean(menu.value?.toolId === 'claude' && !menuPending())
+}
+
 function activateMenu(index: number) {
   if (index === 0 && menuCanRename()) renameSession()
-  if (index === 1 && menuCanCite()) citeSession()
+  if (index === 1 && menuCanContinueClaude()) continueClaudeSession()
+  else if (index === 1 && menuCanCite()) citeSession()
   if (index === 2 && menuLive()) closeSession()
   if (index === 3 && menuCanCloseAll()) closeAllSessions()
   if (index === 4 && menuCanDelete()) deleteSession()
@@ -337,6 +343,13 @@ function citeSession() {
   const current = menu.value
   closeMenu()
   if (current) emit('cite', { sessionId: current.sessionId, toolId: current.toolId })
+}
+
+function continueClaudeSession() {
+  if (!menuCanContinueClaude()) return
+  const current = menu.value!
+  closeMenu()
+  emit('continue-claude', { sessionId: current.sessionId, toolId: current.toolId })
 }
 
 function closeSession() {
@@ -777,11 +790,11 @@ onUnmounted(() => {
           role="menuitem"
           class="ad-menu-item"
           :class="{ 'is-focus': menu.focus === 1 }"
-          :disabled="!menuCanCite()"
+          :disabled="!(menuCanCite() || menuCanContinueClaude())"
           @mouseenter="menu.focus = 1"
-          @click="citeSession"
+          @click="menu.toolId === 'claude' ? continueClaudeSession() : citeSession()"
         >
-          <span>引用片段</span>
+          <span>{{ menu.toolId === 'claude' ? '用其他账号继续…' : '引用片段' }}</span>
         </button>
         <div class="ad-menu-sep" role="separator" />
         <button

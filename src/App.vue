@@ -16,6 +16,7 @@ import CcswitchDialog from './components/CcswitchDialog.vue'
 import VersionDrawer from './components/VersionDrawer.vue'
 import DeepseekKeyDialog from './components/DeepseekKeyDialog.vue'
 import ClaudeAccountDialog from './components/ClaudeAccountDialog.vue'
+import ClaudeContinueDialog from './components/ClaudeContinueDialog.vue'
 import GrokAccountDialog from './components/GrokAccountDialog.vue'
 import StatusBar from './components/StatusBar.vue'
 import WindowResizeFrame from './components/WindowResizeFrame.vue'
@@ -66,7 +67,7 @@ import {
 } from './lib/store'
 import { isPendingSessionId, resolveOpenTarget } from './lib/liveBind'
 import { refreshCodexThreads } from './lib/pipeline'
-import type { ProjectDraft, SessionDoc, ToolId } from './lib/types'
+import type { ClaudeContinuation, ProjectDraft, SessionDoc, ToolId } from './lib/types'
 import { appearanceFromSettings, resolvedTheme, systemPrefersLight } from './lib/appearance'
 
 const projectOpen = ref(false)
@@ -76,6 +77,7 @@ const versionOpen = ref(false)
 const ccswitchOpen = ref(false)
 const accountOpen = ref(false)
 const claudeAccountOpen = ref(false)
+const claudeContinuation = ref<{ projectId: string; sessionId: string; title: string } | null>(null)
 const deepseekOpen = ref(false)
 const ccswitchBusy = ref(false)
 const confirmOpen = ref(false)
@@ -503,6 +505,19 @@ async function openSession(sessionId?: string, toolId?: ToolId) {
   }
 }
 
+function openClaudeContinuation(payload: { sessionId: string; toolId: ToolId }) {
+  if (payload.toolId !== 'claude' || !store.selectedProjectId) return
+  const session = store.sessions.find(row => row.id === payload.sessionId && row.toolId === 'claude')
+  claudeContinuation.value = { projectId: store.selectedProjectId, sessionId: payload.sessionId, title: session?.title || 'Claude 会话' }
+}
+
+async function onClaudeContinued(result: ClaudeContinuation & { projectId: string }) {
+  claudeContinuation.value = null
+  await refreshSessions({ silent: true })
+  showToast(`已复制会话，将使用「${result.accountName}」继续。`)
+  if (store.selectedProjectId === result.projectId) await openSession(result.sessionId, 'claude')
+}
+
 function onAppContextMenu(event: MouseEvent) {
   const el = event.target as HTMLElement | null
   if (el?.closest('input, textarea, [contenteditable="true"]')) return
@@ -693,6 +708,7 @@ const confirmCopy = () => {
           @delete="(payload) => askDeleteSession(payload.sessionId, payload.toolId)"
           @delete-many="askDeleteSessions"
           @cite="openCiteTurns"
+          @continue-claude="openClaudeContinuation"
         />
         <PaneGutter
           label="调整工作区宽度"
@@ -803,6 +819,15 @@ const confirmCopy = () => {
       @switched="onClaudeSwitched"
     />
     <DeepseekKeyDialog :open="deepseekOpen" @close="deepseekOpen = false" />
+    <ClaudeContinueDialog
+      :open="!!claudeContinuation"
+      :project-id="claudeContinuation?.projectId || ''"
+      :session-id="claudeContinuation?.sessionId || ''"
+      :title="claudeContinuation?.title || ''"
+      @close="claudeContinuation = null"
+      @accounts="claudeContinuation = null; claudeAccountOpen = true"
+      @continued="onClaudeContinued"
+    />
     <SettingsDrawer
       ref="settingsDialog"
       :open="settingsOpen"

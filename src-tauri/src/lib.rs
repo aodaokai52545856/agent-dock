@@ -10,6 +10,7 @@ mod dsh_keys;
 mod dsh_web;
 mod dsh_web_guard;
 mod claude_accounts;
+mod claude_session_copy;
 mod claude_oauth;
 mod grok_accounts;
 mod secret_box;
@@ -318,6 +319,40 @@ async fn verify_claude_account(app: AppHandle, account_id: String) -> Result<Cla
 
 #[tauri::command]
 fn cancel_claude_login() { claude_accounts::cancel_login(); }
+
+#[tauri::command]
+async fn clear_claude_credentials(app: AppHandle, hub: State<'_, Arc<PtyHub>>, account_id: String) -> Result<ClaudeAccountList, String> {
+    let settings = state::load_state(&app)?.settings;
+    let hub = hub.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        claude_accounts::clear_credentials(&app, &settings, &account_id, || hub.stop_claude_account(&app, &account_id))
+    }).await.map_err(|_| "清除 Claude 登录凭证失败。".to_string())?
+}
+
+#[tauri::command]
+async fn repair_claude_system_identity(app: AppHandle, hub: State<'_, Arc<PtyHub>>) -> Result<ClaudeAccountList, String> {
+    let settings = state::load_state(&app)?.settings;
+    let hub = hub.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        claude_accounts::repair_system_identity(&app, &settings, || hub.stop_claude_account(&app, "system"))
+    }).await.map_err(|_| "修复 Claude 系统身份失败。".to_string())?
+}
+
+#[tauri::command]
+fn claude_session_accounts(app: AppHandle, project_id: String, session_id: String) -> Result<claude_accounts::ClaudeSessionAccounts, String> {
+    let state = state::load_state(&app)?;
+    let project = state::find_project(&state, &project_id)?;
+    claude_accounts::session_accounts(&app, &project.path, &session_id)
+}
+
+#[tauri::command]
+async fn continue_claude_session(app: AppHandle, project_id: String, session_id: String, account_id: String, title: String) -> Result<claude_accounts::ClaudeContinuation, String> {
+    let state = state::load_state(&app)?;
+    let project = state::find_project(&state, &project_id)?.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        claude_accounts::continue_with_account(&app, &project.path, &session_id, &account_id, &title)
+    }).await.map_err(|_| "创建 Claude 续接会话失败。".to_string())?
+}
 
 #[tauri::command]
 fn list_grok_accounts(app: AppHandle) -> Result<GrokAccountList, String> {
@@ -1007,6 +1042,10 @@ pub fn run() {
             update_claude_account,
             verify_claude_account,
             cancel_claude_login,
+            clear_claude_credentials,
+            repair_claude_system_identity,
+            claude_session_accounts,
+            continue_claude_session,
             save_claude_account,
             switch_claude_account,
             delete_claude_account,

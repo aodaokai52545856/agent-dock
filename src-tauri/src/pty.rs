@@ -82,6 +82,38 @@ impl PtyHub {
         reap_dead(&mut sessions);
         sessions.values().any(|pty| pty.claude_account_id.as_deref() == Some(id))
     }
+
+    pub fn stop_claude_account(&self, app: &AppHandle, account_id: &str) -> Result<(), String> {
+        let mut sessions = self.sessions.lock().map_err(|_| "终端状态不可用，请重启应用。")?;
+        let ids: Vec<_> = sessions.values().filter(|p| p.claude_account_id.as_deref() == Some(account_id))
+            .map(|p| p.id.clone()).collect();
+        for id in ids {
+            let pty = sessions.get_mut(&id).expect("selected terminal");
+            if pty.child.try_wait().map_err(|_| "无法检查此账号终端，请先手动关闭。")?.is_none() {
+                #[cfg(windows)]
+                {
+                    let pid = pty.child.process_id().ok_or("无法定位此账号终端进程。")?;
+                    let mut cmd = std::process::Command::new("taskkill.exe");
+                    cmd.args(["/PID", &pid.to_string(), "/T", "/F"]);
+                    platform::apply_no_window(&mut cmd);
+                    let output = cmd.output().map_err(|_| "无法关闭此账号终端进程树，请先手动关闭。")?;
+                    if !output.status.success() && pty.child.try_wait().ok().flatten().is_none() {
+                        return Err("此账号终端尚未退出，已取消操作。".into());
+                    }
+                }
+                #[cfg(not(windows))]
+                pty.child.kill().map_err(|_| "无法关闭此账号终端，已取消操作。")?;
+                let deadline = std::time::Instant::now() + Duration::from_secs(5);
+                while pty.child.try_wait().map_err(|_| "无法确认此账号终端已退出。")?.is_none() {
+                    if std::time::Instant::now() >= deadline { return Err("等待此账号终端退出超时，已取消操作。".into()); }
+                    thread::sleep(Duration::from_millis(25));
+                }
+            }
+            sessions.remove(&id);
+            let _ = app.emit("pty-exit", PtyExit { pty_id: id });
+        }
+        Ok(())
+    }
     pub fn new() -> Arc<Self> {
         Arc::new(Self {
             sessions: Mutex::new(HashMap::new()),

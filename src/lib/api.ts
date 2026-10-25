@@ -16,6 +16,8 @@ import type {
   CursorDevResult,
   GitSnapshot,
   ClaudeAccountList,
+  ClaudeSessionAccounts,
+  ClaudeContinuation,
   GrokAccountList,
   GrokSpend,
   GrokUsage,
@@ -381,20 +383,20 @@ export async function listLivePtys(): Promise<LivePtyInfo[]> {
 }
 
 export async function appVersion(): Promise<string> {
-  if (!isTauri) return '0.1.12'
+  if (!isTauri) return '0.1.13'
   return invoke('app_version')
 }
 
 export async function checkAppUpdate(proxyUrl?: string): Promise<AppUpdateInfo> {
   if (!isTauri) {
     return {
-      localVersion: '0.1.12',
-      latestVersion: '0.1.12',
+      localVersion: '0.1.13',
+      latestVersion: '0.1.13',
       compare: '已是最新',
       kind: 'win-setup',
       kindLabel: 'Windows 安装包',
-      assetName: 'AgentDock-0.1.12-Setup.exe',
-      htmlUrl: 'https://github.com/aodaokai52545856/agent-dock/releases/tag/v0.1.12'
+      assetName: 'AgentDock-0.1.13-Setup.exe',
+      htmlUrl: 'https://github.com/aodaokai52545856/agent-dock/releases/tag/v0.1.13'
     }
   }
   return invoke('check_app_update', { proxyUrl: proxyUrl || null })
@@ -617,6 +619,22 @@ export async function switchClaudeAccount(accountId: string): Promise<ClaudeAcco
 export async function deleteClaudeAccount(accountId: string): Promise<ClaudeAccountList> {
   if (!isTauri) return emptyClaudeAccounts()
   return invoke('delete_claude_account', { accountId })
+}
+
+export async function clearClaudeCredentials(accountId: string): Promise<ClaudeAccountList> {
+  return invoke('clear_claude_credentials', { accountId })
+}
+
+export async function repairClaudeSystemIdentity(): Promise<ClaudeAccountList> {
+  return invoke('repair_claude_system_identity')
+}
+
+export async function claudeSessionAccounts(projectId: string, sessionId: string): Promise<ClaudeSessionAccounts> {
+  return invoke('claude_session_accounts', { projectId, sessionId })
+}
+
+export async function continueClaudeSession(projectId: string, sessionId: string, accountId: string, title: string): Promise<ClaudeContinuation> {
+  return invoke('continue_claude_session', { projectId, sessionId, accountId, title })
 }
 
 export async function loginClaudeAccount(accountId: string): Promise<ClaudeAccountList> {
