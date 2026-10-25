@@ -11,4 +11,5 @@ src-tauri/.playwright-cli
 .playwright-cli
 .idea/
 .pwtmp/
+.pw-tmp/
 .worktrees/
