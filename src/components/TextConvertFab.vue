@@ -41,9 +41,19 @@ function run() {
   result.value = convertText(source.value, charset.value)
 }
 
+watch(source, () => {
+  result.value = ''
+})
+
 watch(charset, () => {
   if (convertEnabled.value && hasResult.value) run()
 })
+
+async function copyText(text: string) {
+  if (!text) return
+  const ok = await api.clipboardWrite(text)
+  showToast(ok ? '已复制' : '复制失败')
+}
 
 async function sendResult() {
   if (!hasResult.value) return
@@ -58,6 +68,7 @@ async function sendResult() {
   sending.value = true
   try {
     await api.ptyWrite(store.activePtyId, wrapBracketedPaste(result.value) + '\r')
+    result.value = ''
     showToast('已发送到当前聊天')
   } catch (err) {
     showToast(err instanceof Error ? err.message : String(err))
@@ -90,14 +101,34 @@ onUnmounted(() => window.removeEventListener('keydown', onKey))
     </button>
     <div v-if="open" class="panel" role="dialog" aria-label="文本转换">
       <p v-if="!tableReady" class="warn">转换表不可用</p>
-      <label class="field">
-        <span>原文</span>
-        <textarea v-model="source" class="source" spellcheck="false" />
-      </label>
-      <label class="field">
-        <span>结果</span>
-        <textarea v-model="result" class="result" spellcheck="false" />
-      </label>
+      <div class="field">
+        <div class="field-head">
+          <span>原文</span>
+          <button
+            type="button"
+            class="btn btn-ghost field-copy"
+            :disabled="!hasSource"
+            @click="copyText(source)"
+          >
+            复制
+          </button>
+        </div>
+        <textarea v-model="source" class="source" aria-label="原文" spellcheck="false" />
+      </div>
+      <div class="field">
+        <div class="field-head">
+          <span>结果</span>
+          <button
+            type="button"
+            class="btn btn-ghost field-copy"
+            :disabled="!hasResult"
+            @click="copyText(result)"
+          >
+            复制
+          </button>
+        </div>
+        <textarea v-model="result" class="result" aria-label="结果" spellcheck="false" />
+      </div>
       <div class="row">
         <select
           v-model="charset"
@@ -191,6 +222,20 @@ onUnmounted(() => window.removeEventListener('keydown', onKey))
   flex: 1;
   min-height: 0;
   color: var(--ad-muted);
+  font-size: 12px;
+}
+
+.field-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.field-copy {
+  min-width: 0;
+  height: 24px;
+  padding: 0 8px;
   font-size: 12px;
 }
 
