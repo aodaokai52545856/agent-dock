@@ -16,6 +16,7 @@ mod grok_accounts;
 mod secret_box;
 mod grok_spend;
 mod grok_usage;
+mod usage;
 mod path_norm;
 mod platform;
 mod proxy;
@@ -386,6 +387,42 @@ async fn grok_spend(start: Option<i64>, end: Option<i64>) -> Result<GrokSpend, S
     tauri::async_runtime::spawn_blocking(move || crate::grok_spend::fetch(start, end))
         .await
         .map_err(|err| format!("读取 Grok token 消耗失败：{err}"))
+}
+
+fn usage_snapshot(force: bool) -> crate::usage::UsageSnapshot {
+    crate::usage::take_snapshot(force, claude_accounts::extra_usage_profiles())
+}
+
+#[tauri::command]
+async fn usage_sync() -> Result<crate::usage::UsageSyncResult, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        crate::usage::sync_from_snapshot(&usage_snapshot(true))
+    })
+    .await
+    .map_err(|err| format!("同步用量失败：{err}"))
+}
+
+#[tauri::command]
+async fn usage_dashboard(query: crate::usage::UsageQuery) -> Result<crate::usage::UsageDashboard, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::usage::dashboard_from_snapshot(&usage_snapshot(false), &query)
+    })
+    .await
+    .map_err(|err| format!("读取用量失败：{err}"))
+}
+
+#[tauri::command]
+async fn usage_logs(
+    query: crate::usage::UsageQuery,
+    page: Option<u32>,
+    page_size: Option<u32>,
+) -> Result<crate::usage::UsageLogPage, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let snap = usage_snapshot(false);
+        crate::usage::build_logs(&snap.records, &query, page.unwrap_or(0), page_size.unwrap_or(20))
+    })
+    .await
+    .map_err(|err| format!("读取用量日志失败：{err}"))
 }
 
 #[tauri::command]
@@ -1033,6 +1070,9 @@ pub fn run() {
             list_grok_accounts,
             grok_usage,
             grok_spend,
+            usage_sync,
+            usage_dashboard,
+            usage_logs,
             save_grok_account,
             switch_grok_account,
             delete_grok_account,

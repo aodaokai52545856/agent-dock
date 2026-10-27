@@ -1,4 +1,5 @@
 //! Copy one conversation into another account without copying authentication.
+use chrono::Utc;
 use serde_json::{json, Value};
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, BufWriter, Read, Write};
@@ -37,7 +38,13 @@ pub fn copy_session(
         let length = input.metadata().map_err(|_| "无法读取原会话状态。")?.len();
         let output = fs::OpenOptions::new().write(true).create_new(true).open(&temporary)
             .map_err(|_| "无法创建续接会话，请检查目标目录权限。")?;
-        rewrite_history(BufReader::new(input.take(length)), BufWriter::new(output), &new_id, title)?;
+        rewrite_history(
+            BufReader::new(input.take(length)),
+            BufWriter::new(output),
+            &new_id,
+            session_id,
+            title,
+        )?;
         let sidecars = [
             (source.parent().unwrap().join(session_id), target_project.join(&new_id)),
             (source_home.join("file-history").join(session_id), target_root.join("file-history").join(&new_id)),
@@ -86,7 +93,13 @@ fn create_scoped_dir(path: &Path, root: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn rewrite_history(input: impl BufRead, mut output: impl Write, new_id: &str, title: &str) -> Result<(), String> {
+fn rewrite_history(
+    input: impl BufRead,
+    mut output: impl Write,
+    new_id: &str,
+    source_id: &str,
+    title: &str,
+) -> Result<(), String> {
     let mut records = 0;
     for line in input.split(b'\n') {
         let line = line.map_err(|_| "读取原会话失败。")?;
@@ -102,6 +115,17 @@ fn rewrite_history(input: impl BufRead, mut output: impl Write, new_id: &str, ti
         records += 1;
     }
     if records == 0 { return Err("原会话还没有可续接的记录。".into()); }
+    serde_json::to_writer(
+        &mut output,
+        &json!({
+            "type": "agent-dock-copy-boundary",
+            "sessionId": new_id,
+            "sourceSessionId": source_id,
+            "copiedAt": Utc::now().to_rfc3339()
+        }),
+    )
+    .map_err(|_| "保存续接会话失败。")?;
+    output.write_all(b"\n").map_err(|_| "保存续接会话失败。")?;
     serde_json::to_writer(&mut output, &json!({"type": "custom-title", "sessionId": new_id, "customTitle": title}))
         .map_err(|_| "保存续接会话名称失败。")?;
     output.write_all(b"\n").and_then(|_| output.flush()).map_err(|_| "保存续接会话失败。".to_string())
@@ -172,6 +196,14 @@ mod tests {
         assert_eq!(rows[0]["sessionId"], next);
         assert_eq!(rows[0]["uuid"], "message-1");
         assert_eq!(rows[0]["message"], record["message"]);
+        let boundary = rows.iter().find(|row| row["type"] == "agent-dock-copy-boundary")
+            .expect("copy writes an account-copy boundary");
+        assert_eq!(boundary["sessionId"], next);
+        assert_eq!(boundary["sourceSessionId"], id);
+        assert!(boundary["copiedAt"].as_str().is_some_and(|s| !s.is_empty()));
+        let boundary_at = rows.iter().position(|row| row["type"] == "agent-dock-copy-boundary").unwrap();
+        let title_at = rows.iter().position(|row| row.get("customTitle").is_some()).unwrap();
+        assert!(boundary_at < title_at);
         assert_eq!(rows.last().unwrap()["customTitle"], "继续任务");
         assert_eq!(fs::read(&file).unwrap(), original);
         assert_eq!(fs::read_to_string(target.join(".credentials.json")).unwrap(), "target-secret");

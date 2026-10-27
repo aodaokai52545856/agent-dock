@@ -61,6 +61,7 @@ import type {
 import {
   TOOLS,
   clampSessionToolFilter,
+  parseAppMode,
   parseSessionToolFilter,
   toolLabel,
   toolsToScanForFilter
@@ -143,9 +144,7 @@ const MODE_STORAGE_KEY = 'ad-app-mode'
 const lastPtyByProject: Record<string, string> = {}
 const previewSessions: Record<string, SessionRow[]> = {}
 
-export function parseAppMode(value: unknown): AppMode {
-  return value === 'bridge' ? 'bridge' : 'console'
-}
+export { parseAppMode }
 
 function sessionViewStorage(): SessionViewStorage | null {
   if (typeof localStorage === 'undefined') return null

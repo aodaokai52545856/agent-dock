@@ -217,6 +217,16 @@ onUnmounted(() => {
         >
           编排
         </button>
+        <button
+          type="button"
+          role="tab"
+          class="mode"
+          :class="{ 'is-on': store.appMode === 'usage' }"
+          :aria-selected="store.appMode === 'usage'"
+          @click="setAppMode('usage')"
+        >
+          使用量
+        </button>
       </div>
     </div>
     <div class="drag" />

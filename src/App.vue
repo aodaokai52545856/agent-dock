@@ -24,6 +24,7 @@ import TitleBar from './components/TitleBar.vue'
 import DshWebPane from './components/DshWebPane.vue'
 import TerminalPane from './components/TerminalPane.vue'
 import TextConvertFab from './components/TextConvertFab.vue'
+import UsagePane from './components/UsagePane.vue'
 import * as api from './lib/api'
 import {
   beginPaneDrag,
@@ -776,6 +777,9 @@ const confirmCopy = () => {
         />
         <BridgePane />
       </div>
+      <div v-show="store.appMode === 'usage'" class="workspace usage-ws">
+        <UsagePane />
+      </div>
     </div>
     <StatusBar
       :docs-open="!layout.docRailCollapsed"
@@ -908,6 +912,10 @@ const confirmCopy = () => {
   flex: 1;
   min-height: 0;
   display: flex;
+  overflow: hidden;
+}
+
+.usage-ws {
   overflow: hidden;
 }
 

@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core'
 import { previewSpend } from './grokSpend'
+import { emptyUsageDashboard, emptyUsageLogs } from './usage'
 import type {
   AppSettings,
   AppState,
@@ -34,7 +35,11 @@ import type {
   ToolId,
   ToolProbeMap,
   ToolVersionInfo,
-  UpgradeResult
+  UpgradeResult,
+  UsageDashboard,
+  UsageLogPage,
+  UsageQuery,
+  UsageSyncResult
 } from './types'
 
 export const isTauri = typeof window !== 'undefined' && !!(window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__
@@ -690,6 +695,41 @@ export async function grokUsage(projectId?: string | null): Promise<GrokUsage> {
 export async function grokSpend(start?: number | null, end?: number | null): Promise<GrokSpend> {
   if (!isTauri) return previewSpend(start ?? undefined, end ?? undefined)
   return invoke('grok_spend', { start: start ?? null, end: end ?? null })
+}
+
+export async function usageSync(): Promise<UsageSyncResult> {
+  if (!isTauri) {
+    return {
+      imported: 0,
+      filesScanned: 0,
+      extraAccounts: 0,
+      dbOk: false,
+      message: '请在桌面窗口里查看用量'
+    }
+  }
+  return invoke('usage_sync')
+}
+
+export async function usageDashboard(query: UsageQuery): Promise<UsageDashboard> {
+  if (!isTauri) return emptyUsageDashboard()
+  return invoke('usage_dashboard', { query })
+}
+
+export async function usageLogs(
+  query: UsageQuery & { page?: number; pageSize?: number }
+): Promise<UsageLogPage> {
+  if (!isTauri) return emptyUsageLogs()
+  return invoke('usage_logs', {
+    query: {
+      start: query.start,
+      end: query.end,
+      appFilter: query.appFilter,
+      providerName: query.providerName ?? null,
+      model: query.model ?? null
+    },
+    page: query.page ?? 0,
+    pageSize: query.pageSize ?? 20
+  })
 }
 
 export async function codexProbe(projectId: string): Promise<CodexProbe> {

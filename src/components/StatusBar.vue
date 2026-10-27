@@ -535,7 +535,13 @@ watch(liveCount, (n) => {
       </svg>
       文档
     </button>
-    <button type="button" class="link" :disabled="store.appMode === 'console' ? store.sessionRefreshBusy : store.codexStatus === 'loading'" @click="$emit('refresh')">
+    <button
+      v-if="store.appMode !== 'usage'"
+      type="button"
+      class="link"
+      :disabled="store.appMode === 'console' ? store.sessionRefreshBusy : store.codexStatus === 'loading'"
+      @click="$emit('refresh')"
+    >
       {{ store.appMode === 'bridge' ? '刷新线程' : '刷新会话' }}
     </button>
     <button type="button" class="link" @click="$emit('settings')">设置</button>

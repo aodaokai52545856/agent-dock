@@ -22,7 +22,7 @@
     "test:clock": "node --experimental-strip-types src/lib/worldClock.test.ts",
     "test:bridge": "node --experimental-strip-types src/lib/reviewVerdict.test.ts",
     "test:flow": "node --experimental-strip-types src/lib/flow/envelope.test.ts && node --experimental-strip-types src/lib/flow/engine.test.ts && node --experimental-strip-types src/lib/flow/model.test.ts && node --experimental-strip-types src/lib/flow/ptyWait.test.ts && node --experimental-strip-types src/lib/flow/roles.test.ts && node --experimental-strip-types src/lib/flow/channels.test.ts && node --experimental-strip-types src/lib/flow/chartLayout.test.ts && node --experimental-strip-types src/lib/flow/inspector.test.ts",
-    "test:usage": "node --experimental-strip-types src/lib/grokUsage.test.ts && node --experimental-strip-types src/lib/grokSpend.test.ts && node --experimental-strip-types src/lib/dshBalance.test.ts",
+    "test:usage": "node --experimental-strip-types src/lib/grokUsage.test.ts && node --experimental-strip-types src/lib/grokSpend.test.ts && node --experimental-strip-types src/lib/dshBalance.test.ts && node --experimental-strip-types src/lib/usage.test.ts",
     "test:appearance": "node --experimental-strip-types src/lib/appearance.test.ts && node --experimental-strip-types src/lib/uiGlass.test.ts",
     "test:cite": "node --experimental-strip-types src/lib/sessionCite.test.ts && node --experimental-strip-types src/lib/markdown.test.ts && node --experimental-strip-types src/lib/docPreview.test.ts",
     "test:convert": "node --experimental-strip-types src/lib/textConvert.test.ts",

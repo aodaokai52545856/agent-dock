@@ -1048,6 +1048,27 @@ pub fn session_homes() -> Vec<PathBuf> {
     homes
 }
 
+pub fn extra_usage_profiles() -> Vec<crate::usage::ExtraClaudeProfile> {
+    let Some(store) = STORE.get() else {
+        return Vec::new();
+    };
+    let Ok(index) = load_index(store) else {
+        return Vec::new();
+    };
+    index
+        .accounts
+        .iter()
+        .chain(index.retired.iter())
+        .filter(|p| !p.system && p.id != SYSTEM)
+        .map(|p| crate::usage::ExtraClaudeProfile {
+            id: p.id.clone(),
+            name: p.name.clone(),
+            email: p.email.clone(),
+            config_dir: p.config_dir.clone(),
+        })
+        .collect()
+}
+
 pub fn login_account(
     app: &AppHandle,
     settings: &AppSettings,

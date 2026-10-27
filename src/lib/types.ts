@@ -13,7 +13,12 @@ export interface Project {
 
 export type SessionToolFilter = 'all' | ToolId
 
-export type AppMode = 'console' | 'bridge'
+export type AppMode = 'console' | 'bridge' | 'usage'
+
+export function parseAppMode(value: unknown): AppMode {
+  if (value === 'bridge' || value === 'usage') return value
+  return 'console'
+}
 
 export type GateStatus = 'idle' | 'developing' | 'pendingReview' | 'reviewing' | 'failed' | 'passed'
 
@@ -355,6 +360,110 @@ export interface GrokSpend {
   points: GrokSpendPoint[]
   scannedFiles: number
   fetchedAt: string
+  message: string | null
+}
+
+export interface UsageQuery {
+  start: number
+  end: number
+  appFilter: string
+  providerName?: string | null
+  model?: string | null
+}
+
+export interface UsageAppChip {
+  id: string
+  label: string
+}
+
+export interface UsagePoint {
+  ts: number
+  label: string
+  inputTokens: number
+  outputTokens: number
+  cacheReadTokens: number
+  cacheCreationTokens: number
+  tokens: number
+  costUsd: number
+  requests: number
+}
+
+export interface UsageHeatCell {
+  ts: number
+  label: string
+  tokens: number
+  costUsd: number
+  requests: number
+}
+
+export interface UsageGroupRow {
+  name: string
+  requestCount: number
+  tokens: number
+  costUsd: number
+  unpriced: boolean
+}
+
+export interface UsagePricingView {
+  modelId: string
+  displayName: string
+  inputPerMillion: number
+  outputPerMillion: number
+  cacheReadPerMillion: number
+  cacheCreationPerMillion: number
+}
+
+export interface UsageDashboard {
+  ok: boolean
+  dbOk: boolean
+  message: string | null
+  totalCostUsd: number
+  totalRequests: number
+  totalTokens: number
+  cacheHitPercent: number
+  inputTokens: number
+  outputTokens: number
+  cacheReadTokens: number
+  cacheCreationTokens: number
+  points: UsagePoint[]
+  heatmap: UsageHeatCell[]
+  providers: UsageGroupRow[]
+  models: UsageGroupRow[]
+  apps: UsageAppChip[]
+  pricing: UsagePricingView[]
+  fetchedAt: string
+}
+
+export interface UsageRecord {
+  requestId: string
+  createdAt: number
+  appFilter: string
+  appLabel: string
+  providerName: string
+  model: string
+  sessionId: string
+  inputTokens: number
+  outputTokens: number
+  cacheReadTokens: number
+  cacheCreationTokens: number
+  costUsd: number
+  unpriced: boolean
+  statusCode: number
+  dataSource: string
+}
+
+export interface UsageLogPage {
+  total: number
+  page: number
+  pageSize: number
+  rows: UsageRecord[]
+}
+
+export interface UsageSyncResult {
+  imported: number
+  filesScanned: number
+  extraAccounts: number
+  dbOk: boolean
   message: string | null
 }
 
