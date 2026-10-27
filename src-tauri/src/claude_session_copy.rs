@@ -106,10 +106,13 @@ fn rewrite_history(
         if line.iter().all(u8::is_ascii_whitespace) { continue; }
         let mut record: Value = serde_json::from_slice(&line)
             .map_err(|_| "原会话记录尚未写完或格式损坏，请稍后重试。")?;
-        let object = record.as_object_mut().ok_or("原会话记录格式不受支持。")?;
-        if object.contains_key("sessionId") {
-            object.insert("sessionId".into(), json!(new_id));
+        {
+            let object = record.as_object_mut().ok_or("原会话记录格式不受支持。")?;
+            if object.contains_key("sessionId") {
+                object.insert("sessionId".into(), json!(new_id));
+            }
         }
+        strip_assistant_usage(&mut record);
         serde_json::to_writer(&mut output, &record).map_err(|_| "保存续接会话失败。")?;
         output.write_all(b"\n").map_err(|_| "保存续接会话失败。")?;
         records += 1;
@@ -150,12 +153,49 @@ fn copy_tree(from: &Path, to: &Path, source_root: &Path, depth: usize) -> Result
             copy_tree(&entry.path(), &target, source_root, depth + 1)?;
         }
     } else if metadata.is_file() {
-        let mut output = fs::OpenOptions::new().write(true).create_new(true).open(to)
-            .map_err(|_| "无法保存会话附件。")?;
-        std::io::copy(&mut File::open(from).map_err(|_| "无法读取会话附件。")?, &mut output)
-            .map_err(|_| "无法复制会话附件。")?;
+        if to.extension().and_then(|ext| ext.to_str()) == Some("jsonl") {
+            copy_jsonl_stripping_usage(from, to)?;
+        } else {
+            let mut output = fs::OpenOptions::new().write(true).create_new(true).open(to)
+                .map_err(|_| "无法保存会话附件。")?;
+            std::io::copy(&mut File::open(from).map_err(|_| "无法读取会话附件。")?, &mut output)
+                .map_err(|_| "无法复制会话附件。")?;
+        }
     } else { return Err("会话附件类型不受支持。".into()); }
     Ok(())
+}
+
+fn strip_assistant_usage(record: &mut Value) {
+    if record.get("type").and_then(Value::as_str) != Some("assistant") {
+        return;
+    }
+    if let Some(message) = record.get_mut("message").and_then(Value::as_object_mut) {
+        message.remove("usage");
+    }
+}
+
+fn copy_jsonl_stripping_usage(from: &Path, to: &Path) -> Result<(), String> {
+    let input = File::open(from).map_err(|_| "无法读取会话附件。")?;
+    let mut output = fs::OpenOptions::new().write(true).create_new(true).open(to)
+        .map_err(|_| "无法保存会话附件。")?;
+    for line in BufReader::new(input).split(b'\n') {
+        let line = line.map_err(|_| "无法读取会话附件。")?;
+        if line.iter().all(u8::is_ascii_whitespace) {
+            continue;
+        }
+        match serde_json::from_slice::<Value>(&line) {
+            Ok(mut record) => {
+                strip_assistant_usage(&mut record);
+                serde_json::to_writer(&mut output, &record).map_err(|_| "无法保存会话附件。")?;
+                output.write_all(b"\n").map_err(|_| "无法保存会话附件。")?;
+            }
+            Err(_) => {
+                output.write_all(&line).map_err(|_| "无法保存会话附件。")?;
+                output.write_all(b"\n").map_err(|_| "无法保存会话附件。")?;
+            }
+        }
+    }
+    output.flush().map_err(|_| "无法保存会话附件。".into())
 }
 
 #[cfg(test)]
@@ -209,6 +249,34 @@ mod tests {
         assert_eq!(fs::read_to_string(target.join(".credentials.json")).unwrap(), "target-secret");
         assert_eq!(fs::read_to_string(copied.parent().unwrap().join(&next).join("tool-results/result.txt")).unwrap(), "tool result");
         assert_eq!(fs::read_to_string(target.join("file-history").join(&next).join("backup")).unwrap(), "original source file");
+    }
+
+    #[test]
+    fn copy_strips_assistant_usage_from_history_and_sidecar_jsonl() {
+        let (_root, source, target, file, id) = fixture();
+        let usage = json!({
+            "type": "assistant",
+            "sessionId": id,
+            "uuid": "asst-1",
+            "timestamp": "2026-01-17T10:00:00Z",
+            "message": {
+                "model": "claude-opus-4",
+                "usage": {"input_tokens": 99, "output_tokens": 2}
+            }
+        });
+        fs::write(&file, format!("{usage}\n")).unwrap();
+        let sidecar = file.parent().unwrap().join(&id).join("subagents");
+        fs::create_dir_all(&sidecar).unwrap();
+        fs::write(sidecar.join("agent-1.jsonl"), format!("{usage}\n")).unwrap();
+        let next = copy_session(&source, &target, "D:/project", &id, "继续任务").unwrap();
+        let copied = crate::tools::claude::find_session_file_in(&target, "D:/project", &next).unwrap();
+        let main: Vec<Value> = fs::read_to_string(&copied).unwrap().lines().map(|s| serde_json::from_str(s).unwrap()).collect();
+        let assistant = main.iter().find(|row| row["type"] == "assistant").unwrap();
+        assert!(assistant["message"].get("usage").is_none());
+        let copied_sidecar = copied.parent().unwrap().join(&next).join("subagents").join("agent-1.jsonl");
+        let side: Value = serde_json::from_str(&fs::read_to_string(copied_sidecar).unwrap()).unwrap();
+        assert!(side["message"].get("usage").is_none());
+        assert_eq!(side["type"], "assistant");
     }
 
     #[test]

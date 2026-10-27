@@ -4,14 +4,20 @@ use chrono::DateTime;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
+use std::time::UNIX_EPOCH;
+use uuid::Uuid;
 
 const MAX_WALK_DEPTH: usize = 16;
 const BOUNDARY_TYPE: &str = "agent-dock-copy-boundary";
+const CONTINUE_TITLE_MARK: &str = " · 续接";
+/// File birth time can land a second after `Utc::now()` captured for the first
+/// new turn; inherited jsonl timestamps are hours or days older.
+const CONTINUE_CUT_SLACK_SECS: i64 = 5;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -60,10 +66,17 @@ pub fn extra_app_label(name: &str, email: &str, id: &str) -> String {
 }
 
 pub fn scan_extra_profiles(profiles: &[ExtraClaudeProfile]) -> Vec<UsageRecord> {
+    scan_extra_profiles_filtered(profiles, &HashMap::new())
+}
+
+pub fn scan_extra_profiles_filtered(
+    profiles: &[ExtraClaudeProfile],
+    ledger: &HashMap<String, i64>,
+) -> Vec<UsageRecord> {
     let mut out = Vec::new();
     let mut seen = HashSet::new();
     for profile in profiles {
-        for record in scan_profile(profile) {
+        for record in scan_profile(profile, ledger) {
             if seen.insert(record.request_id.clone()) {
                 out.push(record);
             }
@@ -72,15 +85,84 @@ pub fn scan_extra_profiles(profiles: &[ExtraClaudeProfile]) -> Vec<UsageRecord> 
     out
 }
 
-fn scan_profile(profile: &ExtraClaudeProfile) -> Vec<UsageRecord> {
+fn scan_profile(profile: &ExtraClaudeProfile, ledger: &HashMap<String, i64>) -> Vec<UsageRecord> {
     let mut files = Vec::new();
     collect_jsonl(&profile.config_dir.join("projects"), 0, &mut files);
+    let mut cuts = ledger.clone();
+    for path in &files {
+        let sid = session_id_for_jsonl(path);
+        if cuts.contains_key(&sid) {
+            continue;
+        }
+        if jsonl_has_continue_title(path) {
+            if let Some(ts) = file_created_unix(path) {
+                cuts.insert(sid, ts.saturating_sub(CONTINUE_CUT_SLACK_SECS));
+            }
+        }
+    }
     let label = extra_app_label(&profile.name, &profile.email, &profile.id);
     let mut records = Vec::new();
     for path in files {
-        records.extend(parse_jsonl(profile, &label, &path));
+        let cut = cuts.get(&session_id_for_jsonl(&path)).copied();
+        records.extend(parse_jsonl(profile, &label, &path, cut));
     }
     records
+}
+
+fn session_id_for_jsonl(path: &Path) -> String {
+    for ancestor in path.ancestors().take(6) {
+        if ancestor == path {
+            continue;
+        }
+        if let Some(name) = ancestor.file_name().and_then(|n| n.to_str()) {
+            if Uuid::parse_str(name).is_ok() {
+                return name.to_string();
+            }
+        }
+    }
+    path.file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_string()
+}
+
+fn jsonl_has_continue_title(path: &Path) -> bool {
+    let Ok(file) = File::open(path) else {
+        return false;
+    };
+    for line in BufReader::new(file).lines() {
+        let Ok(line) = line else {
+            continue;
+        };
+        let Ok(value) = serde_json::from_str::<Value>(&line) else {
+            continue;
+        };
+        if value.get("type").and_then(Value::as_str) == Some("custom-title") {
+            if value
+                .get("customTitle")
+                .and_then(Value::as_str)
+                .is_some_and(|title| title.contains(CONTINUE_TITLE_MARK))
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn file_created_unix(path: &Path) -> Option<i64> {
+    let created = fs::metadata(path).ok()?.created().ok()?;
+    Some(created.duration_since(UNIX_EPOCH).ok()?.as_secs() as i64)
+}
+
+pub fn load_copy_ledger(path: Option<&Path>) -> HashMap<String, i64> {
+    let Some(path) = path else {
+        return HashMap::new();
+    };
+    let Ok(text) = fs::read_to_string(path) else {
+        return HashMap::new();
+    };
+    serde_json::from_str(&text).unwrap_or_default()
 }
 
 fn collect_jsonl(dir: &Path, depth: usize, out: &mut Vec<PathBuf>) {
@@ -120,7 +202,12 @@ fn collect_jsonl(dir: &Path, depth: usize, out: &mut Vec<PathBuf>) {
     }
 }
 
-fn parse_jsonl(profile: &ExtraClaudeProfile, label: &str, path: &Path) -> Vec<UsageRecord> {
+fn parse_jsonl(
+    profile: &ExtraClaudeProfile,
+    label: &str,
+    path: &Path,
+    cut: Option<i64>,
+) -> Vec<UsageRecord> {
     let Ok(file) = File::open(path) else {
         return Vec::new();
     };
@@ -155,10 +242,14 @@ fn parse_jsonl(profile: &ExtraClaudeProfile, label: &str, path: &Path) -> Vec<Us
             }
         }
     }
-    if saw_boundary {
+    let rows = if saw_boundary {
         after_boundary
     } else {
         pending
+    };
+    match cut {
+        Some(ts) => rows.into_iter().filter(|row| row.created_at >= ts).collect(),
+        None => rows,
     }
 }
 
@@ -976,6 +1067,7 @@ fn stitch_snapshot(
 pub fn load_snapshot(
     db_path: Option<&Path>,
     extras: &[ExtraClaudeProfile],
+    ledger_path: Option<&Path>,
 ) -> (Vec<UsageRecord>, Vec<PricingRow>, DbStatus, u32) {
     let mut files = 0u32;
     for profile in extras {
@@ -983,7 +1075,7 @@ pub fn load_snapshot(
         collect_jsonl(&profile.config_dir.join("projects"), 0, &mut found);
         files += found.len() as u32;
     }
-    let extra = scan_extra_profiles(extras);
+    let extra = scan_extra_profiles_filtered(extras, &load_copy_ledger(ledger_path));
     let db = match db_path {
         None => Err(DbStatus::Missing),
         Some(path) => read_ccswitch_db(path),
@@ -992,14 +1084,19 @@ pub fn load_snapshot(
     stitch_snapshot(db, extra, files, &mut last_ok)
 }
 
-pub fn take_snapshot(force: bool, extras: Vec<ExtraClaudeProfile>) -> UsageSnapshot {
+pub fn take_snapshot(
+    force: bool,
+    extras: Vec<ExtraClaudeProfile>,
+    ledger_path: Option<PathBuf>,
+) -> UsageSnapshot {
     if !force {
         let guard = lock_mutex(&SNAPSHOT);
         if let Some(snap) = guard.as_ref() {
             return snap.clone();
         }
     }
-    let (records, pricing, status, files) = load_snapshot(ccswitch_db_path().as_deref(), &extras);
+    let (records, pricing, status, files) =
+        load_snapshot(ccswitch_db_path().as_deref(), &extras, ledger_path.as_deref());
     let snap = UsageSnapshot {
         records,
         pricing,
@@ -1111,6 +1208,123 @@ mod tests {
     }
 
     #[test]
+    fn continue_copy_drops_inherited_usage_even_without_boundary() {
+        let root = tempfile::tempdir().unwrap();
+        let file = root
+            .path()
+            .join("projects")
+            .join("p")
+            .join("5b8b6dfb-7095-4a9d-80eb-69c6cb715913.jsonl");
+        let now = chrono::Utc::now().to_rfc3339();
+        write_jsonl(
+            &file,
+            &[
+                &assistant("old", "2026-01-17T10:00:00Z", 999, 9, 0, 0),
+                r#"{"type":"custom-title","sessionId":"5b8b6dfb-7095-4a9d-80eb-69c6cb715913","customTitle":"优化语义 · 续接"}"#,
+                &assistant("new", &now, 4, 1, 0, 0),
+            ],
+        );
+        let rows = scan_extra_profiles(&[profile(root.path(), "work", "工作号")]);
+        assert_eq!(rows.len(), 1, "inherited copy usage must not count after 续接");
+        assert_eq!(rows[0].input_tokens, 4);
+        assert!(rows[0].request_id.contains(":new"));
+    }
+
+    #[test]
+    fn continue_sidecar_uses_parent_session_cut() {
+        let root = tempfile::tempdir().unwrap();
+        let sid = "5b8b6dfb-7095-4a9d-80eb-69c6cb715913";
+        let main = root.path().join("projects").join("p").join(format!("{sid}.jsonl"));
+        let agent = root
+            .path()
+            .join("projects")
+            .join("p")
+            .join(sid)
+            .join("subagents")
+            .join("agent-abc.jsonl");
+        let now = chrono::Utc::now().to_rfc3339();
+        write_jsonl(
+            &main,
+            &[r#"{"type":"custom-title","sessionId":"5b8b6dfb-7095-4a9d-80eb-69c6cb715913","customTitle":"优化语义 · 续接"}"#],
+        );
+        write_jsonl(
+            &agent,
+            &[
+                &assistant("old", "2026-01-17T10:00:00Z", 80, 1, 0, 0),
+                &assistant("new", &now, 3, 1, 0, 0),
+            ],
+        );
+        let rows = scan_extra_profiles(&[profile(root.path(), "work", "工作号")]);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].input_tokens, 3);
+    }
+
+    #[test]
+    fn copy_ledger_cut_drops_inherited_without_continue_title() {
+        let root = tempfile::tempdir().unwrap();
+        let sid = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+        let file = root.path().join("projects").join("p").join(format!("{sid}.jsonl"));
+        write_jsonl(
+            &file,
+            &[
+                &assistant("old", "2026-01-17T10:00:00Z", 999, 9, 0, 0),
+                &assistant("new", "2026-10-27T13:40:00Z", 4, 1, 0, 0),
+            ],
+        );
+        let mut ledger = HashMap::new();
+        ledger.insert(
+            sid.to_string(),
+            chrono::DateTime::parse_from_rfc3339("2026-10-27T13:37:00Z")
+                .unwrap()
+                .timestamp(),
+        );
+        let rows = scan_extra_profiles_filtered(&[profile(root.path(), "work", "工作号")], &ledger);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].input_tokens, 4);
+    }
+
+    #[test]
+    fn continue_copy_inherited_usage_is_not_exported() {
+        let root = tempfile::tempdir().unwrap();
+        let file = root
+            .path()
+            .join("projects")
+            .join("p")
+            .join("5b8b6dfb-7095-4a9d-80eb-69c6cb715913.jsonl");
+        let now = chrono::Utc::now().to_rfc3339();
+        write_jsonl(
+            &file,
+            &[
+                &assistant("old", "2026-01-17T10:00:00Z", 999, 9, 0, 0),
+                r#"{"type":"custom-title","sessionId":"5b8b6dfb-7095-4a9d-80eb-69c6cb715913","customTitle":"优化语义 · 续接"}"#,
+                &assistant("new", &now, 4, 1, 0, 0),
+            ],
+        );
+        let extras = [profile(root.path(), "work", "工作号")];
+        let scanned = scan_extra_profiles(&extras);
+        assert_eq!(scanned.len(), 1);
+        assert_eq!(scanned[0].input_tokens, 4);
+
+        let db_dir = tempfile::tempdir().unwrap();
+        let db_path = db_dir.path().join("cc-switch.db");
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        conn.execute_batch(log_schema()).unwrap();
+        drop(conn);
+        let result = export_extras_to_ccswitch(&db_path, &scanned).unwrap();
+        assert_eq!(result.written, 1);
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        let (count, tokens): (i64, i64) = conn
+            .query_row(
+                "SELECT COUNT(*), SUM(input_tokens) FROM proxy_request_logs",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+        assert_eq!(tokens, 4);
+    }
+
+    #[test]
     fn duplicate_uuid_across_files_counts_once() {
         let root = tempfile::tempdir().unwrap();
         let main = root.path().join("projects").join("p").join("sess-1.jsonl");
@@ -1212,7 +1426,7 @@ mod tests {
             &[&assistant("u1", "2023-11-14T22:15:00Z", 7, 1, 0, 0)],
         );
         let extras = [profile(extra_dir.path(), "work", "工作号")];
-        let (records, _, status, _) = load_snapshot(Some(&db_path), &extras);
+        let (records, _, status, _) = load_snapshot(Some(&db_path), &extras, None);
         assert_eq!(status, DbStatus::Ok);
         assert_eq!(records.len(), 3);
 
@@ -1257,7 +1471,7 @@ mod tests {
         );
         let extras = [profile(extra_dir.path(), "work", "工作号")];
         let missing = extra_dir.path().join("no-such.db");
-        let (records, _, status, _) = load_snapshot(Some(&missing), &extras);
+        let (records, _, status, _) = load_snapshot(Some(&missing), &extras, None);
         assert_eq!(status, DbStatus::Missing);
         assert_eq!(records.len(), 1);
         let dash = build_dashboard(
@@ -1501,7 +1715,7 @@ mod tests {
         let scanned = scan_extra_profiles(&extras);
         export_extras_to_ccswitch(&db_path, &scanned).unwrap();
 
-        let (records, _, status, _) = load_snapshot(Some(&db_path), &extras);
+        let (records, _, status, _) = load_snapshot(Some(&db_path), &extras, None);
         assert_eq!(status, DbStatus::Ok);
         assert_eq!(records.len(), 2);
         assert_eq!(

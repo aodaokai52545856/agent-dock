@@ -390,7 +390,11 @@ async fn grok_spend(start: Option<i64>, end: Option<i64>) -> Result<GrokSpend, S
 }
 
 fn usage_snapshot(force: bool) -> crate::usage::UsageSnapshot {
-    crate::usage::take_snapshot(force, claude_accounts::extra_usage_profiles())
+    crate::usage::take_snapshot(
+        force,
+        claude_accounts::extra_usage_profiles(),
+        claude_accounts::copy_ledger_file(),
+    )
 }
 
 #[tauri::command]

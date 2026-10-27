@@ -14,7 +14,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashMap},
     fs,
     path::{Path, PathBuf},
     process::Command,
@@ -887,7 +887,24 @@ fn continue_in(store: &Path, cwd: &str, session_id: &str, account_id: &str, titl
     let title: String = title.trim().chars().filter(|c| !c.is_control()).take(120).collect();
     let title = format!("{} · 续接", if title.is_empty() { "Claude 会话" } else { &title });
     let copied = crate::claude_session_copy::copy_session(&source.config_dir, &target.config_dir, cwd, session_id, &title)?;
+    record_copied_session(store, &copied);
     Ok(ClaudeContinuation { session_id: copied, title, account_id: target.id, account_name: target.name })
+}
+
+pub fn copy_ledger_file() -> Option<PathBuf> {
+    STORE.get().map(|store| store.join("copy-ledger.json"))
+}
+
+fn record_copied_session(store: &Path, session_id: &str) {
+    let path = store.join("copy-ledger.json");
+    let mut map: HashMap<String, i64> = fs::read_to_string(&path)
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_default();
+    map.insert(session_id.to_string(), Utc::now().timestamp());
+    if let Ok(bytes) = serde_json::to_vec_pretty(&map) {
+        let _ = fs::write(path, bytes);
+    }
 }
 
 fn action_log(store: &Path, event: &str, details: Value) {
@@ -1904,5 +1921,10 @@ mod tests {
         assert_eq!(owner_in(tmp.path(), cwd, Some(&copied.session_id)).unwrap().id, target_id);
         assert_eq!(owner_in(tmp.path(), cwd, Some(&id)).unwrap().id, source.id);
         assert_eq!(selected(&load_index(tmp.path()).unwrap()).unwrap().id, SYSTEM);
+        let ledger: HashMap<String, i64> = serde_json::from_str(
+            &fs::read_to_string(tmp.path().join("copy-ledger.json")).unwrap(),
+        )
+        .unwrap();
+        assert!(ledger.get(&copied.session_id).is_some_and(|ts| *ts > 0));
     }
 }
