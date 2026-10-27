@@ -37,6 +37,7 @@ import type {
   ToolVersionInfo,
   UpgradeResult,
   UsageDashboard,
+  UsageExportResult,
   UsageLogPage,
   UsageQuery,
   UsageSyncResult
@@ -730,6 +731,19 @@ export async function usageLogs(
     page: query.page ?? 0,
     pageSize: query.pageSize ?? 20
   })
+}
+
+export async function usageExportCcswitch(): Promise<UsageExportResult> {
+  if (!isTauri) {
+    return {
+      written: 0,
+      skipped: 0,
+      extraAccounts: 0,
+      dbOk: false,
+      message: '请在桌面窗口里查看用量'
+    }
+  }
+  return invoke('usage_export_ccswitch')
 }
 
 export async function codexProbe(projectId: string): Promise<CodexProbe> {

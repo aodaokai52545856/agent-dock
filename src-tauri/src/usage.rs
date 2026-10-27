@@ -241,10 +241,18 @@ const HOURLY_RANGE_SECS: i64 = 36 * 3600;
 const MSG_MISSING: &str = "请先打开 CC Switch，让它扫描会话日志";
 const MSG_BUSY: &str = "用量库正被 CC Switch 占用，请稍后重试";
 const MSG_SCHEMA: &str = "这份 CC Switch 数据库对不上，请升级 CC Switch";
+const MSG_EXPORT_NONE: &str = "没有可同步的副号用量";
+const MSG_EXPORT_DONE: &str = "副号用量已在 CC Switch 里，没有新记录";
 const LOG_SELECT: &str = "SELECT request_id, created_at, app_type, provider_id, model,
     input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
     total_cost_usd, session_id, status_code, data_source
     FROM proxy_request_logs";
+const EXPORT_INSERT: &str = "INSERT OR IGNORE INTO proxy_request_logs (
+    request_id, provider_id, app_type, model,
+    input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
+    input_token_semantics, total_cost_usd, latency_ms, status_code,
+    session_id, created_at, data_source
+) VALUES (?1, ?2, 'claude', ?3, ?4, ?5, ?6, ?7, ?8, ?9, 0, ?10, ?11, ?12, 'claude_extra')";
 const PRICE_SELECT: &str = "SELECT model_id, display_name, input_cost_per_million, output_cost_per_million,
     cache_read_cost_per_million, cache_creation_cost_per_million FROM model_pricing";
 
@@ -372,6 +380,16 @@ pub struct UsageSyncResult {
     pub message: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageExportResult {
+    pub written: u32,
+    pub skipped: u32,
+    pub extra_accounts: u32,
+    pub db_ok: bool,
+    pub message: Option<String>,
+}
+
 pub fn ccswitch_db_path() -> Option<PathBuf> {
     let path = dirs::home_dir()?.join(".cc-switch").join("cc-switch.db");
     path.is_file().then_some(path)
@@ -458,11 +476,147 @@ fn read_logs(conn: &rusqlite::Connection) -> Result<Vec<UsageRecord>, DbStatus> 
     let mut out = Vec::new();
     for row in rows {
         match row {
-            Ok(record) => out.push(record),
+            Ok(record) => {
+                if is_dock_extra_row(&record) {
+                    continue;
+                }
+                out.push(record);
+            }
             Err(_) => continue,
         }
     }
     Ok(out)
+}
+
+fn is_dock_extra_row(record: &UsageRecord) -> bool {
+    record.data_source == "claude_extra" || record.request_id.starts_with("claude_extra:")
+}
+
+fn cost_text(value: f64) -> String {
+    if !value.is_finite() || value == 0.0 {
+        return "0".into();
+    }
+    let raw = format!("{value:.8}");
+    let trimmed = raw.trim_end_matches('0').trim_end_matches('.');
+    if trimmed.is_empty() {
+        "0".into()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn extra_account_count(extras: &[UsageRecord]) -> u32 {
+    extras.iter().map(|row| row.app_filter.as_str()).collect::<HashSet<_>>().len() as u32
+}
+
+pub fn export_message(written: u32, skipped: u32, extra_len: usize) -> String {
+    if extra_len == 0 {
+        return MSG_EXPORT_NONE.into();
+    }
+    if written == 0 {
+        return MSG_EXPORT_DONE.into();
+    }
+    format!(
+        "已把 {written} 条副号用量写入 CC Switch（跳过 {skipped} 条已有记录）。用量会出现在 Claude 应用下，供应商按账号分开。"
+    )
+}
+
+pub fn export_extras_to_ccswitch(
+    path: &Path,
+    extras: &[UsageRecord],
+) -> Result<UsageExportResult, DbStatus> {
+    if !path.is_file() {
+        return Err(DbStatus::Missing);
+    }
+    let extra_accounts = extra_account_count(extras);
+    if extras.is_empty() {
+        return Ok(UsageExportResult {
+            written: 0,
+            skipped: 0,
+            extra_accounts,
+            db_ok: true,
+            message: Some(MSG_EXPORT_NONE.into()),
+        });
+    }
+    let mut conn = rusqlite::Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)
+        .map_err(|err| classify_db_error(&err))?;
+    conn.busy_timeout(std::time::Duration::from_millis(5_000))
+        .map_err(|err| classify_db_error(&err))?;
+    let tx = conn
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .map_err(|err| classify_db_error(&err))?;
+    let mut written = 0u32;
+    let mut skipped = 0u32;
+    {
+        let mut stmt = tx.prepare(EXPORT_INSERT).map_err(|err| classify_db_error(&err))?;
+        for row in extras {
+            if !is_dock_extra_row(row) {
+                continue;
+            }
+            let provider = if row.provider_name.trim().is_empty() {
+                row.app_label.as_str()
+            } else {
+                row.provider_name.as_str()
+            };
+            let n = stmt
+                .execute(rusqlite::params![
+                    row.request_id,
+                    provider,
+                    row.model,
+                    row.input_tokens as i64,
+                    row.output_tokens as i64,
+                    row.cache_read_tokens as i64,
+                    row.cache_creation_tokens as i64,
+                    row.input_tokens as i64,
+                    cost_text(row.cost_usd),
+                    row.status_code,
+                    row.session_id,
+                    row.created_at,
+                ])
+                .map_err(|err| classify_db_error(&err))?;
+            if n == 0 {
+                skipped += 1;
+            } else {
+                written += 1;
+            }
+        }
+    }
+    tx.commit().map_err(|err| classify_db_error(&err))?;
+    Ok(UsageExportResult {
+        written,
+        skipped,
+        extra_accounts,
+        db_ok: true,
+        message: Some(export_message(written, skipped, extras.len())),
+    })
+}
+
+pub fn export_from_snapshot(snap: &UsageSnapshot) -> UsageExportResult {
+    let extras: Vec<UsageRecord> = snap
+        .records
+        .iter()
+        .filter(|row| row.data_source == "claude_extra")
+        .cloned()
+        .collect();
+    match ccswitch_db_path() {
+        None => UsageExportResult {
+            written: 0,
+            skipped: 0,
+            extra_accounts: snap.extras.len() as u32,
+            db_ok: false,
+            message: db_status_message(DbStatus::Missing),
+        },
+        Some(path) => match export_extras_to_ccswitch(&path, &extras) {
+            Ok(result) => result,
+            Err(status) => UsageExportResult {
+                written: 0,
+                skipped: 0,
+                extra_accounts: snap.extras.len() as u32,
+                db_ok: false,
+                message: db_status_message(status),
+            },
+        },
+    }
 }
 
 fn read_pricing(conn: &rusqlite::Connection) -> Result<Vec<PricingRow>, DbStatus> {
@@ -1225,5 +1379,164 @@ mod tests {
         assert_eq!(records.len(), 2);
         assert!(records.iter().any(|row| row.request_id == "db-claude"));
         assert!(records.iter().any(|row| row.data_source == "claude_extra"));
+    }
+
+    fn extra_record(id: &str, provider: &str, tokens: u64, cost: f64) -> UsageRecord {
+        UsageRecord {
+            request_id: format!("claude_extra:work:s:{id}"),
+            created_at: 1_700_000_200,
+            app_filter: "claude:work".into(),
+            app_label: provider.into(),
+            provider_name: provider.into(),
+            model: "claude-opus-4".into(),
+            session_id: "s".into(),
+            input_tokens: tokens,
+            output_tokens: 1,
+            cache_read_tokens: 0,
+            cache_creation_tokens: 0,
+            cost_usd: cost,
+            unpriced: cost == 0.0,
+            status_code: 200,
+            data_source: "claude_extra".into(),
+        }
+    }
+
+    #[test]
+    fn export_writes_extras_as_claude_with_separate_providers() {
+        let db_dir = tempfile::tempdir().unwrap();
+        let db_path = db_dir.path().join("cc-switch.db");
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        conn.execute_batch(log_schema()).unwrap();
+        insert_log(&conn, "db-claude", 1_700_000_100, "claude", "claude-opus-4", 100, "1.25");
+        drop(conn);
+
+        let extras = vec![
+            extra_record("u1", "Claude · 工作号", 7, 0.12),
+            extra_record("u2", "Claude · 副号", 3, 0.04),
+        ];
+        let result = export_extras_to_ccswitch(&db_path, &extras).unwrap();
+        assert_eq!(result.written, 2);
+        assert_eq!(result.skipped, 0);
+        assert_eq!(result.db_ok, true);
+
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM proxy_request_logs", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 3);
+        let system_cost: String = conn
+            .query_row(
+                "SELECT total_cost_usd FROM proxy_request_logs WHERE request_id = 'db-claude'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(system_cost, "1.25");
+
+        let mut stmt = conn
+            .prepare(
+                "SELECT request_id, app_type, provider_id, data_source, input_tokens, total_cost_usd
+                 FROM proxy_request_logs WHERE data_source = 'claude_extra' ORDER BY request_id",
+            )
+            .unwrap();
+        let rows: Vec<(String, String, String, String, i64, String)> = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                ))
+            })
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(rows.len(), 2);
+        assert!(rows.iter().all(|row| row.1 == "claude"));
+        assert!(rows.iter().all(|row| row.3 == "claude_extra"));
+        let providers: HashSet<_> = rows.iter().map(|row| row.2.as_str()).collect();
+        assert_eq!(providers, HashSet::from(["Claude · 工作号", "Claude · 副号"]));
+        assert!(rows[0].0.starts_with("claude_extra:"));
+    }
+
+    #[test]
+    fn export_is_idempotent_and_skips_existing_ids() {
+        let db_dir = tempfile::tempdir().unwrap();
+        let db_path = db_dir.path().join("cc-switch.db");
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        conn.execute_batch(log_schema()).unwrap();
+        drop(conn);
+
+        let extras = vec![extra_record("u1", "Claude · 工作号", 7, 0.12)];
+        let first = export_extras_to_ccswitch(&db_path, &extras).unwrap();
+        let second = export_extras_to_ccswitch(&db_path, &extras).unwrap();
+        assert_eq!(first.written, 1);
+        assert_eq!(second.written, 0);
+        assert_eq!(second.skipped, 1);
+
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM proxy_request_logs", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn load_snapshot_does_not_double_count_exported_extras() {
+        let db_dir = tempfile::tempdir().unwrap();
+        let db_path = db_dir.path().join("cc-switch.db");
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        conn.execute_batch(log_schema()).unwrap();
+        insert_log(&conn, "db-claude", 1_700_000_100, "claude", "claude-opus-4", 100, "1.25");
+        drop(conn);
+
+        let extra_dir = tempfile::tempdir().unwrap();
+        write_jsonl(
+            &extra_dir.path().join("projects").join("p").join("sess.jsonl"),
+            &[&assistant("u1", "2023-11-14T22:15:00Z", 7, 1, 0, 0)],
+        );
+        let extras = [profile(extra_dir.path(), "work", "工作号")];
+        let scanned = scan_extra_profiles(&extras);
+        export_extras_to_ccswitch(&db_path, &scanned).unwrap();
+
+        let (records, _, status, _) = load_snapshot(Some(&db_path), &extras);
+        assert_eq!(status, DbStatus::Ok);
+        assert_eq!(records.len(), 2);
+        assert_eq!(
+            records.iter().filter(|row| row.data_source == "claude_extra").count(),
+            1
+        );
+        assert_eq!(
+            records.iter().filter(|row| row.app_filter == "claude").count(),
+            1
+        );
+    }
+
+    #[test]
+    fn export_missing_db_is_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let err = export_extras_to_ccswitch(&dir.path().join("no.db"), &[extra_record("u1", "Claude · 工作号", 1, 0.0)])
+            .unwrap_err();
+        assert_eq!(err, DbStatus::Missing);
+    }
+
+    #[test]
+    fn export_empty_extras_writes_nothing() {
+        let db_dir = tempfile::tempdir().unwrap();
+        let db_path = db_dir.path().join("cc-switch.db");
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        conn.execute_batch(log_schema()).unwrap();
+        insert_log(&conn, "db-claude", 1, "claude", "opus", 1, "0");
+        drop(conn);
+        let result = export_extras_to_ccswitch(&db_path, &[]).unwrap();
+        assert_eq!(result.written, 0);
+        assert_eq!(result.skipped, 0);
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM proxy_request_logs", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 1);
     }
 }

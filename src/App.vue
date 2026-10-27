@@ -917,6 +917,7 @@ const confirmCopy = () => {
 
 .usage-ws {
   overflow: hidden;
+  background: var(--ad-ink);
 }
 
 .main {

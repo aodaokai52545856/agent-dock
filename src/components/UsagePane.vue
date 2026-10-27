@@ -56,6 +56,8 @@ const metric = ref<UsageMetric>('tokens')
 const tab = ref<(typeof TABS)[number]['id']>('logs')
 const page = ref(0)
 const loading = ref(false)
+const exporting = ref(false)
+const exportNotice = ref('')
 const settingsOpen = ref(false)
 const refreshMs = ref(parseUsageRefreshMs(typeof localStorage === 'undefined' ? undefined : localStorage.getItem(USAGE_REFRESH_KEY)))
 const nowTick = ref(Date.now())
@@ -187,6 +189,20 @@ async function reload(force: boolean) {
   }
 }
 
+async function exportToCcswitch() {
+  if (store.appMode !== 'usage' || exporting.value) return
+  exporting.value = true
+  try {
+    const result = await api.usageExportCcswitch()
+    exportNotice.value = result.message || (result.dbOk ? '已同步到 CC Switch' : '同步到 CC Switch 失败')
+    await reload(true)
+  } catch (err) {
+    exportNotice.value = err instanceof Error ? err.message : String(err)
+  } finally {
+    exporting.value = false
+  }
+}
+
 function startPoll() {
   stopPoll()
   pollTimer = setInterval(() => {
@@ -246,11 +262,15 @@ onUnmounted(() => {
         <button type="button" class="btn btn-ghost btn-small" :disabled="loading" @click="reload(true)">
           {{ loading ? '同步中…' : `立即同步 · ${syncLabel}` }}
         </button>
+        <button type="button" class="btn btn-ghost btn-small" :disabled="exporting" @click="exportToCcswitch">
+          {{ exporting ? '写入中…' : '同步到 CC Switch' }}
+        </button>
         <button type="button" class="btn btn-ghost btn-small" @click="settingsOpen = true">设置</button>
       </div>
     </header>
 
     <p v-if="banner" class="banner" role="status">{{ banner }}</p>
+    <p v-if="exportNotice" class="banner" role="status">{{ exportNotice }}</p>
 
     <div class="filters">
       <div class="chips" role="group" aria-label="时间范围">
@@ -456,6 +476,11 @@ onUnmounted(() => {
             {{ ms / 1000 }} 秒
           </button>
         </div>
+        <p class="section">同步到 CC Switch</p>
+        <p class="hint">把 Claude 副号 jsonl 写入 CC Switch 库。应用芯片合并进 Claude，供应商列按账号分开。已有记录不会覆盖。</p>
+        <button type="button" class="btn btn-ghost btn-small" :disabled="exporting" @click="exportToCcswitch">
+          {{ exporting ? '写入中…' : '同步副号到 CC Switch' }}
+        </button>
         <p class="section">定价（只读）</p>
         <p class="hint">改价请到 CC Switch。Dock 只读这份价表给副号估算成本。</p>
         <table v-if="dash?.pricing.length">
@@ -494,6 +519,7 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   gap: 16px;
+  background: var(--ad-ink);
 }
 
 .head {

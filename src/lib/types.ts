@@ -467,6 +467,14 @@ export interface UsageSyncResult {
   message: string | null
 }
 
+export interface UsageExportResult {
+  written: number
+  skipped: number
+  extraAccounts: number
+  dbOk: boolean
+  message: string | null
+}
+
 export const TOOL_OFFICIAL_URLS: Record<ToolId, string> = {
   opencode: 'https://opencode.ai',
   grokbuild: 'https://github.com/xai-org/grok-build#installation',

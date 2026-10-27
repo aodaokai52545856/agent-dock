@@ -426,6 +426,20 @@ async fn usage_logs(
 }
 
 #[tauri::command]
+async fn usage_export_ccswitch() -> Result<crate::usage::UsageExportResult, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let snap = usage_snapshot(true);
+        let result = crate::usage::export_from_snapshot(&snap);
+        if result.db_ok && result.written > 0 {
+            let _ = usage_snapshot(true);
+        }
+        result
+    })
+    .await
+    .map_err(|err| format!("同步到 CC Switch 失败：{err}"))
+}
+
+#[tauri::command]
 async fn list_session_docs(
     app: AppHandle,
     project_id: String,
@@ -1073,6 +1087,7 @@ pub fn run() {
             usage_sync,
             usage_dashboard,
             usage_logs,
+            usage_export_ccswitch,
             save_grok_account,
             switch_grok_account,
             delete_grok_account,

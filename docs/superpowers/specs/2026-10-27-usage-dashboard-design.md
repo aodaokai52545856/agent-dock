@@ -30,7 +30,8 @@ Agent Dock 现状：
 
 - 调用 `GET /api/oauth/usage` 或任何 Anthropic 计费/额度接口
 - 5 小时 / 7 天额度条、重置时间、套餐剩余
-- 写入或改 schema `cc-switch.db`（含改 `model_pricing`）
+- 改 `cc-switch.db` schema 或改 `model_pricing`
+- 自动写入 CC Switch 库（仅用户点「同步到 CC Switch」时 INSERT OR IGNORE 副号行）
 - 触发 CC Switch 进程去扫会话日志
 - 把 Dock 嵌进 CC Switch，或把 CC Switch 嵌进 Dock
 - 使用量页上打开/恢复会话
@@ -87,13 +88,13 @@ Agent Dock 现状：
 ### 路 1 — CC Switch 库
 
 路径：`{home}/.cc-switch/cc-switch.db`。  
-打开：`SQLITE_OPEN_READ_ONLY`，`busy_timeout` 2s（同 `grok_spend`）。
+打开：默认 `SQLITE_OPEN_READ_ONLY`，`busy_timeout` 2s（同 `grok_spend`）。用户点「同步到 CC Switch」时用读写打开，`busy_timeout` 5s，只 INSERT OR IGNORE 副号行。
 
 主表 `proxy_request_logs` 用到的列：
 
 `request_id, created_at, app_type, provider_id, model, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, input_token_semantics, total_cost_usd, session_id, status_code, data_source, latency_ms, first_token_ms`
 
-缺列则整页失败，文案见 Error handling。不按 `data_source` 丢掉路由日志：库里有的都算，和 CC Switch 用量页一致。
+缺列则整页失败，文案见 Error handling。不按 `data_source` 丢掉路由日志：库里有的都算，和 CC Switch 用量页一致。读库时跳过 `data_source = 'claude_extra'` 或 `request_id` 以 `claude_extra:` 开头的行，避免把已写回的副号和路 2 jsonl 双计。
 
 `model_pricing` 只读，给路 2 套价。路 1 成本用行上的 `total_cost_usd`。
 
@@ -160,33 +161,35 @@ Token 卡「真实消耗 Tokens」= 新增输入 + 输出 + 缓存写入 + 缓�
 usageSync(): Promise<UsageSyncResult>
 usageDashboard(query: UsageQuery): Promise<UsageDashboard>
 usageLogs(query: UsageQuery & { page: number; pageSize: number }): Promise<UsageLogPage>
+usageExportCcswitch(): Promise<UsageExportResult>
 ```
 
 `UsageQuery`：`start`/`end` unix 秒；`appFilter` 为 `'all'` 或某个 `app_filter`；可选 `providerName`、`model`。
 
 `usage_sync`：失效缓存，重读库 + 重扫副号 jsonl，返回 `{ imported, filesScanned, extraAccounts, dbOk, message }`。  
 `usage_dashboard`：汇总卡、按小时或按日的趋势点（范围 ≤ 36h 按小时，否则按日，同 `grok_spend`）、日热力图、供应商表、模型表、芯片列表（库里出现过的 `app_type` + 每个有目录的副号，即使当前范围为 0）。  
-`usage_logs`：同一筛选分页；`pageSize` 默认 20。
+`usage_logs`：同一筛选分页；`pageSize` 默认 20。  
+`usage_export_ccswitch`：把路 2 副号行 INSERT OR IGNORE 进 `proxy_request_logs`。`app_type='claude'`（CC Switch 芯片只认已知应用，多个副号合并进 Claude），`provider_id` 用账号标签以便供应商筛选分开，`data_source='claude_extra'`，`request_id` 保持 `claude_extra:{id}:{session}:{uuid}`。不改 schema、不定价、不写 `session_log_sync`。返回 `{ written, skipped, extraAccounts, dbOk, message }`。
 
 命令在 `spawn_blocking` 里跑，避免卡住 UI。jsonl 按文件 mtime + len 增量缓存，同 `grok_spend`。
 
-不提供写库、改价、触发 CC Switch 扫描的命令。
+不提供改价、触发 CC Switch 扫描的命令。
 
 ## UX
 
 **页签：** 顶栏 `role="tablist"` 增加「使用量」。`setAppMode('usage')` 写入现有 `MODE_STORAGE_KEY`（含按项目那份）。`parseAppMode` 认 `'usage'`，其余仍回 `'console'`。`jumpToLive` 仍切回控制台。
 
-**工作区：** `v-show="store.appMode === 'usage'"` 全宽 `UsagePane`。控制台/编排 `v-show` 隐藏，PTY 不杀。`TextConvertFab` 仍只在控制台。底栏保留；使用量模式下隐藏「刷新会话」和「文档」。Grok 额度条规则不变（本就只在控制台）。
+**工作区：** `v-show="store.appMode === 'usage'"` 全宽 `UsagePane`。控制台/编排 `v-show` 隐藏，PTY 不杀。`TextConvertFab` 仍只在控制台。底栏保留；使用量模式下隐藏「刷新会话」和「文档」。Grok 额度条规则不变（本就只在控制台）。桌面玻璃窗下 `.usage-ws` / `.pane` 用实色 `--ad-ink`，避免 IDE 字透出来。
 
 **页内（自上而下，对齐 CC Switch UsageDashboard）：**
 
-1. 页头「使用量」；右「立即同步」（相对时间，如「刚刚」「3 分钟前」）+ 设置。
+1. 页头「使用量」；右「立即同步」（相对时间，如「刚刚」「3 分钟前」）+「同步到 CC Switch」+ 设置。
 2. 筛选：时间（当天 / 1d / 7d / 14d / 30d / 全部 / 自定义，默认当天；前五项与 `SPEND_PRESETS` 同一套 id）→ 应用芯片 → 供应商/模型。
 3. 四张卡：总成本、总请求、真实消耗 Tokens、缓存命中率。点选一张，图跟该指标。默认 Tokens。
 4. 趋势图 + 热力图。
 5. 页签：请求日志 / 供应商 / 模型。未定价模型成本列显示「未定价」。
 
-设置抽屉：扫描间隔 5 / 10 / 30 / 60 秒（默认 60，记 localStorage）；只读定价表（来自 `model_pricing`）。没有「记录请求用量」——那是 CC Switch 路由设置。
+设置抽屉：扫描间隔 5 / 10 / 30 / 60 秒（默认 60，记 localStorage）；「同步副号到 CC Switch」；只读定价表（来自 `model_pricing`）。没有「记录请求用量」——那是 CC Switch 路由设置。
 
 进入使用量页：先 `usage_sync` 再 `usage_dashboard`。页开着按间隔再 sync+拉数。离开页停轮询。
 
