@@ -1,8 +1,8 @@
 export const DOC_PREVIEW_SIZE_KEY = 'ad-doc-preview-size'
 export const DOC_PREVIEW_MIN_W = 720
 export const DOC_PREVIEW_MIN_H = 420
-export const DOC_PREVIEW_DEFAULT_W = 1120
-export const DOC_PREVIEW_DEFAULT_H = 720
+export const DOC_PREVIEW_DEFAULT_W = 1280
+export const DOC_PREVIEW_DEFAULT_H = 800
 
 export type DocPreviewSize = { w: number; h: number }
 export type DocPreviewEdge = 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw'

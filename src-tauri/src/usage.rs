@@ -406,6 +406,9 @@ pub struct UsageHeatCell {
     pub tokens: u64,
     pub cost_usd: f64,
     pub requests: u32,
+    pub input_tokens: u64,
+    pub cache_read_tokens: u64,
+    pub cache_creation_tokens: u64,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -958,33 +961,22 @@ fn build_points(rows: &[&UsageRecord], start: i64, end: i64) -> Vec<UsagePoint> 
     map.into_values().collect()
 }
 
-fn build_heatmap(rows: &[&UsageRecord], start: i64, end: i64) -> Vec<UsageHeatCell> {
+fn build_heatmap(rows: &[&UsageRecord], _start: i64, _end: i64) -> Vec<UsageHeatCell> {
     let mut map: std::collections::BTreeMap<i64, UsageHeatCell> = std::collections::BTreeMap::new();
-    let mut cursor = local_midnight_ts(start);
-    let last = local_midnight_ts((end - 1).max(start));
-    while cursor <= last {
-        map.insert(
-            cursor,
-            UsageHeatCell {
-                ts: cursor,
-                label: format_day(cursor),
-                tokens: 0,
-                cost_usd: 0.0,
-                requests: 0,
-            },
-        );
-        cursor += 86_400;
-        if map.len() > 400 {
-            break;
-        }
-    }
+    // Return occupied days. The calendar fills gaps, including ranges starting at Unix zero.
+    // Advancing a local date by a fixed 86,400 seconds would also drift across DST changes.
     for row in rows {
         let ts = local_midnight_ts(row.created_at);
-        if let Some(slot) = map.get_mut(&ts) {
-            slot.tokens = slot.tokens.saturating_add(total_tokens(row));
-            slot.cost_usd += row.cost_usd;
-            slot.requests += 1;
-        }
+        let slot = map.entry(ts).or_insert_with(|| UsageHeatCell {
+            ts, label: format_day(ts), tokens: 0, cost_usd: 0.0, requests: 0,
+            input_tokens: 0, cache_read_tokens: 0, cache_creation_tokens: 0,
+        });
+        slot.tokens = slot.tokens.saturating_add(total_tokens(row));
+        slot.cost_usd += row.cost_usd;
+        slot.requests += 1;
+        slot.input_tokens = slot.input_tokens.saturating_add(row.input_tokens);
+        slot.cache_read_tokens = slot.cache_read_tokens.saturating_add(row.cache_read_tokens);
+        slot.cache_creation_tokens = slot.cache_creation_tokens.saturating_add(row.cache_creation_tokens);
     }
     map.into_values().collect()
 }
@@ -1547,6 +1539,25 @@ mod tests {
     fn cache_hit_rate_matches_spec() {
         assert_eq!(cache_hit_percent(10, 0, 0), 0.0);
         assert!((cache_hit_percent(10, 30, 10) - 60.0).abs() < 0.0001);
+    }
+
+    #[test]
+    fn all_history_heatmap_keeps_recent_days_and_cache_counts() {
+        let mut recent = extra_record("new", "work", 10, 0.5);
+        recent.created_at = 1_793_232_000;
+        recent.cache_read_tokens = 60;
+        recent.cache_creation_tokens = 30;
+        let mut older = extra_record("old", "work", 5, 0.1);
+        older.created_at = 1_600_000_000;
+        let rows = [&older, &recent, &recent];
+        let heat = build_heatmap(&rows, 0, 2_000_000_000);
+        assert_eq!(heat.len(), 2);
+        let day = heat.iter().find(|day| day.ts == local_midnight_ts(recent.created_at)).unwrap();
+        assert_eq!(day.requests, 2);
+        assert_eq!(day.cache_read_tokens, 120);
+        assert_eq!(day.cache_creation_tokens, 60);
+        assert_eq!(day.input_tokens, 20);
+        assert_eq!(build_heatmap(&[], 0, 2_000_000_000).len(), 0);
     }
 
     #[test]

@@ -2,6 +2,7 @@ import { computed, reactive } from 'vue'
 import * as api from './api'
 import { DSH_FIXED_SESSION_ID, DSH_FIXED_SESSION_TITLE } from './dsh'
 import { canPhysicallyDeleteSession } from './sessionBatch'
+import { compareSessionRecency } from './sessionGroups'
 import {
   forgetProjectSessionView,
   readGlobalSessionLiveOnly,
@@ -246,7 +247,7 @@ export const projectSessionRows = computed(() => {
     if (seen.has(key)) return false
     seen.add(key)
     return true
-  })
+  }).sort(compareSessionRecency)
 })
 
 export const visibleSessions = computed(() => {
@@ -434,10 +435,21 @@ function settlePtyDone(ptyId: string) {
   if (!row) return
   const settled = settleIdle(row.watch, Date.now())
   doneWatches.set(ptyId, { watch: settled.watch, timer: 0 })
+  if (row.watch.phase === 'busy' && settled.watch.phase === 'idle') {
+    const live = store.live.find((item) => item.ptyId === ptyId && item.alive !== false)
+    archiveSessionArtifacts(live)
+  }
   if (!settled.notify) return
   const live = store.live.find((item) => item.ptyId === ptyId && item.alive !== false)
   if (!live) return
   void emitSessionDone(live)
+}
+
+function archiveSessionArtifacts(live?: LivePtyInfo) {
+  if (live?.sessionId && !isPendingSessionId(live.sessionId) && live.toolId !== 'dsh') {
+    // Keep rounds even when the rail is hidden or the terminal closes before its idle timer.
+    void api.listSessionDocs(live.projectId, live.toolId, live.sessionId).catch(() => {})
+  }
 }
 
 async function emitSessionDone(live: LivePtyInfo) {
@@ -724,7 +736,7 @@ function applyToolScan(toolId: ToolId, result: Awaited<ReturnType<typeof api.lis
   if (result.ok) {
     delete store.sessionErrors[toolId]
     store.sessions = [...store.sessions.filter((item) => item.toolId !== toolId), ...result.sessions].sort(
-      (a, b) => b.updatedAt - a.updatedAt
+      compareSessionRecency
     )
     return
   }
@@ -1040,6 +1052,7 @@ export function markPtyExit(ptyId: string, opts?: { userClosed?: boolean; skipRe
   clearPtyDone(ptyId)
   delete store.ptyDataAt[ptyId]
   const dying = store.live.find((item) => item.ptyId === ptyId)
+  archiveSessionArtifacts(dying)
   store.live = store.live.filter((item) => item.ptyId !== ptyId)
   adoptLiveFallback(ptyId, dying?.projectId ?? store.selectedProjectId, opts)
   if (!opts?.skipRefresh) void refreshSessions({ silent: true })

@@ -1,7 +1,7 @@
 use crate::path_norm::normalize_path;
 use crate::state::{self, Project};
 use crate::tools::{self, ToolId, file_mtime_millis, first_string, truncate_title};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fs;
@@ -17,7 +17,7 @@ const MAX_TURN_CHARS: usize = 20_000;
 const MIN_SUMMARY_CHARS: usize = 16;
 const SUMMARY_PREFIX: &str = "agent-dock:summary:";
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionDoc {
     pub kind: String,
@@ -26,6 +26,12 @@ pub struct SessionDoc {
     pub rel_path: Option<String>,
     pub updated_at: i64,
     pub source: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub round: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub excerpt: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exists: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -54,13 +60,16 @@ pub fn list_session_docs(
 ) -> Result<Vec<SessionDoc>, String> {
     let state = state::load_state(app)?;
     let project = state::find_project(&state, project_id)?;
-    list_session_docs_for(project, tool_id, session_id)
+    crate::session_artifacts::list(app, project, tool_id, session_id)
 }
 
 pub fn read_session_doc(app: &AppHandle, project_id: &str, path: &str) -> Result<SessionDocBody, String> {
     let state = state::load_state(app)?;
     let project = state::find_project(&state, project_id)?;
-    read_session_doc_for(project, path)
+    if let Some(body) = crate::session_artifacts::read(app, project, path)? { return Ok(body); }
+    let file = Path::new(path.trim());
+    let referenced = !path_allowed(file, project) && crate::session_artifacts::is_referenced(app, project, file)?;
+    read_session_doc_with_reference(project, path, referenced)
 }
 
 pub fn list_session_turns(
@@ -74,7 +83,7 @@ pub fn list_session_turns(
     list_session_turns_for(project, tool_id, session_id)
 }
 
-fn list_session_docs_for(
+pub(crate) fn list_session_docs_for(
     project: &Project,
     tool_id: ToolId,
     session_id: &str,
@@ -134,7 +143,12 @@ fn list_session_turns_for(
     }
 }
 
+#[cfg(test)]
 fn read_session_doc_for(project: &Project, path: &str) -> Result<SessionDocBody, String> {
+    read_session_doc_with_reference(project, path, false)
+}
+
+fn read_session_doc_with_reference(project: &Project, path: &str, referenced: bool) -> Result<SessionDocBody, String> {
     if let Some((tool_id, session_id)) = parse_summary_ref(path) {
         return read_session_summary(project, tool_id, &session_id);
     }
@@ -145,8 +159,8 @@ fn read_session_doc_for(project: &Project, path: &str) -> Result<SessionDocBody,
     if !raw.is_file() {
         return Err("文档不存在或已被删掉".into());
     }
-    if !path_allowed(&raw, project) {
-        return Err("只能读取当前项目或本机会话目录里的文档".into());
+    if !referenced && !path_allowed(&raw, project) {
+        return Err("只能读取当前项目、本机会话目录或会话明确引用的 Markdown 文档".into());
     }
     let meta = fs::metadata(&raw).map_err(|err| format!("读取文档失败：{err}"))?;
     if meta.len() > DOC_BYTE_CAP {
@@ -409,6 +423,7 @@ fn push_doc(docs: &mut HashMap<String, SessionDoc>, path: PathBuf, project_cwd: 
             path: path.to_string_lossy().into_owned(),
             updated_at: file_mtime_millis(&path),
             source: source.to_string(),
+            round: None, excerpt: None, exists: Some(true),
         },
     );
 }
@@ -467,13 +482,14 @@ fn path_under_session_or_project(path: &Path, session_dir: &Path, project_cwd: &
         || file.starts_with(&(project + "/"))
 }
 
-fn path_allowed(path: &Path, project: &Project) -> bool {
-    let file = normalize_path(&path.to_string_lossy());
-    let mut roots = vec![normalize_path(&project.path)];
-    roots.push(normalize_path(&tools::grok_home().to_string_lossy()));
-    roots.push(normalize_path(&tools::kimi_home().to_string_lossy()));
-    roots.extend(crate::claude_accounts::session_homes().iter().map(|p| normalize_path(&p.to_string_lossy())));
-    roots.into_iter().any(|root| file == root || file.starts_with(&(root + "/")))
+pub(crate) fn path_allowed(path: &Path, project: &Project) -> bool {
+    let Ok(canonical) = path.canonicalize() else { return false; };
+    let file = normalize_path(&canonical.to_string_lossy());
+    let mut roots = vec![PathBuf::from(&project.path), tools::grok_home(), tools::kimi_home(), tools::pi_home(), tools::opencode_home()];
+    roots.extend(crate::claude_accounts::session_homes());
+    // Resolve the roots too, so symlinks and Windows extended paths compare consistently.
+    roots.into_iter().map(|root| normalize_path(&root.canonicalize().unwrap_or(root).to_string_lossy()))
+        .any(|root| file == root || file.starts_with(&(root + "/")))
 }
 
 fn summary_ref(tool_id: ToolId, session_id: &str) -> String {
@@ -512,6 +528,7 @@ fn with_summary(
                 rel_path: None,
                 updated_at,
                 source: tool_id.as_str().into(),
+                round: None, excerpt: None, exists: Some(true),
             },
         );
         docs.truncate(MAX_DOCS);

@@ -80,6 +80,7 @@ pub fn list_sessions_in(root: &Path, cwd: &str) -> Result<Vec<SessionRow>, Strin
                 cwd: cwd.to_string(),
                 updated_at,
                 rename_kind: RenameKind::Overlay,
+                account: None,
             });
         }
     }
@@ -94,7 +95,7 @@ pub fn delete_session(cwd: &str, session_id: &str) -> Result<(), String> {
     fs::remove_file(&path).map_err(|err| format!("删除 Pi 会话失败：{err}"))
 }
 
-fn find_session_file(root: &Path, cwd: &str, session_id: &str) -> Option<PathBuf> {
+pub(crate) fn find_session_file(root: &Path, cwd: &str, session_id: &str) -> Option<PathBuf> {
     let rows = list_sessions_in(root, cwd).ok()?;
     if !rows.iter().any(|row| row.id == session_id) {
         return None;

@@ -1,7 +1,7 @@
 import { reactive, ref, watch } from 'vue'
 
 const STORAGE_KEY = 'agent-dock-layout'
-export const LAYOUT_VERSION = 3
+export const LAYOUT_VERSION = 4
 
 export const COLLAPSED_WIDTH = 40
 export const SIDEBAR_MIN = 240
@@ -45,8 +45,9 @@ export function sidebarToolFilterUsesMark(width: number, label: string) {
   return estimateUiLabelWidth(label) > budget
 }
 
-export const DOCRAIL_MIN = 240
-export const DOCRAIL_MAX = 320
+export const DOCRAIL_MIN = 320
+export const DOCRAIL_MAX = 720
+export const DOCRAIL_DEFAULT = 420
 
 export type LayoutState = {
   sidebarWidth: number
@@ -68,6 +69,7 @@ export function migrateStoredLayout(stored: StoredLayout): StoredLayout {
   const next = { ...stored, layoutVersion: LAYOUT_VERSION }
   if (version < 2) next.docRailCollapsed = true
   if (version < 3) next.sidebarCollapsed = false
+  if (version < 4 && (next.docRailWidth ?? 0) <= 320) next.docRailWidth = DOCRAIL_DEFAULT
   return next
 }
 
@@ -90,7 +92,7 @@ export const layout = reactive<LayoutState>({
   sidebarWidth: clamp(stored.sidebarWidth ?? stored.sessionWidth ?? 280, SIDEBAR_MIN, SIDEBAR_MAX),
   sidebarCollapsed: false,
   projectsCollapsed: Boolean(stored.projectsCollapsed),
-  docRailWidth: clamp(stored.docRailWidth ?? 260, DOCRAIL_MIN, DOCRAIL_MAX),
+  docRailWidth: clamp(stored.docRailWidth ?? DOCRAIL_DEFAULT, DOCRAIL_MIN, DOCRAIL_MAX),
   docRailCollapsed: stored.docRailCollapsed ?? true
 })
 

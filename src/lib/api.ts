@@ -154,19 +154,23 @@ export async function listSessions(projectId: string, toolId: ToolId): Promise<S
 }
 
 function previewDocs(toolId: ToolId): SessionDoc[] {
-  if (toolId === 'opencode' || toolId === 'dsh') return []
+  if (toolId === 'dsh') return []
   const now = Date.now()
   const summary: SessionDoc = {
     kind: 'summary',
-    title: '本轮总结',
-    path: `agent-dock:summary:${toolId}/preview`,
+    title: '第 2 轮 · 优化文档阅读与会话归档',
+    path: `agent-dock:round:${toolId}/preview/round-2`,
     relPath: null,
     updatedAt: now - 30000,
-    source: toolId
+    source: toolId,
+    round: 2,
+    excerpt: '文档栏支持加宽和搜索；每轮总结独立保存，可通过目录和全屏阅读回看完整内容。',
+    exists: true
   }
+  const summaries = [summary, { ...summary, title: '第 1 轮 · 阅读项目文档并梳理实现计划', path: `agent-dock:round:${toolId}/preview/round-1`, round: 1, updatedAt: now - 600000, excerpt: '已阅读项目 Markdown 文档，整理了实现计划和需要验证的场景。' }]
   if (toolId === 'kimi') {
     return [
-      summary,
+      ...summaries,
       {
         kind: 'plan',
         title: '写状态栏文案',
@@ -178,7 +182,7 @@ function previewDocs(toolId: ToolId): SessionDoc[] {
     ]
   }
   return [
-    summary,
+    ...summaries,
     {
       kind: 'plan',
       title: 'Plan',
@@ -199,12 +203,14 @@ function previewDocs(toolId: ToolId): SessionDoc[] {
 }
 
 function previewDocBody(path: string): SessionDocBody {
-  if (path.startsWith('agent-dock:summary:')) {
+  if (path.startsWith('agent-dock:summary:') || path.startsWith('agent-dock:round:')) {
     return {
       path,
-      title: '本轮总结',
+      title: path.endsWith('round-1') ? '第 1 轮总结' : '第 2 轮总结',
       relPath: null,
-      text: '已经把浅色对比和文档栏识别改好。Markdown 文件会出现在右侧，最后一轮说明也会单独列出。\n'
+      text: path.endsWith('round-1')
+        ? '# 项目文档梳理\n\n已阅读项目 Markdown 文档，并整理实现计划。\n\n## 待验证\n\n- 会话中提到的路径和链接\n- 每轮总结的独立保存\n'
+        : '# 文档体验优化\n\n文档栏支持加宽和搜索，点击卡片可阅读全文。\n\n## 每轮总结\n\n完整输出按会话和轮次独立保存，后续输出不会覆盖前面的记录。\n\n## 阅读方式\n\n支持目录定位、全屏阅读和 Markdown 原文切换。\n'
     }
   }
   if (path.endsWith('cite-rail.md')) {
@@ -215,7 +221,7 @@ function previewDocBody(path: string): SessionDocBody {
       text: [
         '# 跨 CLI 引用',
         '',
-        '- 右侧列出本 session 写出的 Markdown',
+        '- 右侧列出本 session 提到、读取和写入的 Markdown',
         '- 弹窗预览后写入目标终端提示行',
         '',
         '```mermaid',
@@ -389,20 +395,20 @@ export async function listLivePtys(): Promise<LivePtyInfo[]> {
 }
 
 export async function appVersion(): Promise<string> {
-  if (!isTauri) return '0.1.17'
+  if (!isTauri) return '0.1.18'
   return invoke('app_version')
 }
 
 export async function checkAppUpdate(proxyUrl?: string): Promise<AppUpdateInfo> {
   if (!isTauri) {
     return {
-      localVersion: '0.1.17',
-      latestVersion: '0.1.17',
+      localVersion: '0.1.18',
+      latestVersion: '0.1.18',
       compare: '已是最新',
       kind: 'win-setup',
       kindLabel: 'Windows 安装包',
-      assetName: 'AgentDock-0.1.17-Setup.exe',
-      htmlUrl: 'https://github.com/aodaokai52545856/agent-dock/releases/tag/v0.1.17'
+      assetName: 'AgentDock-0.1.18-Setup.exe',
+      htmlUrl: 'https://github.com/aodaokai52545856/agent-dock/releases/tag/v0.1.18'
     }
   }
   return invoke('check_app_update', { proxyUrl: proxyUrl || null })

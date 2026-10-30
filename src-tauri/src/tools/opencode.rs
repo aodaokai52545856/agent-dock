@@ -63,6 +63,7 @@ pub fn list_sessions(cwd: &str, settings: &AppSettings) -> Result<Vec<SessionRow
                 cwd: item.directory.unwrap_or_else(|| cwd.to_string()),
                 updated_at: updated,
                 rename_kind: RenameKind::Overlay,
+                account: None,
             }
         })
         .collect();

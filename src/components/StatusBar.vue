@@ -449,7 +449,7 @@ watch(liveCount, (n) => {
                 <span class="live-dot" :style="{ background: toolTint(item.toolId) }" aria-hidden="true" />
                 <span class="live-title">{{ item.title }}</span>
               </span>
-              <span class="ad-menu-hint">{{ toolLabel(item.toolId) }}</span>
+              <span class="ad-menu-hint">{{ item.account ? 'Claude · ' + item.account.name : toolLabel(item.toolId) }}</span>
             </button>
           </template>
         </div>

@@ -353,6 +353,7 @@ pub fn list_sessions(cwd: &str) -> Result<Vec<SessionRow>, String> {
         cwd: cwd.to_string(),
         updated_at: file_mtime_millis(Path::new(cwd)),
         rename_kind: RenameKind::Overlay,
+        account: None,
     }])
 }
 
@@ -405,6 +406,7 @@ pub fn list_sessions_in(root: &Path, cwd: &str) -> Result<Vec<SessionRow>, Strin
                 cwd: cwd.to_string(),
                 updated_at,
                 rename_kind: RenameKind::Overlay,
+                account: None,
             });
         }
     }

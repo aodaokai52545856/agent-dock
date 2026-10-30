@@ -24,6 +24,8 @@ const live = (over: Partial<LivePtyInfo> & Pick<LivePtyInfo, 'ptyId'>): LivePtyI
   sessionId: over.sessionId ?? null,
   title: over.title ?? '新会话',
   alive: over.alive ?? true,
+  account: over.account,
+  sessionUpdatedAt: over.sessionUpdatedAt,
   openedAt: 'openedAt' in over ? over.openedAt : 1_000_000
 })
 
@@ -33,7 +35,8 @@ const session = (over: Partial<SessionRow> & Pick<SessionRow, 'id'>): SessionRow
   title: over.title ?? over.id,
   cwd: over.cwd ?? '',
   updatedAt: over.updatedAt ?? 1_000_000,
-  renameKind: over.renameKind ?? 'native'
+  renameKind: over.renameKind ?? 'native',
+  account: over.account
 })
 
 test('new live pty binds to a session that appeared after it opened', () => {
@@ -52,6 +55,34 @@ test('does not bind an old disk session to a new unbound pty', () => {
     'a'
   )
   assert.deepEqual(binds, [])
+})
+
+test('Claude pending terminals only bind to sessions owned by their account', () => {
+  const a = { id: 'a', name: '工作' }
+  const b = { id: 'b', name: '个人' }
+  const terminals = [
+    live({ ptyId: 'a-pty', toolId: 'claude', account: a, openedAt: 1_000_000 }),
+    live({ ptyId: 'b-pty', toolId: 'claude', account: b, openedAt: 1_000_100 })
+  ]
+  const sessions = [
+    session({ id: 'a-session', toolId: 'claude', account: a, updatedAt: 1_000_900 }),
+    session({ id: 'b-session', toolId: 'claude', account: b, updatedAt: 1_000_200 })
+  ]
+  assert.deepEqual(matchUnboundLiveToSessions(terminals, sessions, 'a').map((b) => [b.ptyId, b.sessionId]), [
+    ['b-pty', 'b-session'], ['a-pty', 'a-session']
+  ])
+  assert.deepEqual(resolveOpenTarget(terminals, {
+    projectId: 'a', toolId: 'claude', sessionId: 'b-session', sessionUpdatedAt: 1_000_200, account: b
+  }), { action: 'bind-and-switch', ptyId: 'b-pty', sessionId: 'b-session' })
+  assert.deepEqual(matchUnboundLiveToSessions(terminals, [session({ id: 'unknown', toolId: 'claude' })], 'a'), [])
+  assert.equal(pendingSessionRows(terminals, [], 'a')[0].account?.id, 'a')
+})
+
+test('resuming an old session does not use terminal opening time as conversation time', () => {
+  const resumed = live({ ptyId: 'resumed', sessionId: 'old', openedAt: 1_000_000, sessionUpdatedAt: 100 })
+  assert.equal(pendingSessionRows([resumed], [], 'a')[0].updatedAt, 100)
+  const merged = mergeLiveFromServer([{ ...resumed, sessionUpdatedAt: undefined }], [resumed])
+  assert.equal(pendingSessionRows(merged, [], 'a')[0].updatedAt, 100)
 })
 
 test('does not guess when the pty has no openedAt', () => {

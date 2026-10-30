@@ -16,6 +16,7 @@ use uuid::Uuid;
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PtyOpened {
+    pub account: Option<tools::SessionAccount>,
     pub pty_id: String,
     pub key: String,
     pub reused: bool,
@@ -44,6 +45,7 @@ pub struct PtyExit {
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LivePtyInfo {
+    pub account: Option<tools::SessionAccount>,
     pub pty_id: String,
     pub key: String,
     pub project_id: String,
@@ -63,7 +65,7 @@ struct LivePty {
     key: String,
     project_id: String,
     tool_id: ToolId,
-    claude_account_id: Option<String>,
+    account: Option<tools::SessionAccount>,
     session_id: Option<String>,
     title: String,
     opened_at: i64,
@@ -80,12 +82,12 @@ impl PtyHub {
     pub fn claude_account_running(&self, id: &str) -> bool {
         let mut sessions = self.sessions.lock().expect("pty lock");
         reap_dead(&mut sessions);
-        sessions.values().any(|pty| pty.claude_account_id.as_deref() == Some(id))
+        sessions.values().any(|pty| pty.account.as_ref().is_some_and(|a| a.id == id))
     }
 
     pub fn stop_claude_account(&self, app: &AppHandle, account_id: &str) -> Result<(), String> {
         let mut sessions = self.sessions.lock().map_err(|_| "终端状态不可用，请重启应用。")?;
-        let ids: Vec<_> = sessions.values().filter(|p| p.claude_account_id.as_deref() == Some(account_id))
+        let ids: Vec<_> = sessions.values().filter(|p| p.account.as_ref().is_some_and(|a| a.id == account_id))
             .map(|p| p.id.clone()).collect();
         for id in ids {
             let pty = sessions.get_mut(&id).expect("selected terminal");
@@ -203,6 +205,7 @@ impl PtyHub {
             reap_dead(&mut sessions);
             if let Some(existing) = sessions.values().find(|pty| pty.key == key) {
                 return Ok(PtyOpened {
+                    account: existing.account.clone(),
                     pty_id: existing.id.clone(),
                     key,
                     reused: true,
@@ -316,10 +319,10 @@ impl PtyHub {
         } else {
             title
         };
-        let display_title = match &claude {
-            Some(context) => format!("{} · {}", context.name, display_title),
-            None => display_title,
-        };
+        let account = claude.as_ref().map(|context| tools::SessionAccount {
+            id: context.id.clone(),
+            name: context.name.clone(),
+        });
 
         {
             let mut sessions = self.sessions.lock().expect("pty lock");
@@ -330,7 +333,7 @@ impl PtyHub {
                     key: key.clone(),
                     project_id: project_id.to_string(),
                     tool_id,
-                    claude_account_id: claude.as_ref().map(|c| c.id.clone()),
+                    account: account.clone(),
                     session_id: resolved_session.clone(),
                     title: display_title.clone(),
                     opened_at,
@@ -367,6 +370,7 @@ impl PtyHub {
         });
 
         Ok(PtyOpened {
+            account,
             pty_id,
             key,
             reused: false,
@@ -429,6 +433,7 @@ pub fn session_live_key(project_id: &str, tool_id: ToolId, session_id: &str) -> 
 
 fn live_info(pty: &LivePty) -> LivePtyInfo {
     LivePtyInfo {
+        account: pty.account.clone(),
         pty_id: pty.id.clone(),
         key: pty.key.clone(),
         project_id: pty.project_id.clone(),

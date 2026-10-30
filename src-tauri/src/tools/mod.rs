@@ -83,6 +83,13 @@ impl ToolId {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct SessionAccount {
+    pub id: String,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SessionRow {
     pub tool_id: ToolId,
     pub id: String,
@@ -90,6 +97,8 @@ pub struct SessionRow {
     pub cwd: String,
     pub updated_at: i64,
     pub rename_kind: RenameKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account: Option<SessionAccount>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -312,6 +321,18 @@ pub fn claude_home() -> PathBuf {
 
 pub fn find_claude_session_file(cwd: &str, session_id: &str) -> Option<PathBuf> {
     claude::find_session_file(cwd, session_id)
+}
+
+pub fn pi_home() -> PathBuf { pi::pi_home() }
+
+pub fn opencode_home() -> PathBuf {
+    std::env::var_os("OPENCODE_DATA_DIR").map(PathBuf::from)
+        .or_else(|| std::env::var_os("XDG_DATA_HOME").map(|p| PathBuf::from(p).join("opencode")))
+        .unwrap_or_else(|| dirs::home_dir().unwrap_or_default().join(".local/share/opencode"))
+}
+
+pub fn find_pi_session_file(cwd: &str, session_id: &str) -> Option<PathBuf> {
+    pi::find_session_file(&pi::sessions_root(), cwd, session_id)
 }
 
 #[cfg(test)]

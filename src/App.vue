@@ -456,7 +456,8 @@ async function openSession(sessionId?: string, toolId?: ToolId) {
     projectId: project.id,
     toolId: tool,
     sessionId: requestedId ?? null,
-    sessionUpdatedAt: session?.updatedAt
+    sessionUpdatedAt: session?.updatedAt,
+    account: session?.account
   })
   if (target.action === 'switch' || target.action === 'bind-and-switch') {
     if (target.action === 'bind-and-switch') {
@@ -492,6 +493,8 @@ async function openSession(sessionId?: string, toolId?: ToolId) {
       toolId: tool,
       sessionId: opened.sessionId ?? target.sessionId,
       title: opened.title,
+      account: opened.account,
+      sessionUpdatedAt: session?.updatedAt,
       alive: true,
       openedAt: opened.openedAt ?? Date.now(),
       kind: opened.kind ?? (tool === 'dsh' ? 'web' : 'pty'),
@@ -680,7 +683,6 @@ const confirmCopy = () => {
   <div class="app" @contextmenu="onAppContextMenu">
     <WindowResizeFrame />
     <TitleBar
-      @settings="settingsOpen = true"
       @versions="versionOpen = true"
       @accounts="accountOpen = true"
       @claude-accounts="claudeAccountOpen = true"
@@ -971,6 +973,7 @@ const confirmCopy = () => {
   right: 0;
   bottom: 0;
   z-index: 4;
+  max-width: 100%;
   display: flex;
   overflow: hidden;
   background: var(--ad-sidebar);

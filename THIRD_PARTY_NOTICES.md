@@ -1,5 +1,41 @@
 # Third-party notices
 
+## CC Switch
+
+Agent Dock's usage dashboard layout, metric strip, expandable token breakdown,
+53-week calendar and quantile heatmap shading are adapted from CC Switch:
+
+- Project: https://github.com/farion1231/cc-switch
+- Version: `v4.0.21` (`c4db63c`)
+- Sources: `src/components/usage/UsageDashboard.tsx`, `UsageHero.tsx`,
+  `UsageHeatmap.tsx`, `UsageTrendChart.tsx`
+- License: MIT
+
+The interface is implemented in Vue and SVG against Agent Dock's local usage
+API. CC Switch's React components and dependencies are not required.
+
+MIT License
+
+Copyright (c) 2025 Jason Young
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
 ## multi-claude
 
 Agent Dock's Claude account directory isolation, launch environment construction,

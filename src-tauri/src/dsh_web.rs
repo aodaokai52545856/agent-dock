@@ -130,6 +130,7 @@ impl Hub {
                 existing.session_id = session_id.clone();
                 existing.title = title.clone();
                 return Ok(PtyOpened {
+                    account: None,
                     pty_id: existing.id.clone(),
                     key: existing.key.clone(),
                     reused: true,
@@ -277,6 +278,7 @@ impl Hub {
             );
         }
         Ok(PtyOpened {
+            account: None,
             pty_id: id,
             key,
             reused: false,
@@ -393,6 +395,7 @@ fn lock_sessions(lock: &Mutex<HashMap<String, WebSession>>) -> std::sync::MutexG
 
 fn live_info(session: &WebSession) -> LivePtyInfo {
     LivePtyInfo {
+        account: None,
         pty_id: session.id.clone(),
         key: session.key.clone(),
         project_id: session.project_id.clone(),

@@ -2,6 +2,8 @@ import assert from 'node:assert/strict'
 import {
   COLLAPSED_WIDTH,
   DOCRAIL_MIN,
+  DOCRAIL_MAX,
+  DOCRAIL_DEFAULT,
   LAYOUT_VERSION,
   SIDEBAR_MIN,
   beginWindowMove,
@@ -190,6 +192,22 @@ test('layouts already on the overlay version keep an opened doc rail', () => {
     layoutVersion: LAYOUT_VERSION
   })
   assert.equal(next.docRailCollapsed, false)
+})
+
+test('narrow saved rails migrate to a readable width without changing the open state', () => {
+  const next = migrateStoredLayout({ docRailWidth: 260, docRailCollapsed: false, layoutVersion: 3 })
+  assert.equal(next.docRailWidth, DOCRAIL_DEFAULT)
+  assert.equal(next.docRailCollapsed, false)
+  assert.equal(migrateStoredLayout({ docRailWidth: 580, layoutVersion: 3 }).docRailWidth, 580)
+})
+
+test('doc rail can expand for reading and still respects the maximum', () => {
+  try {
+    resizeDocRail(600)
+    assert.equal(docRailPaneWidth(), 600)
+    resizeDocRail(1000)
+    assert.equal(docRailPaneWidth(), DOCRAIL_MAX)
+  } finally { restore() }
 })
 
 test('v2 layouts keep the overlay rail and stop collapsing the workspace', () => {

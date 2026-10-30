@@ -58,12 +58,23 @@ pub fn find_session_file_in(home: &Path, cwd: &str, session_id: &str) -> Option<
 }
 
 pub fn list_sessions(cwd: &str) -> Result<Vec<SessionRow>, String> {
+    list_sessions_from_profiles(cwd, crate::claude_accounts::session_profiles())
+}
+
+fn list_sessions_from_profiles(
+    cwd: &str,
+    profiles: Vec<(PathBuf, super::SessionAccount)>,
+) -> Result<Vec<SessionRow>, String> {
     let mut rows = BTreeMap::new();
-    for home in crate::claude_accounts::session_homes() {
-        for row in list_sessions_in(&home, cwd)? { rows.entry(row.id.clone()).or_insert(row); }
+    for (home, account) in profiles {
+        for mut row in list_sessions_in(&home, cwd)? {
+            row.title = display_title(&row.title, &account.name);
+            row.account = Some(account.clone());
+            rows.entry(row.id.clone()).or_insert(row);
+        }
     }
     let mut out: Vec<_> = rows.into_values().collect();
-    out.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+    out.sort_by(|a, b| b.updated_at.cmp(&a.updated_at).then_with(|| a.id.cmp(&b.id)));
     Ok(out)
 }
 
@@ -93,8 +104,9 @@ pub fn list_sessions_in(home: &Path, cwd: &str) -> Result<Vec<SessionRow>, Strin
                     id: stem.to_string(),
                     title: pick_title(&meta, None, None),
                     cwd: cwd.to_string(),
-                    updated_at: file_mtime_millis(&path),
+                    updated_at: meta.activity_at,
                     rename_kind: RenameKind::Native,
+                    account: None,
                 },
             );
             metas.insert(stem.to_string(), meta);
@@ -102,7 +114,7 @@ pub fn list_sessions_in(home: &Path, cwd: &str) -> Result<Vec<SessionRow>, Strin
     }
     merge_registry(home, cwd, &mut rows, &metas);
     let mut out: Vec<SessionRow> = rows.into_values().collect();
-    out.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+    out.sort_by(|a, b| b.updated_at.cmp(&a.updated_at).then_with(|| a.id.cmp(&b.id)));
     Ok(out)
 }
 
@@ -192,7 +204,6 @@ fn merge_registry(
         if let Some(existing) = rows.get_mut(&reg.id) {
             let meta = metas.get(&reg.id).cloned().unwrap_or_default();
             existing.title = pick_title(&meta, reg.name.as_deref(), reg.name_source.as_deref());
-            existing.updated_at = existing.updated_at.max(reg.updated_at);
             continue;
         }
         if now.saturating_sub(file_mtime_millis(&path)) > REGISTRY_RECENT_MS {
@@ -211,6 +222,7 @@ fn merge_registry(
                 cwd: cwd.to_string(),
                 updated_at: reg.updated_at,
                 rename_kind: RenameKind::Native,
+                account: None,
             },
         );
     }
@@ -290,6 +302,7 @@ struct JsonlMeta {
     custom_title: Option<String>,
     ai_title: Option<String>,
     user_text: Option<String>,
+    activity_at: i64,
 }
 
 fn jsonl_meta(path: &Path) -> JsonlMeta {
@@ -299,6 +312,16 @@ fn jsonl_meta(path: &Path) -> JsonlMeta {
         let Ok(value) = serde_json::from_str::<Value>(line) else {
             continue;
         };
+        // CLI heartbeats, titles, progress and tool results are not conversation activity.
+        if matches!(value.get("type").and_then(Value::as_str), Some("user" | "assistant"))
+            && value.get("isMeta").and_then(Value::as_bool) != Some(true)
+            && value.get("isSidechain").and_then(Value::as_bool) != Some(true)
+            && user_text(&value).is_some()
+        {
+            if let Some(at) = value.get("timestamp").and_then(parse_time_value) {
+                meta.activity_at = meta.activity_at.max(at);
+            }
+        }
         match value.get("type").and_then(|v| v.as_str()) {
             Some("custom-title") => {
                 if let Some(title) = first_string(&value, &["customTitle", "title"]) {
@@ -323,7 +346,7 @@ fn jsonl_meta(path: &Path) -> JsonlMeta {
 
 fn pick_title(meta: &JsonlMeta, registry_name: Option<&str>, name_source: Option<&str>) -> String {
     if let Some(title) = &meta.custom_title {
-        return truncate_title(title, 48);
+        return title.clone();
     }
     let named_by_user = name_source
         .map(|source| {
@@ -333,19 +356,33 @@ fn pick_title(meta: &JsonlMeta, registry_name: Option<&str>, name_source: Option
         .unwrap_or(false);
     if named_by_user {
         if let Some(name) = registry_name.filter(|value| !value.is_empty()) {
-            return truncate_title(name, 48);
+            return name.to_string();
         }
     }
     if let Some(title) = &meta.ai_title {
-        return truncate_title(title, 48);
+        return title.clone();
     }
     if let Some(title) = &meta.user_text {
-        return truncate_title(title, 48);
+        return title.clone();
     }
     if let Some(name) = registry_name.filter(|value| !value.is_empty()) {
-        return truncate_title(name, 48);
+        return name.to_string();
     }
     "Claude 会话".into()
+}
+
+fn display_title(title: &str, account_name: &str) -> String {
+    let mut title = title.trim();
+    let account_name = account_name.trim();
+    if !account_name.is_empty() {
+        // Older Dock versions saved the account name into the native title.
+        // Hide that redundant prefix without rewriting the conversation history.
+        let prefix = format!("{account_name} · ");
+        while let Some(rest) = title.strip_prefix(&prefix) {
+            title = rest.trim();
+        }
+    }
+    truncate_title(if title.is_empty() { "新会话" } else { title }, 48)
 }
 
 struct RegistryRow {
@@ -366,9 +403,9 @@ fn parse_registry(path: &Path) -> Option<RegistryRow> {
     let cwd = first_string(&value, &["cwd", "workDir"]).unwrap_or_default();
     let name = first_string(&value, &["name", "title"]);
     let name_source = first_string(&value, &["nameSource", "name_source"]);
-    let updated_at = parse_time_value(value.get("updatedAt").unwrap_or(&Value::Null))
-        .or_else(|| parse_time_value(value.get("startedAt").unwrap_or(&Value::Null)))
-        .unwrap_or_else(|| file_mtime_millis(path));
+    // Before a transcript exists, use a fixed start time, never the live registry heartbeat.
+    let updated_at = parse_time_value(value.get("startedAt").unwrap_or(&Value::Null))
+        .unwrap_or(0);
     Some(RegistryRow {
         id,
         cwd,
@@ -425,6 +462,110 @@ fn user_text(value: &Value) -> Option<String> {
 mod tests {
     use super::*;
     use std::io::Write;
+
+    #[test]
+    fn legacy_account_prefix_is_hidden_without_rewriting_history() {
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = "/tmp/legacy-title";
+        let name = "KathrynEllisotn@gmx.es";
+        let project = dir.path().join("projects").join(encode_project_dir(cwd));
+        fs::create_dir_all(&project).unwrap();
+        let path = project.join("legacy.jsonl");
+        let saved = json!({"type": "custom-title", "customTitle": format!("{name} · 新会话")}).to_string();
+        fs::write(&path, &saved).unwrap();
+        let rows = list_sessions_from_profiles(cwd, vec![(dir.path().to_path_buf(), super::super::SessionAccount {
+            id: "work".into(), name: name.into()
+        })]).unwrap();
+        assert_eq!(rows[0].title, "新会话");
+        assert_eq!(fs::read_to_string(&path).unwrap(), saved);
+        assert_eq!(display_title("工作 · 工作 · 优化语义 · 续接", "工作"), "优化语义 · 续接");
+        assert_eq!(display_title("其他账号 · 项目计划", "工作"), "其他账号 · 项目计划");
+        assert_eq!(display_title("普通会话", ""), "普通会话");
+        // Strip before shortening, so a long account name does not hide the actual title.
+        assert_eq!(display_title(&format!("{name} · {}", "长标题".repeat(20)), name).chars().count(), 48);
+    }
+
+    #[test]
+    fn only_real_conversation_changes_recency() {
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = "/tmp/recency";
+        let project = dir.path().join("projects").join(encode_project_dir(cwd));
+        fs::create_dir_all(&project).unwrap();
+        fs::create_dir_all(dir.path().join("sessions")).unwrap();
+        let path = project.join("old.jsonl");
+        fs::write(&path, concat!(
+            r#"{"type":"user","timestamp":"2026-10-01T00:00:00Z","message":{"content":"older question"}}"#,
+            "\n",
+            r#"{"type":"assistant","timestamp":"2026-10-01T00:01:00Z","message":{"content":[{"type":"text","text":"answer"}]}}"#,
+            "\n"
+        )).unwrap();
+        fs::write(project.join("new.jsonl"), r#"{"type":"user","timestamp":"2026-10-02T00:00:00Z","message":{"content":"newer question"}}"#).unwrap();
+        let before = list_sessions_in(dir.path(), cwd).unwrap();
+        assert_eq!(before[0].id, "new");
+        let old_at = before[1].updated_at;
+        assert_eq!(old_at, 1790812860000);
+
+        // Resuming, renaming and background writes must not bring the old conversation to the top.
+        fs::write(dir.path().join("sessions").join("1.json"), json!({
+            "sessionId": "old", "cwd": cwd, "startedAt": now_millis(), "updatedAt": now_millis()
+        }).to_string()).unwrap();
+        let mut file = fs::OpenOptions::new().append(true).open(&path).unwrap();
+        for record in [
+            json!({"type": "progress", "timestamp": "2026-10-29T00:00:00Z"}),
+            json!({"type": "user", "isMeta": true, "timestamp": "2026-10-29T00:00:00Z", "message": {"content": "startup context"}}),
+            json!({"type": "assistant", "isSidechain": true, "timestamp": "2026-10-29T00:00:00Z", "message": {"content": "background"}}),
+            json!({"type": "user", "timestamp": "2026-10-29T00:00:00Z", "message": {"content": [{"type": "tool_result", "content": "result"}]}}),
+            json!({"type": "assistant", "timestamp": "2026-10-29T00:00:00Z", "message": {"content": [{"type": "tool_use", "name": "Read"}]}}),
+        ] { writeln!(file, "{record}").unwrap(); }
+        rename_session_in(dir.path(), cwd, "old", "改名").unwrap();
+        let after = list_sessions_in(dir.path(), cwd).unwrap();
+        assert_eq!(after[0].id, "new");
+        assert_eq!(after[1].updated_at, old_at);
+        assert_eq!(after[1].title, "改名");
+
+        let mut file = fs::OpenOptions::new().append(true).open(&path).unwrap();
+        writeln!(file, "{}", json!({"type": "user", "timestamp": "2026-10-29T00:00:00Z", "message": {"content": "real new question"}})).unwrap();
+        let after_message = list_sessions_in(dir.path(), cwd).unwrap();
+        assert_eq!(after_message[0].id, "old");
+        assert!(after_message[0].updated_at > after[0].updated_at);
+    }
+
+    #[test]
+    fn registry_only_session_uses_start_time_and_legacy_metadata_stays_stable() {
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = "/tmp/registry-recency";
+        fs::create_dir_all(dir.path().join("sessions")).unwrap();
+        let path = dir.path().join("sessions").join("1.json");
+        for heartbeat in [2000, 3000] {
+            fs::write(&path, json!({"sessionId": "s", "cwd": cwd, "startedAt": 1000, "updatedAt": heartbeat}).to_string()).unwrap();
+            assert_eq!(list_sessions_in(dir.path(), cwd).unwrap()[0].updated_at, 1000);
+        }
+        fs::write(&path, json!({"sessionId": "s", "cwd": cwd, "updatedAt": 5000}).to_string()).unwrap();
+        assert_eq!(list_sessions_in(dir.path(), cwd).unwrap()[0].updated_at, 0);
+    }
+
+    #[test]
+    fn session_rows_keep_directory_account_identity() {
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = "/tmp/accounts";
+        let mut profiles = Vec::new();
+        for (id, name) in [("a", "工作账号"), ("b", "个人账号")] {
+            let home = dir.path().join(id);
+            let project = home.join("projects").join(encode_project_dir(cwd));
+            fs::create_dir_all(&project).unwrap();
+            fs::write(project.join(format!("{id}.jsonl")), r#"{"type":"user","timestamp":1000,"message":{"content":"question"}}"#).unwrap();
+            profiles.push((home, super::super::SessionAccount { id: id.into(), name: name.into() }));
+        }
+        let first = list_sessions_from_profiles(cwd, profiles.clone()).unwrap();
+        profiles.reverse();
+        let second = list_sessions_from_profiles(cwd, profiles).unwrap();
+        for rows in [first, second] {
+            assert_eq!(rows[0].account.as_ref().unwrap().id, "a");
+            assert_eq!(rows[0].account.as_ref().unwrap().name, "工作账号");
+            assert_eq!(rows[1].account.as_ref().unwrap().id, "b");
+            assert_eq!(rows[1].account.as_ref().unwrap().name, "个人账号");
+        }
+    }
 
     #[test]
     fn encodes_windows_and_unix_cwds() {

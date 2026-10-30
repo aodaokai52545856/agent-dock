@@ -1,5 +1,6 @@
 import { DSH_FIXED_SESSION_ID } from './dsh.ts'
-import type { LivePtyInfo, SessionRow, ToolId } from './types'
+import type { LivePtyInfo, SessionRow, SessionAccount, ToolId } from './types'
+import { compareSessionRecency } from './sessionGroups.ts'
 
 export const PENDING_SESSION_PREFIX = '__pending:'
 export const LIVE_BIND_SLACK_MS = 15_000
@@ -66,14 +67,15 @@ export function matchUnboundLiveToSessions(
 
     const candidates = sessions
       .filter((row) => row.toolId === toolId && !claimed.has(`${toolId}:${row.id}`))
-      .sort((a, b) => b.updatedAt - a.updatedAt)
+      .sort(compareSessionRecency)
 
     for (const pty of unbound) {
       const openedAt = pty.openedAt ?? 0
       if (!openedAt) continue
       const session = candidates.find(
         (row) =>
-          !usedSession.has(`${toolId}:${row.id}`) && row.updatedAt >= openedAt - slackMs
+          !usedSession.has(`${toolId}:${row.id}`) && row.updatedAt >= openedAt - slackMs &&
+          (toolId !== 'claude' || Boolean(pty.account?.id && pty.account.id === row.account?.id))
       )
       if (!session) continue
       usedSession.add(`${toolId}:${session.id}`)
@@ -95,6 +97,7 @@ export function resolveOpenTarget(
     toolId: ToolId
     sessionId: string | null
     sessionUpdatedAt?: number
+    account?: SessionAccount | null
   }
 ): OpenTarget {
   const { projectId, toolId, sessionId } = opts
@@ -124,6 +127,7 @@ export function resolveOpenTarget(
         title: sessionId,
         cwd: '',
         updatedAt: opts.sessionUpdatedAt,
+        account: opts.account,
         renameKind: 'overlay'
       }
       const hit = matchUnboundLiveToSessions(live, [probe], projectId).find(
@@ -168,7 +172,8 @@ export function pendingSessionRows(
       id: item.sessionId || pendingSessionId(item.ptyId),
       title: item.title?.trim() || NEW_SESSION_TITLE,
       cwd: '',
-      updatedAt: item.openedAt ?? Date.now(),
+      updatedAt: item.sessionId ? item.sessionUpdatedAt ?? 0 : item.openedAt ?? 0,
+      account: item.account,
       renameKind: 'overlay' as const
     }))
 }
@@ -183,11 +188,13 @@ export function mergeLiveFromServer(server: LivePtyInfo[], local: LivePtyInfo[])
         sessionId: prev.sessionId,
         title: prev.title || item.title,
         key: prev.key || item.key,
+        sessionUpdatedAt: prev.sessionUpdatedAt,
         openedAt: item.openedAt ?? prev.openedAt
       }
     }
     return {
       ...item,
+      sessionUpdatedAt: prev.sessionUpdatedAt,
       openedAt: item.openedAt ?? prev.openedAt
     }
   })

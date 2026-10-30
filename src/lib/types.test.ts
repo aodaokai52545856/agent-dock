@@ -94,7 +94,7 @@ test('session picker disables missing tools and all only lists installed groups'
   assert.match(sidebar, /filterHint\(id\) === '未安装'/)
   assert.match(sidebar, /class="group-title"/)
   assert.match(sidebar, /class="group-mark"/)
-  assert.match(sidebar, /toggleGroup\(group\.tool\.id\)/)
+  assert.match(sidebar, /toggleGroup\(group\.id\)/)
   const store = readFileSync(join(root, 'store.ts'), 'utf8')
   assert.match(store, /toolsToScanForFilter/)
   assert.match(store, /clampSessionToolFilter/)

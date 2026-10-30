@@ -97,7 +97,13 @@ export interface AppState {
   titleOverlays: Record<string, string>
 }
 
+export interface SessionAccount {
+  id: string
+  name: string
+}
+
 export interface SessionRow {
+  account?: SessionAccount | null
   toolId: ToolId
   id: string
   title: string
@@ -124,6 +130,9 @@ export interface SessionDoc {
   relPath?: string | null
   updatedAt: number
   source: string
+  round?: number | null
+  excerpt?: string | null
+  exists?: boolean | null
 }
 
 export interface SessionDocBody {
@@ -162,6 +171,7 @@ export interface ToolProbeMap {
 }
 
 export interface PtyOpened {
+  account?: SessionAccount | null
   ptyId: string
   key: string
   reused: boolean
@@ -173,6 +183,8 @@ export interface PtyOpened {
 }
 
 export interface LivePtyInfo {
+  account?: SessionAccount | null
+  sessionUpdatedAt?: number
   ptyId: string
   key: string
   projectId: string
@@ -394,6 +406,9 @@ export interface UsageHeatCell {
   tokens: number
   costUsd: number
   requests: number
+  inputTokens: number
+  cacheReadTokens: number
+  cacheCreationTokens: number
 }
 
 export interface UsageGroupRow {

@@ -1051,18 +1051,25 @@ fn prepare_system(
     Ok(profile)
 }
 
-pub fn session_homes() -> Vec<PathBuf> {
-    let mut homes = vec![system_profile().config_dir];
+pub fn session_profiles() -> Vec<(PathBuf, tools::SessionAccount)> {
+    let system = system_profile();
+    let mut entries = vec![(system.config_dir, tools::SessionAccount { id: system.id, name: system.name })];
     if let Some(store) = STORE.get() {
         if let Ok(index) = load_index(store) {
             for p in profiles(&index).into_iter().chain(index.retired) {
-                if !homes.contains(&p.config_dir) {
-                    homes.push(p.config_dir);
+                if let Some((_, account)) = entries.iter_mut().find(|(home, _)| home == &p.config_dir) {
+                    if account.id == p.id { account.name = p.name; }
+                } else {
+                    entries.push((p.config_dir, tools::SessionAccount { id: p.id, name: p.name }));
                 }
             }
         }
     }
-    homes
+    entries
+}
+
+pub fn session_homes() -> Vec<PathBuf> {
+    session_profiles().into_iter().map(|(home, _)| home).collect()
 }
 
 pub fn extra_usage_profiles() -> Vec<crate::usage::ExtraClaudeProfile> {

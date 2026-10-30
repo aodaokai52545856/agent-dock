@@ -8,7 +8,6 @@ import { isTitlebarDoubleClick } from '../lib/titleDrag'
 import ClockMenu from './ClockMenu.vue'
 
 const emit = defineEmits<{
-  settings: []
   versions: []
   accounts: []
   'claude-accounts': []
@@ -84,11 +83,6 @@ function toggleCcswitch() {
 function onClockOpen() {
   fileOpen.value = false
   ccswitchOpen.value = false
-}
-
-function openSettings() {
-  closeMenus()
-  emit('settings')
 }
 
 function openVersions() {
@@ -170,10 +164,9 @@ onUnmounted(() => {
           :aria-expanded="fileOpen"
           @click="toggleFile"
         >
-          系统
+          账号管理
         </button>
         <div v-if="fileOpen" class="ad-menu file-menu" role="menu">
-          <button type="button" class="ad-menu-item" role="menuitem" @click="openSettings">设置</button>
           <button type="button" class="ad-menu-item" role="menuitem" @click="openAccounts">Grok 账号</button>
           <button type="button" class="ad-menu-item" role="menuitem" @click="openClaudeAccounts">Claude 账号</button>
           <button type="button" class="ad-menu-item" role="menuitem" @click="openDeepseek">DeepSeek</button>

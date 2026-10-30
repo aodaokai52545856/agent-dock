@@ -6,12 +6,14 @@ import { isFixedDshSession } from '../lib/dsh'
 import { isPendingSessionId } from '../lib/liveBind'
 import {
   SESSION_GROUP_COLLAPSE_KEY,
+  accountSessionGroups,
   groupBodyHidden,
   parseCollapsedGroups,
   serializeCollapsedGroups,
   sessionLiveFilterLabel,
   shouldShowSessionGroupHead,
-  toggleCollapsedGroup
+  toggleCollapsedGroup,
+  type SessionGroupId
 } from '../lib/sessionGroups'
 import { liveDotForPty, liveDotTitle, projectLiveCounts, projectLiveDot, type LiveDotKind } from '../lib/livePulse'
 import { isCurrentSession, liveOfProject } from '../lib/livePty'
@@ -93,13 +95,13 @@ const visibleTools = computed(() => {
 
 const groups = computed(() =>
   visibleTools.value
-    .map((tool) => ({
-      tool,
-      sessions: visibleSessions.value.filter(
+    .flatMap((tool) => accountSessionGroups(tool.id, visibleSessions.value.filter(
         (item) => item.toolId === tool.id && (!liveFilter.value || isLive(item.id, item.toolId))
-      ),
-      error: liveFilter.value ? undefined : store.sessionErrors[tool.id]
-    }))
+      )).map((group) => ({
+        ...group,
+        tool,
+        error: liveFilter.value ? undefined : store.sessionErrors[tool.id]
+      })))
     .filter((group) => group.sessions.length || (!liveFilter.value && (
       group.error || store.sessionLoading[group.tool.id] ||
       (!store.sessionQuery.trim() && store.sessionToolFilter !== 'all')
@@ -107,20 +109,20 @@ const groups = computed(() =>
 )
 
 const showGroupHeads = computed(() =>
-  shouldShowSessionGroupHead(visibleTools.value.length, liveFilter.value)
+  shouldShowSessionGroupHead(visibleTools.value.length, liveFilter.value) || groups.value.some((group) => group.tool.id === 'claude')
 )
 
 const liveCount = computed(() => liveOfProject(store.live, store.selectedProjectId).length)
 
-function isGroupCollapsed(id: ToolId) {
+function isGroupCollapsed(id: SessionGroupId) {
   return collapsedGroups.value.has(id)
 }
 
-function hideGroupBody(id: ToolId) {
+function hideGroupBody(id: SessionGroupId) {
   return groupBodyHidden(isGroupCollapsed(id), store.sessionQuery)
 }
 
-function toggleGroup(id: ToolId) {
+function toggleGroup(id: SessionGroupId) {
   collapsedGroups.value = toggleCollapsedGroup(collapsedGroups.value, id)
   localStorage.setItem(SESSION_GROUP_COLLAPSE_KEY, serializeCollapsedGroups(collapsedGroups.value))
 }
@@ -680,25 +682,25 @@ onUnmounted(() => {
 
         <div v-else class="session-pane" :class="{ 'is-busy': store.sessionRefreshBusy }">
         <div class="groups">
-          <section v-for="group in groups" :key="group.tool.id" class="group">
+          <section v-for="group in groups" :key="group.id" class="group">
             <button
               v-if="showGroupHeads"
               type="button"
               class="group-title"
-              :aria-expanded="!hideGroupBody(group.tool.id)"
-              :title="isGroupCollapsed(group.tool.id) ? '展开 ' + group.tool.label : '折叠 ' + group.tool.label"
-              @click="toggleGroup(group.tool.id)"
+              :aria-expanded="!hideGroupBody(group.id)"
+              :title="isGroupCollapsed(group.id) ? '展开 ' + group.label : '折叠 ' + group.label"
+              @click="toggleGroup(group.id)"
             >
-              <svg class="fold-caret" :class="{ 'is-closed': isGroupCollapsed(group.tool.id) }" viewBox="0 0 16 16" aria-hidden="true">
+              <svg class="fold-caret" :class="{ 'is-closed': hideGroupBody(group.id) }" viewBox="0 0 16 16" aria-hidden="true">
                 <path d="M6 4.5 10 8l-4 3.5" />
               </svg>
               <span class="group-mark" aria-hidden="true">
                 <ToolMark :id="group.tool.id" />
               </span>
-              <span class="group-label">{{ group.tool.label }}</span>
+              <span class="group-label">{{ group.label }}</span>
               <span class="group-count">{{ group.sessions.length }}</span>
             </button>
-            <div v-if="!hideGroupBody(group.tool.id) && group.error" class="group-error">
+            <div v-if="!hideGroupBody(group.id) && group.error" class="group-error">
               <p>{{ group.error.message }}</p>
               <button
                 v-if="group.error.kind === 'cli_missing'"
@@ -709,7 +711,7 @@ onUnmounted(() => {
                 去检查安装
               </button>
             </div>
-            <ul v-else-if="!hideGroupBody(group.tool.id) && group.sessions.length" class="sessions">
+            <ul v-else-if="!hideGroupBody(group.id) && group.sessions.length" class="sessions" :class="{ 'sessions--nested': showGroupHeads }">
               <li v-for="session in group.sessions" :key="session.id">
                 <div
                   class="row"
@@ -736,7 +738,7 @@ onUnmounted(() => {
                   <button
                     type="button"
                     class="row-main"
-                    :title="[session.title, liveDotTitle(sessionDot(session.id, session.toolId), 'session')].filter(Boolean).join(' · ')"
+                    :title="[session.account?.name, session.title, liveDotTitle(sessionDot(session.id, session.toolId), 'session')].filter(Boolean).join(' · ')"
                     :aria-current="isCurrent(session.id, session.toolId) ? 'true' : undefined"
                     @click="onRowActivate(session)"
                   >
@@ -751,7 +753,7 @@ onUnmounted(() => {
                       @keydown.esc.prevent="renaming = ''"
                       @blur="commitRename(session.id, session.toolId)"
                     />
-                    <span class="row-time">{{ relativeTime(session.updatedAt) }}</span>
+                    <span class="row-time" :title="session.updatedAt ? '最近对话：' + new Date(session.updatedAt).toLocaleString() : '暂无对话时间'">{{ relativeTime(session.updatedAt) }}</span>
                   </button>
                   <button
                     v-if="!selecting && renaming !== session.id"
@@ -768,7 +770,7 @@ onUnmounted(() => {
                 </div>
               </li>
             </ul>
-            <p v-else-if="!hideGroupBody(group.tool.id)" class="muted group-empty">{{ store.sessionLoading[group.tool.id] ? '正在读取…' : '暂无会话' }}</p>
+            <p v-else-if="!hideGroupBody(group.id)" class="muted group-empty">{{ store.sessionLoading[group.tool.id] ? '正在读取…' : '暂无会话' }}</p>
           </section>
         </div>
           <div v-if="store.sessionRefreshBusy" class="session-mask" role="status" aria-live="polite">
@@ -1538,6 +1540,10 @@ onUnmounted(() => {
   list-style: none;
   margin: 0;
   padding: 0;
+}
+
+.sessions--nested {
+  padding-left: 36px;
 }
 
 .row {

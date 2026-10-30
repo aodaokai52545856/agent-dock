@@ -4,6 +4,7 @@ import * as api from '../lib/api'
 import type { ClaudeAccount, ClaudeAccountList } from '../lib/types'
 import { claudeStatus, proxyLabel, canUseClaudeAccount } from '../lib/claudeAccounts'
 import { modal as vModal } from '../lib/modal'
+import ToolMark from './ToolMark.vue'
 
 const props = defineProps<{ open: boolean }>()
 const emit = defineEmits<{ close: []; switched: [] }>()
@@ -69,6 +70,13 @@ async function reload() {
 function select(account: ClaudeAccount) {
   if (busy.value) return
   selectedId.value = account.id; mode.value = 'detail'; removing.value = false; confirming.value = ''; notice.value = ''; error.value = ''
+}
+
+function accountSubtitle(account: ClaudeAccount) {
+  if (account.email && account.email !== account.name) return account.email
+  if (account.source === 'system') return '使用原有 Claude 目录'
+  if (account.source === 'legacy') return '旧版账号快照'
+  return account.email ? '独立账号' : '等待首次登录'
 }
 
 function edit(create = false) {
@@ -167,15 +175,15 @@ function close() { if (!busy.value) emit('close') }
     <div v-modal="close" ref="dialog" class="ad-dialog claude-dialog" role="dialog" aria-modal="true" aria-labelledby="claude-accounts-title" tabindex="-1" :aria-busy="!!busy">
       <header class="dialog-head">
         <div class="heading">
-          <span class="claude-mark" aria-hidden="true">✳</span>
+          <span class="claude-mark" aria-hidden="true"><ToolMark id="claude" /></span>
           <div><h2 id="claude-accounts-title">Claude 账号</h2><p>每个账号独立登录，可同时运行多个账号。</p></div>
         </div>
         <button type="button" class="btn btn-ghost btn-small" :disabled="!!busy" @click="close">关闭</button>
       </header>
 
       <div class="summary">
-        <span>新会话默认 <strong>{{ current?.name || '系统 Claude' }}</strong></span>
-        <span>{{ managedCount }} 个账号<span v-if="legacyCount"> · {{ legacyCount }} 个待迁移</span></span>
+        <span class="summary-default"><span class="default-dot" />新会话默认 <strong :title="current?.name || '系统 Claude'">{{ current?.name || '系统 Claude' }}</strong></span>
+        <span class="summary-count">{{ managedCount }} 个账号<span v-if="legacyCount"> · {{ legacyCount }} 个待迁移</span></span>
       </div>
       <p v-if="!api.isTauri" class="banner">浏览器仅供预览。请在桌面端创建、登录和管理本机账号。</p>
       <p v-if="error" class="banner banner-error" role="alert">{{ error }} <button type="button" :disabled="!!busy" @click="reload">刷新列表</button></p>
@@ -187,16 +195,25 @@ function close() { if (!busy.value) emit('close') }
       <div class="workspace">
         <aside class="account-sidebar" aria-label="账号列表">
           <div class="list-tools">
-            <input v-model="query" aria-label="搜索账号" placeholder="搜索名称或邮箱" :disabled="!!busy" />
-            <button type="button" class="btn btn-primary add-account" :disabled="!!busy || !api.isTauri" @click="edit(true)">＋ 添加账号</button>
+            <div class="list-head">
+              <h3>账号列表</h3>
+              <button type="button" class="btn btn-ghost btn-small add-account" :disabled="!!busy || !api.isTauri" @click="edit(true)">＋ 添加账号</button>
+            </div>
+            <div class="search-field">
+              <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.5" /><path d="m10.5 10.5 3 3" /></svg>
+              <input v-model="query" type="search" aria-label="搜索账号" placeholder="搜索名称或邮箱" :disabled="!!busy" />
+            </div>
           </div>
           <div class="account-list">
             <p v-if="busy === 'load'" class="empty" role="status">正在读取本机账号…</p>
             <p v-else-if="!filtered.length" class="empty">{{ query ? '未找到匹配的账号' : '暂无账号，请在桌面端添加。' }}</p>
             <button v-for="account in filtered" :key="account.id" type="button" class="account-row" :class="{ selected: selectedId === account.id }" :aria-pressed="selectedId === account.id" :disabled="!!busy" @click="select(account)">
               <span class="avatar" :class="{ legacy: account.source === 'legacy' }" aria-hidden="true">{{ account.source === 'legacy' ? '↗' : account.name.slice(0, 1).toUpperCase() }}</span>
-              <span class="row-body"><span class="row-name">{{ account.name }} <span v-if="account.active" class="default-dot" title="新会话默认账号" /></span><span class="row-email">{{ account.email || (account.source === 'system' ? '使用原有 Claude 目录' : '等待首次登录') }}</span></span>
-              <span class="row-status" :class="account.status">{{ claudeStatus(account.status) }}</span>
+              <span class="row-body">
+                <span class="row-heading"><span class="row-name" :title="account.name">{{ account.name }}</span><span v-if="account.active" class="row-default">默认</span></span>
+                <span class="row-email" :title="account.email">{{ accountSubtitle(account) }}</span>
+                <span class="row-status" :class="account.status"><span class="status-dot" />{{ claudeStatus(account.status) }}</span>
+              </span>
             </button>
           </div>
           <div class="sidebar-foot"><span class="isolation-dot" /> 登录、设置和历史分别存储</div>
@@ -225,42 +242,55 @@ function close() { if (!busy.value) emit('close') }
           </form>
 
           <template v-else-if="selected">
-            <div class="detail-head"><div><p class="eyebrow">{{ selected.source === 'system' ? '系统目录' : selected.source === 'legacy' ? '旧版快照' : '独立账号' }}</p><h3>{{ selected.name }}</h3></div><span v-if="selected.active" class="default-badge">新会话默认</span></div>
-            <p class="detail-email">{{ selected.email || '尚未记录登录邮箱' }}</p>
-            <div class="status-line" :class="selected.status"><span class="status-dot" /><span>{{ claudeStatus(selected.status) }}</span><span v-if="selected.subscriptionType" class="plan">{{ selected.subscriptionType.toUpperCase() }}</span></div>
-            <p class="status-message">{{ selected.message }}</p>
+            <div class="detail-head">
+              <div class="detail-identity">
+                <div class="identity-meta"><span>{{ selected.source === 'system' ? '系统目录' : selected.source === 'legacy' ? '旧版快照' : '独立账号' }}</span><span v-if="selected.subscriptionType" class="plan">{{ selected.subscriptionType.toUpperCase() }}</span></div>
+                <h3>{{ selected.name }}</h3>
+                <p v-if="selected.email && selected.email !== selected.name" class="detail-email">{{ selected.email }}</p>
+              </div>
+              <span v-if="selected.active" class="default-badge">新会话默认</span>
+            </div>
+            <div class="login-state">
+              <div class="status-line" :class="selected.status"><span class="status-dot" /><strong>{{ claudeStatus(selected.status) }}</strong></div>
+              <p class="status-message">{{ selected.message }}</p>
+            </div>
             <template v-if="selected.source === 'legacy'">
               <div class="migration-note"><strong>迁移为独立账号</strong><p>用此邮箱重新登录一次，建立独立目录。旧版快照保留在本机，之后不再轮换全局凭证。</p></div>
             </template>
             <dl v-else class="facts">
               <div><dt>网络代理</dt><dd :title="selected.proxy">{{ proxyLabel(selected.proxy) }}</dd></div>
-              <div class="path-fact"><dt>账号目录</dt><dd><code>{{ selected.configDir }}</code><button type="button" class="text-button" @click="copyPath">复制</button></dd></div>
+              <div class="path-fact"><dt>账号目录</dt><dd><code :title="selected.configDir">{{ selected.configDir }}</code><button type="button" class="btn btn-ghost btn-small copy-path" aria-label="复制账号目录" @click="copyPath">复制</button></dd></div>
             </dl>
             <div v-if="selected.source === 'system'" class="form-note">此入口使用本机原有 Claude 目录。添加其他账号时选择「添加账号」，在新目录中完成登录。</div>
             <div class="detail-actions">
               <button v-if="selected.source === 'system' && ['conflict', 'unverified'].includes(selected.status)" type="button" class="btn btn-primary" :disabled="!!busy || !api.isTauri" @click="confirming = 'repair'; removing = false">修复系统身份</button>
-              <button v-if="selected.status === 'unverified' || selected.source === 'system'" type="button" class="btn" :class="canUseClaudeAccount(selected) ? 'btn-ghost' : 'btn-primary'" :disabled="!!busy || !api.isTauri" @click="verify">{{ busy === 'verify' ? '检查中…' : '检查登录' }}</button>
+              <button v-if="selected.status === 'unverified' || selected.source === 'system'" type="button" class="btn" :class="canUseClaudeAccount(selected) || (selected.source === 'system' && ['conflict', 'unverified'].includes(selected.status)) ? 'btn-ghost' : 'btn-primary'" :disabled="!!busy || !api.isTauri" @click="verify">{{ busy === 'verify' ? '检查中…' : '检查登录' }}</button>
               <button v-if="canUseClaudeAccount(selected)" type="button" class="btn btn-primary" :disabled="!!busy || selected.active || !api.isTauri" @click="useAccount">{{ busy === 'switch' ? '设置中…' : selected.active ? '已设为默认' : '设为默认账号' }}</button>
               <button v-if="selected.source !== 'system'" type="button" class="btn" :class="canUseClaudeAccount(selected) || selected.status === 'unverified' ? 'btn-ghost' : 'btn-primary'" :disabled="!!busy || !api.isTauri" @click="login">{{ busy === 'login' ? '等待授权…' : selected.source === 'legacy' ? '迁移并登录' : canUseClaudeAccount(selected) ? '重新登录' : '登录账号' }}</button>
               <button v-if="selected.source !== 'legacy'" type="button" class="btn btn-ghost" :disabled="!!busy || !api.isTauri" @click="edit()">编辑</button>
             </div>
-            <div class="credential-zone">
-              <button v-if="!confirming" type="button" class="text-button danger" :disabled="!!busy || !api.isTauri" @click="confirming = 'clear'; removing = false">清除登录凭证</button>
-              <div v-else class="remove-confirm" role="alert">
-                <template v-if="confirming === 'clear'"><strong>清除「{{ selected.name }}」的登录凭证？</strong><p>此账号在 Agent Dock 中运行的终端将关闭，登录状态将被清除，会话历史继续保留。{{ selected.source === 'system' ? '此操作也会影响共用系统目录的其他 Claude 窗口，请先关闭这些窗口。' : '' }}</p></template>
-                <template v-else><strong>同步系统 Claude 的实际身份？</strong><p>将通过 Claude 身份接口核验当前凭证，并修正系统缓存的账号信息。系统账号在 Agent Dock 中运行的终端将关闭；请先关闭其他共用系统目录的 Claude 窗口。</p></template>
-                <div class="actions"><button type="button" class="btn btn-ghost btn-small" :disabled="!!busy" @click="confirming = ''">取消</button><button type="button" class="btn btn-small" :class="confirming === 'clear' ? 'btn-danger' : 'btn-primary'" :disabled="!!busy" @click="confirmAction">{{ busy === 'clear' ? '清除中…' : busy === 'repair' ? '修复中…' : confirming === 'clear' ? '确认清除凭证' : '核验并修复' }}</button></div>
-              </div>
-            </div>
-            <div v-if="selected.source !== 'system'" class="remove-zone">
-              <button v-if="!removing" type="button" class="text-button danger" :disabled="!!busy || !api.isTauri" @click="removing = true; confirming = ''">移出账号列表</button>
-              <div v-else class="remove-confirm" role="alert">
-                <p>将「{{ selected.name }}」移出列表？登录目录和历史会保留{{ selected.active ? '，新会话将回到系统 Claude' : '' }}。</p>
-                <div class="actions"><button type="button" class="btn btn-ghost btn-small" :disabled="!!busy" @click="removing = false">取消</button><button type="button" class="btn btn-danger btn-small" :disabled="!!busy" @click="remove">{{ busy === 'remove' ? '移除中…' : '移出列表' }}</button></div>
+            <div class="account-maintenance">
+              <h4>账号管理</h4>
+              <div class="maintenance-actions" :class="{ 'is-confirming': confirming || removing }">
+                <div class="credential-zone">
+                  <button v-if="!confirming" type="button" class="text-button danger" :disabled="!!busy || !api.isTauri" @click="confirming = 'clear'; removing = false">清除登录凭证</button>
+                  <div v-else class="remove-confirm" role="alert">
+                    <template v-if="confirming === 'clear'"><strong>清除「{{ selected.name }}」的登录凭证？</strong><p>此账号在 Agent Dock 中运行的终端将关闭，登录状态将被清除，会话历史继续保留。{{ selected.source === 'system' ? '此操作也会影响共用系统目录的其他 Claude 窗口，请先关闭这些窗口。' : '' }}</p></template>
+                    <template v-else><strong>同步系统 Claude 的实际身份？</strong><p>将通过 Claude 身份接口核验当前凭证，并修正系统缓存的账号信息。系统账号在 Agent Dock 中运行的终端将关闭；请先关闭其他共用系统目录的 Claude 窗口。</p></template>
+                    <div class="actions"><button type="button" class="btn btn-ghost btn-small" :disabled="!!busy" @click="confirming = ''">取消</button><button type="button" class="btn btn-small" :class="confirming === 'clear' ? 'btn-danger' : 'btn-primary'" :disabled="!!busy" @click="confirmAction">{{ busy === 'clear' ? '清除中…' : busy === 'repair' ? '修复中…' : confirming === 'clear' ? '确认清除凭证' : '核验并修复' }}</button></div>
+                  </div>
+                </div>
+                <div v-if="selected.source !== 'system'" class="remove-zone">
+                  <button v-if="!removing" type="button" class="text-button danger" :disabled="!!busy || !api.isTauri" @click="removing = true; confirming = ''">移出账号列表</button>
+                  <div v-else class="remove-confirm" role="alert">
+                    <p>将「{{ selected.name }}」移出列表？登录目录和历史会保留{{ selected.active ? '，新会话将回到系统 Claude' : '' }}。</p>
+                    <div class="actions"><button type="button" class="btn btn-ghost btn-small" :disabled="!!busy" @click="removing = false">取消</button><button type="button" class="btn btn-danger btn-small" :disabled="!!busy" @click="remove">{{ busy === 'remove' ? '移除中…' : '移出列表' }}</button></div>
+                  </div>
+                </div>
               </div>
             </div>
           </template>
-          <div v-else class="detail-empty"><span class="claude-mark" aria-hidden="true">✳</span><h3>为不同工作保留各自的账号</h3><p>添加账号后，在独立目录完成登录。已有会话会继续使用原来的账号。</p></div>
+          <div v-else class="detail-empty"><span class="claude-mark" aria-hidden="true"><ToolMark id="claude" /></span><h3>为不同工作保留各自的账号</h3><p>添加账号后，在独立目录完成登录。已有会话会继续使用原来的账号。</p></div>
         </section>
       </div>
       <footer><span>恢复历史会话时，自动使用该会话所属的账号。</span><button type="button" class="text-button" :disabled="!!busy" @click="reload">{{ busy === 'load' ? '刷新中…' : '刷新状态' }}</button></footer>
@@ -269,66 +299,88 @@ function close() { if (!busy.value) emit('close') }
 </template>
 
 <style scoped>
-.credential-zone { margin-top: 24px; }
+.credential-zone, .remove-zone { min-width: 0; }
 .credential-zone .remove-confirm strong { display: block; margin-bottom: 8px; }
-.claude-dialog { width: 880px; max-width: calc(100vw - 48px); max-height: calc(100vh - 48px); padding: 0; overflow: auto; outline: none; }
+.claude-dialog { display: flex; flex-direction: column; width: 960px; height: 720px; max-width: calc(100vw - 48px); max-height: calc(100vh - 48px); padding: 0; overflow: hidden; outline: none; }
 .dialog-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 24px; }
-.heading { display: flex; align-items: center; gap: 16px; }
-.claude-mark { color: var(--ad-claude); font-size: 32px; line-height: 40px; }
-h2, h3, p { margin: 0; }
+.heading { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.claude-mark { display: block; width: 40px; height: 40px; flex-shrink: 0; }
+h2, h3, h4, p { margin: 0; }
 h2 { font-size: 20px; line-height: 28px; font-weight: 600; }
 h3 { font-size: 16px; line-height: 24px; font-weight: 600; overflow-wrap: anywhere; }
+h4 { font-size: 12px; line-height: 20px; font-weight: 600; }
 .heading p, .muted, .status-message, .form-note, .detail-empty p { color: var(--ad-muted); font-size: 12px; line-height: 20px; }
 .heading p { margin-top: 4px; }
-.summary { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; padding: 12px 24px; border-block: 1px solid var(--ad-border); color: var(--ad-muted); font-size: 12px; }
-.summary strong { margin-left: 8px; color: var(--ad-text); font-weight: 600; }
-.workspace { display: grid; grid-template-columns: 320px minmax(0, 1fr); min-height: 440px; }
-.account-sidebar { display: flex; flex-direction: column; border-right: 1px solid var(--ad-border); min-width: 0; }
+.dialog-head, .summary, .banner, footer { flex-shrink: 0; }
+.summary { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 12px 24px; border-block: 1px solid var(--ad-border); color: var(--ad-muted); font-size: 12px; background: var(--ad-float-inset); }
+.summary-default { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.summary strong { min-width: 0; color: var(--ad-text); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.summary-count { flex-shrink: 0; font-variant-numeric: tabular-nums; }
+.workspace { display: grid; grid-template-columns: 304px minmax(0, 1fr); flex: 1; min-height: 0; overflow: hidden; }
+.account-sidebar { display: flex; flex-direction: column; border-right: 1px solid var(--ad-border); min-width: 0; min-height: 0; background: var(--ad-float-inset); }
 .list-tools { display: flex; flex-direction: column; gap: 8px; padding: 16px; }
+.list-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.list-head h3 { font-size: 12px; line-height: 20px; color: var(--ad-muted); }
+.search-field { position: relative; }
+.search-field svg { position: absolute; left: 12px; top: 8px; width: 16px; height: 16px; fill: none; stroke: var(--ad-muted); stroke-width: 1.4; pointer-events: none; }
+.search-field input { padding-left: 36px; }
 .list-tools input, .account-form input, .account-form select { width: 100%; height: 32px; font-size: 13px; }
 .btn { height: 32px; font-size: 13px; }
 .btn-small { height: 28px; font-size: 12px; }
-.account-list { flex: 1; max-height: 360px; overflow-y: auto; padding: 0 8px 8px; }
-.account-row { display: flex; align-items: center; gap: 8px; text-align: left; width: 100%; padding: 12px 8px; border: 1px solid transparent; border-left: 3px solid transparent; border-radius: 4px; margin-bottom: 4px; }
+.account-list { flex: 1; min-height: 0; overflow-y: auto; scrollbar-gutter: stable; padding: 0 8px 8px; }
+.account-row { display: flex; align-items: flex-start; gap: 12px; text-align: left; width: 100%; padding: 12px; border: 1px solid transparent; border-left: 3px solid transparent; border-radius: 4px; margin-bottom: 4px; }
 .account-row:hover { background: var(--ad-hover); }
 .account-row.selected { background: var(--ad-selected); border-left-color: var(--ad-claude); }
 .account-row:disabled { opacity: 0.7; }
 .avatar { display: grid; place-items: center; height: 32px; width: 32px; flex-shrink: 0; color: var(--ad-claude); background: color-mix(in srgb, var(--ad-claude) 12%, transparent); border-radius: 4px; font-weight: 600; }
 .avatar.legacy { color: var(--ad-warning); background: color-mix(in srgb, var(--ad-warning) 12%, transparent); }
-.row-body { display: flex; flex-direction: column; min-width: 0; flex: 1; }
-.row-name { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; }
+.row-body { display: flex; flex-direction: column; gap: 4px; min-width: 0; flex: 1; }
+.row-heading { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.row-name { min-width: 0; font-size: 13px; line-height: 20px; font-weight: 600; }
 .row-name, .row-email { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.row-email { font-size: 11px; color: var(--ad-muted); margin-top: 4px; }
+.row-email { font-size: 12px; line-height: 16px; color: var(--ad-muted); }
+.row-default { flex-shrink: 0; padding: 0 4px; border-radius: 4px; background: color-mix(in srgb, var(--ad-claude) 12%, transparent); color: var(--ad-claude); font-size: 11px; line-height: 20px; }
 .default-dot, .isolation-dot, .status-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--ad-claude); flex-shrink: 0; }
-.row-status { font-size: 11px; flex-shrink: 0; color: var(--ad-muted); }
+.row-status { display: flex; align-items: center; gap: 6px; font-size: 11px; line-height: 16px; color: var(--ad-muted); }
+.row-status .status-dot { width: 4px; height: 4px; background: currentColor; }
 .row-status.ready { color: var(--ad-success); }
-.row-status.legacy, .row-status.refreshable { color: var(--ad-warning); }
+.row-status.legacy, .row-status.refreshable, .row-status.unverified { color: var(--ad-warning); }
 .row-status.broken, .row-status.conflict { color: var(--ad-error); }
 .sidebar-foot { padding: 12px 16px; display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--ad-muted); border-top: 1px solid var(--ad-border); }
 .isolation-dot { background: var(--ad-success); }
-.account-detail { padding: 24px; min-width: 0; display: flex; flex-direction: column; }
-.detail-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
-.eyebrow { color: var(--ad-muted); font-size: 12px; margin-bottom: 8px; }
+.account-detail { padding: 24px; min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow-y: auto; scrollbar-gutter: stable; }
+.account-detail > .form-note { margin-top: 16px; }
+.detail-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.detail-identity { min-width: 0; }
+.detail-identity h3 { margin-top: 8px; font-size: 18px; line-height: 28px; }
+.identity-meta { display: flex; align-items: center; gap: 8px; color: var(--ad-muted); font-size: 12px; line-height: 20px; }
 .default-badge { white-space: nowrap; font-size: 11px; color: var(--ad-claude); border: 1px solid color-mix(in srgb, var(--ad-claude) 32%, transparent); padding: 4px 8px; border-radius: 4px; }
-.detail-email { margin-top: 8px; color: var(--ad-muted); overflow-wrap: anywhere; }
-.status-line { display: flex; align-items: center; gap: 8px; margin-top: 24px; font-size: 13px; }
+.detail-email { margin-top: 4px; color: var(--ad-muted); font-size: 13px; line-height: 20px; overflow-wrap: anywhere; }
+.login-state { margin-top: 20px; padding: 12px 16px; border: 1px solid var(--ad-border); border-radius: 4px; background: var(--ad-float-inset); }
+.status-line { display: flex; align-items: center; gap: 8px; font-size: 13px; line-height: 20px; }
+.status-line strong { font-weight: 600; }
 .status-line .status-dot { background: var(--ad-muted); }
 .status-line.ready .status-dot { background: var(--ad-success); }
-.status-line.refreshable .status-dot, .status-line.legacy .status-dot { background: var(--ad-warning); }
+.status-line.refreshable .status-dot, .status-line.legacy .status-dot, .status-line.unverified .status-dot { background: var(--ad-warning); }
 .status-line.broken .status-dot, .status-line.conflict .status-dot { background: var(--ad-error); }
-.plan { color: var(--ad-muted); font-family: var(--ad-mono); font-size: 11px; margin-left: auto; }
-.status-message { margin-top: 8px; }
-.facts { margin: 24px 0 16px; padding: 0; }
-.facts > div { display: flex; gap: 16px; padding: 12px 0; border-top: 1px solid var(--ad-border); font-size: 12px; }
-.facts dt { width: 64px; flex-shrink: 0; color: var(--ad-muted); }
+.plan { padding: 0 6px; border: 1px solid var(--ad-border-strong); border-radius: 4px; font-family: var(--ad-mono); font-size: 10px; line-height: 18px; }
+.status-message { margin-top: 4px; overflow-wrap: anywhere; }
+.facts { margin: 16px 0 0; padding: 0; }
+.facts > div { display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: 16px; padding: 12px 0; border-bottom: 1px solid var(--ad-border); font-size: 12px; line-height: 20px; }
+.facts dt { color: var(--ad-muted); }
 .facts dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
-.path-fact dd { display: flex; gap: 8px; align-items: flex-start; flex: 1; }
-.path-fact code { font-family: var(--ad-mono); font-size: 11px; flex: 1; overflow-wrap: anywhere; }
+.path-fact dd { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: flex-start; }
+.path-fact code { min-width: 0; font-family: var(--ad-mono); font-size: 11px; line-height: 18px; overflow-wrap: anywhere; color: var(--ad-muted); }
+.copy-path { min-width: 48px; }
 .text-button { padding: 0; color: var(--ad-muted); font-size: 12px; flex-shrink: 0; }
 .text-button:hover:not(:disabled) { color: var(--ad-text); text-decoration: underline; }
 .text-button.danger { color: var(--ad-error); }
-.detail-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 24px; }
-.remove-zone { margin-top: auto; padding-top: 24px; }
+.detail-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 20px; }
+.account-maintenance { margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--ad-border); }
+.account-maintenance h4 { color: var(--ad-muted); }
+.maintenance-actions { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 12px 24px; margin-top: 8px; }
+.maintenance-actions.is-confirming { flex-direction: column; align-items: stretch; }
+.maintenance-actions > div > .text-button { min-height: 28px; }
 .remove-confirm { padding: 12px; border: 1px solid color-mix(in srgb, var(--ad-error) 32%, transparent); border-radius: 4px; }
 .remove-confirm p { font-size: 12px; margin-bottom: 12px; }
 .actions { display: flex; justify-content: flex-end; gap: 8px; }
@@ -352,7 +404,27 @@ h3 { font-size: 16px; line-height: 24px; font-weight: 600; overflow-wrap: anywhe
 footer { display: flex; align-items: center; justify-content: space-between; gap: 16px; border-top: 1px solid var(--ad-border); padding: 12px 24px; color: var(--ad-muted); font-size: 11px; }
 .empty { padding: 24px 8px; color: var(--ad-muted); font-size: 12px; text-align: center; }
 .detail-empty { margin: auto; max-width: 280px; text-align: center; }
+.detail-empty .claude-mark { margin: 0 auto; }
 .detail-empty h3 { margin: 16px 0 8px; }
-@media (max-width: 720px) { .workspace { grid-template-columns: 1fr; } .account-sidebar { border-right: none; border-bottom: 1px solid var(--ad-border); } .account-list { max-height: 180px; } .sidebar-foot { display: none; } .dialog-head, .account-detail { padding: 16px; } footer { align-items: flex-start; } }
+@media (max-width: 760px) {
+  .claude-dialog { max-width: calc(100vw - 32px); max-height: calc(100vh - 32px); }
+  .workspace { grid-template-columns: 240px minmax(0, 1fr); }
+  .dialog-head, .account-detail { padding: 16px; }
+  .summary, footer { padding: 12px 16px; }
+  .summary { flex-wrap: wrap; gap: 8px; }
+  .detail-head { flex-wrap: wrap; gap: 8px; }
+  .list-tools { padding: 12px; }
+  .account-row { gap: 8px; padding: 12px 8px; }
+  .facts > div { grid-template-columns: 1fr; gap: 4px; }
+}
+@media (max-width: 560px) {
+  .workspace { display: flex; flex-direction: column; overflow-y: auto; }
+  .account-sidebar { flex-shrink: 0; border-right: none; border-bottom: 1px solid var(--ad-border); }
+  .account-list { flex: none; max-height: 176px; }
+  .account-detail { flex: 1 0 auto; overflow: visible; }
+  .sidebar-foot { display: none; }
+  .heading p { max-width: 220px; }
+  footer { align-items: flex-start; }
+}
 @media (prefers-reduced-motion: reduce) { .spinner { animation: none; } }
 </style>

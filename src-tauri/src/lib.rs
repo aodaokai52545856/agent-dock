@@ -22,6 +22,7 @@ mod platform;
 mod proxy;
 mod pty;
 mod session_cite;
+mod session_artifacts;
 mod state;
 mod tools;
 mod window_chrome;

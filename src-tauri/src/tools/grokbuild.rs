@@ -142,6 +142,7 @@ fn parse_summary(path: &Path, project_cwd: &str) -> Option<SessionRow> {
         },
         updated_at: updated,
         rename_kind: RenameKind::Native,
+        account: None,
     })
 }
 

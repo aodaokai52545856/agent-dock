@@ -154,6 +154,7 @@ fn read_state(session_dir: &Path, id: &str, work_dir: &str, project_cwd: &str) -
             },
             updated_at: file_mtime_millis(session_dir),
             rename_kind: RenameKind::Native,
+            account: None,
         });
     }
     let text = fs::read_to_string(&path).ok()?;
@@ -185,6 +186,7 @@ fn read_state(session_dir: &Path, id: &str, work_dir: &str, project_cwd: &str) -
         cwd,
         updated_at: updated,
         rename_kind: RenameKind::Native,
+        account: None,
     })
 }
 

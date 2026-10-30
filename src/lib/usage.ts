@@ -104,7 +104,77 @@ export function pointMetric(row: UsagePoint, metric: UsageMetric): number {
 export function heatMetric(cell: UsageHeatCell, metric: UsageMetric): number {
   if (metric === 'cost') return cell.costUsd
   if (metric === 'requests') return cell.requests
+  if (metric === 'cache') return cacheHitPercent(cell.inputTokens, cell.cacheReadTokens, cell.cacheCreationTokens)
   return cell.tokens
+}
+
+export const USAGE_METRIC_LABELS: Record<UsageMetric, string> = {
+  cost: '总成本', requests: '总请求', tokens: '真实消耗 Tokens', cache: '缓存命中率'
+}
+
+export function usageDateKey(date: Date) {
+  return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`
+}
+
+function addCalendarDays(date: Date, days: number) {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate() + days)
+}
+
+// Calendar layout and quantile shading follow CC Switch v4.0.21. See THIRD_PARTY_NOTICES.md.
+export function buildUsageCalendar(rows: UsageHeatCell[], metric: UsageMetric, end: number, page = 0) {
+  const today = new Date(end * 1000)
+  const monday = addCalendarDays(today, -((today.getDay() + 6) % 7))
+  const start = addCalendarDays(monday, -364 - page * 371)
+  const byDay = new Map(rows.map(row => [usageDateKey(new Date(row.ts * 1000)), row]))
+  const values = rows.filter(row => metric === 'cache'
+    ? row.inputTokens + row.cacheReadTokens + row.cacheCreationTokens > 0
+    : heatMetric(row, metric) > 0).map(row => heatMetric(row, metric)).sort((a, b) => a - b)
+  const thresholds = [0.25, 0.5, 0.75].map(q => values[Math.min(values.length - 1, Math.floor(values.length * q))] ?? Infinity)
+  const weeks = Array.from({ length: 53 }, (_, week) => Array.from({ length: 7 }, (_, day) => {
+    const date = addCalendarDays(start, week * 7 + day)
+    const key = usageDateKey(date)
+    const row = byDay.get(key)
+    const future = date.getTime() > today.getTime()
+    const known = row && !future && (metric === 'cache'
+      ? row.inputTokens + row.cacheReadTokens + row.cacheCreationTokens > 0
+      : heatMetric(row, metric) > 0)
+    const value = known ? heatMetric(row!, metric) : null
+    const level = value == null ? 0 : value <= thresholds[0] ? 1 : value <= thresholds[1] ? 2 : value <= thresholds[2] ? 3 : 4
+    return { key, date, row, value, level, future }
+  }))
+  let lastLabel = -4
+  let lastMonth = -1
+  const months = weeks.map((week, index) => {
+    const month = week[0].date.getMonth()
+    const changed = month !== lastMonth
+    lastMonth = month
+    if (!changed || index - lastLabel < 3) return ''
+    lastLabel = index
+    return `${month + 1}月`
+  })
+  const visible = weeks.flat().filter(day => !day.future)
+  const first = rows.reduce((min, row) => Math.min(min, row.ts), end)
+  return {
+    weeks, months, start: usageDateKey(start), end: visible.at(-1)!.key,
+    activeDays: visible.filter(day => (day.row?.requests ?? 0) > 0).length,
+    requests: visible.reduce((sum, day) => sum + (day.row?.requests ?? 0), 0),
+    hasOlder: first < start.getTime() / 1000
+  }
+}
+
+export function completeUsagePoints(rows: UsagePoint[], start: number, end: number) {
+  if (end <= start) return []
+  const hourly = end - start <= 36 * 3600
+  if ((end - start) / (hourly ? 3600 : 86400) > 800) return [...rows].sort((a, b) => a.ts - b.ts)
+  const byTime = new Map(rows.map(row => [row.ts, row]))
+  const first = hourly ? Math.floor(start / 3600) * 3600 : new Date(new Date(start * 1000).setHours(0, 0, 0, 0)).getTime() / 1000
+  const result: UsagePoint[] = []
+  for (let ts = first; ts < end && result.length < 800; ts = hourly ? ts + 3600 : addCalendarDays(new Date(ts * 1000), 1).getTime() / 1000) {
+    const date = new Date(ts * 1000)
+    const label = hourly ? `${pad2(date.getHours())}:00` : `${date.getMonth() + 1}/${date.getDate()}`
+    result.push(byTime.get(ts) ?? { ts, label, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0, tokens: 0, costUsd: 0, requests: 0 })
+  }
+  return result
 }
 
 export function formatLogTime(ts: number): string {
