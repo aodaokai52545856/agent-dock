@@ -1,5 +1,5 @@
 use crate::tools::update::{
-    app_version, compare_label, http_download_file, http_get_text, parse_version, proxy_pairs,
+    app_version, compare_label, http_download_file_progress, http_get_text, parse_version, proxy_pairs,
 };
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -206,17 +206,41 @@ pub fn upgrade_app(proxy_url: Option<&str>) -> Result<AppUpgradeResult, String> 
 }
 
 fn upgrade_app_with(exe: &Path, proxy_url: Option<&str>) -> Result<AppUpgradeResult, String> {
+    match prepare_update_with(exe, proxy_url, &mut |_, _, _| {})? {
+        Some(prepared) => apply_prepared(&prepared),
+        None => Ok(AppUpgradeResult { ok: true, log: "已经是最新版本，无需下载。".into(), restart: false }),
+    }
+}
+
+pub struct PreparedUpdate {
+    kind: ClientKind,
+    package: PathBuf,
+    current_exe: PathBuf,
+    log: String,
+    pub version: String,
+}
+
+pub fn prepare_update(
+    proxy_url: Option<&str>,
+    progress: &mut dyn FnMut(&str, u64, Option<u64>),
+) -> Result<Option<PreparedUpdate>, String> {
+    let exe = std::env::current_exe().map_err(|err| format!("无法定位当前程序：{err}"))?;
+    prepare_update_with(&exe, proxy_url, progress)
+}
+
+fn prepare_update_with(
+    exe: &Path,
+    proxy_url: Option<&str>,
+    progress: &mut dyn FnMut(&str, u64, Option<u64>),
+) -> Result<Option<PreparedUpdate>, String> {
+    progress("检查客户端版本", 0, None);
     let mut log = String::new();
     let info = check_app_update_with(exe, proxy_url)?;
     push_line(&mut log, &format!("当前 {} · 最新 {}", info.local_version, info.latest_version));
     push_line(&mut log, &format!("安装包类型：{}", info.kind_label));
     if info.compare != "可更新" {
         push_line(&mut log, "已经是最新版本，无需下载。");
-        return Ok(AppUpgradeResult {
-            ok: true,
-            log,
-            restart: false,
-        });
+        return Ok(None);
     }
     let proxy = proxy_pairs(proxy_url.unwrap_or(""));
     let release = fetch_latest_release(&proxy)?;
@@ -231,13 +255,25 @@ fn upgrade_app_with(exe: &Path, proxy_url: Option<&str>) -> Result<AppUpgradeRes
     let dest = download_dir()?.join(&asset.name);
     push_line(&mut log, &format!("$ GET {}", asset.browser_download_url));
     push_line(&mut log, "正在下载与当前客户端同类的安装包…");
-    let size = http_download_file(&asset.browser_download_url, &proxy, &dest)?;
+    let size = http_download_file_progress(&asset.browser_download_url, &proxy, &dest, &mut |bytes, total| {
+        progress("下载安装包", bytes, total.or((asset.size > 0).then_some(asset.size)));
+    })?;
     if size < MIN_ASSET_BYTES {
         let _ = fs::remove_file(&dest);
         return Err(format!("下载文件过小（{size} 字节），可能不是安装包"));
     }
+    if asset.size > 0 && size != asset.size {
+        let _ = fs::remove_file(&dest);
+        return Err(format!("安装包下载不完整：收到 {size} 字节，预期 {} 字节，请重试", asset.size));
+    }
     push_line(&mut log, &format!("已下载 {size} 字节 → {}", dest.display()));
-    let restart = apply_package(kind, &dest, exe, &mut log)?;
+    Ok(Some(PreparedUpdate { kind, package: dest, current_exe: exe.to_path_buf(), log, version: latest }))
+}
+
+pub fn apply_prepared(prepared: &PreparedUpdate) -> Result<AppUpgradeResult, String> {
+    if !prepared.package.is_file() { return Err("已下载的安装包不存在，请重新下载更新。".into()); }
+    let mut log = prepared.log.clone();
+    let restart = apply_package(prepared.kind, &prepared.package, &prepared.current_exe, &mut log)?;
     Ok(AppUpgradeResult {
         ok: true,
         log,

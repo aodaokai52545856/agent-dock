@@ -61,7 +61,6 @@ import {
   saveProject,
   selectProject,
   selectedProject,
-  setToolProbes,
   showToast,
   store,
   watchPendingSession
@@ -70,6 +69,7 @@ import { isPendingSessionId, resolveOpenTarget } from './lib/liveBind'
 import { refreshCodexThreads } from './lib/pipeline'
 import type { ClaudeContinuation, ProjectDraft, SessionDoc, ToolId } from './lib/types'
 import { appearanceFromSettings, resolvedTheme, systemPrefersLight } from './lib/appearance'
+import { startVersionService, stopVersionService } from './lib/versionService'
 
 const projectOpen = ref(false)
 const editing = ref(false)
@@ -113,6 +113,7 @@ const removingProject = computed(() => store.projects.find((item) => item.id ===
 
 onMounted(() => {
   void boot()
+  void startVersionService()
   void nextTick().then(() => {
     requestAnimationFrame(() => {
       void api.revealMainWindow()
@@ -123,6 +124,7 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  stopVersionService()
   window.removeEventListener('focus', refreshAfterWindowFocus)
   window.removeEventListener('blur', markWindowBlurred)
 })
@@ -594,12 +596,6 @@ function onCcswitchInstall() {
   ccswitchOpen.value = true
 }
 
-async function onVersionsChanged() {
-  if (!api.isTauri) return
-  setToolProbes(await api.probeTools())
-  void refreshSessions()
-}
-
 async function onGrokSwitched() {
   noteGrokAccountChange()
   const grokLive = store.live.filter((item) => item.toolId === 'grokbuild')
@@ -807,7 +803,6 @@ const confirmCopy = () => {
     <VersionDrawer
       :open="versionOpen"
       @close="versionOpen = false"
-      @changed="onVersionsChanged"
     />
     <CcswitchDialog
       :open="ccswitchOpen"

@@ -5,6 +5,7 @@ import { isTauri } from '../lib/api'
 import { beginWindowMove, endWindowMove, noteWindowMove } from '../lib/layout'
 import { setAppMode, store } from '../lib/store'
 import { isTitlebarDoubleClick } from '../lib/titleDrag'
+import { versionCenter } from '../lib/versionService'
 import ClockMenu from './ClockMenu.vue'
 
 const emit = defineEmits<{
@@ -172,7 +173,12 @@ onUnmounted(() => {
           <button type="button" class="ad-menu-item" role="menuitem" @click="openDeepseek">DeepSeek</button>
         </div>
       </div>
-      <button type="button" class="file-btn" @click="openVersions" @mousedown.stop>版本</button>
+      <button type="button" class="file-btn version-button" aria-label="版本" :title="versionCenter.running.value ? '后台升级进行中，点击查看进度' : '版本与更新'" @click="openVersions" @mousedown.stop>
+        版本
+        <span v-if="versionCenter.running.value" class="version-progress">{{ versionCenter.finished.value }}/{{ versionCenter.batch.value.length }}</span>
+        <span v-else-if="versionCenter.appReady.value" class="version-progress">待安装</span>
+        <span v-else-if="versionCenter.state.unread" class="version-unread" aria-label="有新的版本任务结果" />
+      </button>
       <div class="file" @click.stop @mousedown.stop>
         <button
           type="button"
@@ -296,6 +302,10 @@ onUnmounted(() => {
   line-height: 1.5;
   color: var(--ad-muted);
 }
+
+.version-button { display: inline-flex; align-items: center; gap: 6px; }
+.version-progress { padding: 0 5px; font-size: 10px; line-height: 18px; color: var(--ad-text); background: var(--ad-hover); border-radius: 4px; font-variant-numeric: tabular-nums; }
+.version-unread { width: 5px; height: 5px; border-radius: 50%; background: var(--ad-warning); }
 
 .file-btn:hover,
 .file-btn.is-open {

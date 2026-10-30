@@ -26,6 +26,7 @@ mod session_artifacts;
 mod state;
 mod tools;
 mod window_chrome;
+mod version_tasks;
 
 use chrono::Utc;
 use path_norm::folder_name;
@@ -222,11 +223,29 @@ fn app_version() -> String {
 async fn check_app_update(app: AppHandle, proxy_url: Option<String>) -> Result<AppUpdateInfo, String> {
     let state = state::load_state(&app)?;
     let proxy = proxy_url
-        .filter(|value| !value.trim().is_empty())
         .unwrap_or(state.settings.default_proxy_url);
     tauri::async_runtime::spawn_blocking(move || app_update::check_app_update(Some(proxy.as_str())))
         .await
         .map_err(|err| format!("检查 Agent Dock 版本失败：{err}"))?
+}
+
+#[tauri::command]
+fn version_task_state(tasks: State<'_, Arc<version_tasks::Hub>>) -> version_tasks::Snapshot {
+    tasks.snapshot()
+}
+
+#[tauri::command]
+fn start_version_tasks(
+    app: AppHandle,
+    tasks: State<'_, Arc<version_tasks::Hub>>,
+    targets: Vec<String>,
+    action: version_tasks::Action,
+    proxy_url: Option<String>,
+) -> Result<version_tasks::Snapshot, String> {
+    let settings = state::load_state(&app)?.settings;
+    let proxy = proxy_url.unwrap_or_else(|| settings.default_proxy_url.clone());
+    let proxy = if proxy.trim().is_empty() { String::new() } else { validate_proxy_url(&proxy)? };
+    tasks.start(app, settings, targets, action, Some(proxy))
 }
 
 #[tauri::command]
@@ -1023,6 +1042,7 @@ pub fn run() {
         })
         .setup(|app| {
             claude_accounts::initialize(app.handle())?;
+            app.manage(version_tasks::Hub::new(app.handle().clone()));
             let hub = PtyHub::new();
             hub.start_monitor(app.handle().clone());
             app.manage(hub);
@@ -1049,7 +1069,11 @@ pub fn run() {
                     let _ = win.set_shadow(true);
                 }
                 let closer = app.handle().clone();
-                window_chrome::attach(&win, move || dsh_web::shutdown_app(&closer));
+                window_chrome::attach(&win, move || {
+                    if closer.state::<Arc<version_tasks::Hub>>().running() { return false; }
+                    dsh_web::shutdown_app(&closer);
+                    true
+                });
             }
             Ok(())
         })
@@ -1069,6 +1093,8 @@ pub fn run() {
             app_version,
             check_app_update,
             upgrade_app,
+            version_task_state,
+            start_version_tasks,
             host_platform,
             list_tool_versions,
             upgrade_tool,

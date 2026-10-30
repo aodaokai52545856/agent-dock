@@ -36,6 +36,8 @@ import type {
   ToolProbeMap,
   ToolVersionInfo,
   UpgradeResult,
+  VersionAction,
+  VersionTaskSnapshot,
   UsageDashboard,
   UsageExportResult,
   UsageLogPage,
@@ -395,23 +397,33 @@ export async function listLivePtys(): Promise<LivePtyInfo[]> {
 }
 
 export async function appVersion(): Promise<string> {
-  if (!isTauri) return '0.1.18'
+  if (!isTauri) return '0.1.19'
   return invoke('app_version')
 }
 
 export async function checkAppUpdate(proxyUrl?: string): Promise<AppUpdateInfo> {
   if (!isTauri) {
     return {
-      localVersion: '0.1.18',
-      latestVersion: '0.1.18',
+      localVersion: '0.1.19',
+      latestVersion: '0.1.19',
       compare: '已是最新',
       kind: 'win-setup',
       kindLabel: 'Windows 安装包',
-      assetName: 'AgentDock-0.1.18-Setup.exe',
-      htmlUrl: 'https://github.com/aodaokai52545856/agent-dock/releases/tag/v0.1.18'
+      assetName: 'AgentDock-0.1.19-Setup.exe',
+      htmlUrl: 'https://github.com/aodaokai52545856/agent-dock/releases/tag/v0.1.19'
     }
   }
-  return invoke('check_app_update', { proxyUrl: proxyUrl || null })
+  return invoke('check_app_update', { proxyUrl: proxyUrl ?? null })
+}
+
+export async function versionTaskState(): Promise<VersionTaskSnapshot> {
+  if (!isTauri) return { revision: 0, batchId: '', readyVersion: null, tasks: [] }
+  return invoke('version_task_state')
+}
+
+export async function startVersionTasks(targets: string[], action: VersionAction, proxyUrl: string): Promise<VersionTaskSnapshot> {
+  if (!isTauri) throw new Error('浏览器预览不能安装或升级本机软件，请在桌面端操作。')
+  return invoke('start_version_tasks', { targets, action, proxyUrl })
 }
 
 export async function upgradeApp(proxyUrl?: string): Promise<AppUpgradeResult> {

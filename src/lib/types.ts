@@ -243,6 +243,30 @@ export interface AppUpgradeResult {
   restart: boolean
 }
 
+export type VersionAction = 'upgrade' | 'uninstall' | 'download' | 'apply'
+export type VersionTaskStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'ready'
+export interface VersionTask {
+  id: string
+  batchId: string
+  target: ToolId | 'app'
+  action: VersionAction
+  status: VersionTaskStatus
+  stage: string
+  log: string
+  localVersion: string
+  downloaded: number
+  total: number | null
+  startedAt: number
+  finishedAt: number | null
+  restart: boolean
+}
+export interface VersionTaskSnapshot {
+  revision: number
+  batchId: string
+  readyVersion: string | null
+  tasks: VersionTask[]
+}
+
 export interface DshKeyStatus {
   configured: boolean
   writable: boolean

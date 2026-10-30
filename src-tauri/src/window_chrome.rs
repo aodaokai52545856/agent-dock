@@ -9,7 +9,7 @@ mod windows;
 
 static REVEALED: AtomicBool = AtomicBool::new(false);
 
-pub fn attach(win: &WebviewWindow, on_close: impl Fn() + Send + Sync + 'static) {
+pub fn attach(win: &WebviewWindow, on_close: impl Fn() -> bool + Send + Sync + 'static) {
     apply_window_icon(win);
     // Opaque first. Acrylic + a transparent webview before the first paint
     // is the blank gray window.
@@ -22,11 +22,14 @@ pub fn attach(win: &WebviewWindow, on_close: impl Fn() + Send + Sync + 'static) 
         if matches!(event, tauri::WindowEvent::Resized(_)) {
             apply(&handle);
         }
-        if matches!(
-            event,
-            tauri::WindowEvent::CloseRequested { .. } | tauri::WindowEvent::Destroyed
-        ) {
-            on_close();
+        if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+            if !on_close() {
+                // A close click backgrounds active installers without destroying the app.
+                api.prevent_close();
+                let _ = handle.minimize();
+            }
+        } else if matches!(event, tauri::WindowEvent::Destroyed) {
+            let _ = on_close();
         }
     });
 

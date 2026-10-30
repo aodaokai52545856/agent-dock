@@ -700,23 +700,19 @@ fn http_get_bytes_once(url: &str, proxy: &[(String, String)]) -> Result<Vec<u8>,
     Ok(out)
 }
 
-pub(crate) fn http_download_file(url: &str, proxy: &[(String, String)], dest: &Path) -> Result<u64, String> {
-    match http_download_file_once(url, proxy, dest) {
-        Ok(size) => Ok(size),
-        Err(err) if !proxy.is_empty() => {
-            let _ = fs::remove_file(dest);
-            http_download_file_once(url, &[], dest).map_err(|_| err)
-        }
-        Err(err) => Err(err),
+pub(crate) fn http_download_file_progress(
+    url: &str,
+    proxy: &[(String, String)],
+    dest: &Path,
+    progress: &mut dyn FnMut(u64, Option<u64>),
+) -> Result<u64, String> {
+    let result = http_download_sha256_progress(url, proxy, dest, progress);
+    if let Err(err) = result {
+        let _ = fs::remove_file(dest);
+        if proxy.is_empty() { return Err(err); }
+        http_download_sha256_progress(url, &[], dest, progress).map_err(|_| err)?;
     }
-}
-
-fn http_download_file_once(url: &str, proxy: &[(String, String)], dest: &Path) -> Result<u64, String> {
-    let hash = http_download_sha256_once(url, proxy, dest)?;
-    let _ = hash;
-    fs::metadata(dest)
-        .map(|meta| meta.len())
-        .map_err(|err| format!("无法读取下载文件：{err}"))
+    fs::metadata(dest).map(|meta| meta.len()).map_err(|err| format!("无法读取下载文件：{err}"))
 }
 
 fn http_download_sha256(url: &str, proxy: &[(String, String)], dest: &Path) -> Result<String, String> {
@@ -734,6 +730,15 @@ fn http_download_sha256_once(
     url: &str,
     proxy: &[(String, String)],
     dest: &Path,
+) -> Result<String, String> {
+    http_download_sha256_progress(url, proxy, dest, &mut |_, _| {})
+}
+
+fn http_download_sha256_progress(
+    url: &str,
+    proxy: &[(String, String)],
+    dest: &Path,
+    progress: &mut dyn FnMut(u64, Option<u64>),
 ) -> Result<String, String> {
     let agent = http_agent(proxy, HTTP_BIN_READ_TIMEOUT)?;
     let response = agent
@@ -757,6 +762,8 @@ fn http_download_sha256_once(
     let mut reader = response.into_reader();
     let mut buf = [0u8; 64 * 1024];
     let mut written: u64 = 0;
+    let mut last_progress = std::time::Instant::now();
+    progress(0, declared);
     loop {
         let n = reader
             .read(&mut buf)
@@ -768,6 +775,10 @@ fn http_download_sha256_once(
             .map_err(|err| format!("无法写入下载文件：{err}"))?;
         hasher.update(&buf[..n]);
         written += n as u64;
+        if last_progress.elapsed() >= Duration::from_millis(200) {
+            progress(written, declared);
+            last_progress = std::time::Instant::now();
+        }
     }
     let _ = file.flush();
     if let Some(expected) = declared {
@@ -775,6 +786,7 @@ fn http_download_sha256_once(
             return Err(format!("下载不完整：收到 {written} 字节，声明 {expected} 字节"));
         }
     }
+    progress(written, declared);
     Ok(hex_lower(hasher.finalize().as_slice()))
 }
 
@@ -1475,6 +1487,35 @@ fn semver_tuple(text: &str) -> Option<(u64, u64, u64, Option<String>)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn download_fixture(declared: usize, body: &'static [u8]) -> String {
+        use std::net::TcpListener;
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0; 4096];
+            let _ = stream.read(&mut request);
+            write!(stream, "HTTP/1.1 200 OK\r\nContent-Length: {declared}\r\nConnection: close\r\n\r\n").unwrap();
+            stream.write_all(body).unwrap();
+        });
+        format!("http://{address}/fixture")
+    }
+
+    #[test]
+    fn download_reports_real_byte_progress_and_rejects_partial_packages() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("package.bin");
+        let mut progress = Vec::new();
+        let url = download_fixture(6, b"abcdef");
+        assert_eq!(http_download_file_progress(&url, &[], &path, &mut |bytes, total| progress.push((bytes, total))).unwrap(), 6);
+        assert_eq!(progress.first(), Some(&(0, Some(6))));
+        assert_eq!(progress.last(), Some(&(6, Some(6))));
+        assert_eq!(fs::read(&path).unwrap(), b"abcdef");
+        let truncated = download_fixture(20, b"partial");
+        assert!(http_download_file_progress(&truncated, &[], &path, &mut |_, _| {}).is_err());
+        assert!(!path.exists());
+    }
 
     #[test]
     fn explains_koffi_file_lock() {
