@@ -434,7 +434,7 @@ mod tests {
         hub.start_with(vec!["app".into()], Action::Download, |_, _| {
             Ok(Outcome {
                 status: Status::Ready,
-                version: "0.1.19".into(),
+                version: "0.1.20".into(),
                 log: "downloaded".into(),
                 restart: false,
             })
@@ -449,6 +449,6 @@ mod tests {
         let state = hub.snapshot();
         assert_eq!(state.tasks.len(), 40);
         assert!(!state.tasks.iter().any(|task| task.target == "app"));
-        assert_eq!(state.ready_version.as_deref(), Some("0.1.19"));
+        assert_eq!(state.ready_version.as_deref(), Some("0.1.20"));
     }
 }
