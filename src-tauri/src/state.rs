@@ -18,6 +18,12 @@ pub struct Project {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub enum OmpLaunchMode { Native, #[serde(other)] Wrapped }
+impl Default for OmpLaunchMode {
+    fn default() -> Self { Self::Wrapped }
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AppSettings {
     pub default_proxy_url: String,
     pub opencode_path: String,
@@ -27,6 +33,12 @@ pub struct AppSettings {
     pub claude_path: String,
     #[serde(default)]
     pub pi_path: String,
+    #[serde(default)]
+    pub omp_path: String,
+    #[serde(default)]
+    pub omp_default_profile: String,
+    #[serde(default)]
+    pub omp_launch_mode: OmpLaunchMode,
     #[serde(default)]
     pub dsh_path: String,
     #[serde(default = "crate::platform::default_shell")]
@@ -124,7 +136,7 @@ fn default_session_tool_filter() -> String {
 
 fn normalize_session_tool_filter(value: &str) -> String {
     match value {
-        "all" | "opencode" | "grokbuild" | "kimi" | "claude" | "pi" | "dsh" => value.to_string(),
+        "all" | "opencode" | "grokbuild" | "kimi" | "claude" | "pi" | "omp" | "dsh" => value.to_string(),
         _ => default_session_tool_filter(),
     }
 }
@@ -138,6 +150,9 @@ impl Default for AppSettings {
             kimi_path: String::new(),
             claude_path: String::new(),
             pi_path: String::new(),
+            omp_path: String::new(),
+            omp_default_profile: String::new(),
+            omp_launch_mode: OmpLaunchMode::default(),
             dsh_path: String::new(),
             powershell_path: crate::platform::default_shell(),
             terminal_font_size: default_terminal_font_size(),

@@ -31,6 +31,17 @@ const task = (status: VersionTask['status'], extra: Partial<VersionTask> = {}): 
 const snap = (revision: number, tasks: VersionTask[]): VersionTaskSnapshot => ({ revision, batchId: 'batch', readyVersion: tasks.find(task => task.status === 'ready')?.localVersion || null, tasks })
 async function test(name: string, run: () => Promise<void>) { await run(); console.log(`ok ${name}`) }
 
+await test('OMP pending update survives remount without replacing the client installer',async()=>{
+  const f=fixture();f.set({revision:4,batchId:'omp-batch',readyVersion:'0.1.20',readyTools:{omp:'18.16.0'},tasks:[task('ready',{target:'omp',localVersion:'18.16.0'})]})
+  const center=createVersionCenter(f.backend);await center.check('omp');await center.sync();center.close();center.open('')
+  assert.equal(center.state.rows.find(row=>row.toolId==='omp')?.localVersion,'1.0')
+  assert.equal(center.state.snapshot.readyTools?.omp,'18.16.0')
+  assert.equal(center.state.snapshot.readyVersion,'0.1.20')
+  assert.equal(center.appReady.value,true)
+  const remount=createVersionCenter(f.backend);await remount.sync()
+  assert.equal(remount.state.snapshot.readyTools?.omp,'18.16.0')
+})
+
 await test('closing and reopening retains checks, proxy, queued jobs and busy guard', async () => {
   const f = fixture(), center = createVersionCenter(f.backend)
   await center.sync(); center.open('http://proxy'); await center.check('all')

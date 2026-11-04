@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import * as api from '../lib/api'
-import { formatCiteBlock, wrapBracketedPaste } from '../lib/sessionCite'
+import { formatCiteBlock } from '../lib/sessionCite'
 import { showToast, store } from '../lib/store'
 import { toolLabel, type SessionTurn, type ToolId } from '../lib/types'
 
@@ -68,17 +68,15 @@ async function cite() {
   }
   citing.value = true
   try {
-    await api.ptyWrite(
+    await api.writeSessionText(
       targetPtyId.value,
-      wrapBracketedPaste(
-        formatCiteBlock({
+      formatCiteBlock({
           toolId: props.toolId,
           sessionTitle: props.sessionTitle,
           body: turn.text
         })
-      )
     )
-    showToast('已写入目标终端，未发送')
+    showToast('已写入目标会话，未发送')
     emit('close')
   } catch (err) {
     showToast(err instanceof Error ? err.message : String(err))

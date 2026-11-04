@@ -1,3 +1,4 @@
+import { runOmpPrompt } from '../omp'
 import * as api from '../api.ts'
 import { isPtyBusy } from '../livePulse.ts'
 import { wrapBracketedPaste } from '../sessionCite.ts'
@@ -16,6 +17,7 @@ export type AdapterContext = {
   ptyDataAt: Record<string, number>
   cursorApiKey: string
   isCurrent: () => boolean
+  onInputRequired?: (required:boolean) => void
   now?: () => number
   sleep?: (ms: number) => Promise<void>
   listTurns?: (projectId: string, toolId: ToolId, sessionId: string) => Promise<SessionTurn[]>
@@ -30,6 +32,16 @@ export async function runChannel(node: FlowNode, envelope: Envelope, ctx: Adapte
   }
   if (node.channel.kind === 'cursorSdk') return runCursor(node, envelope, ctx)
   if (node.channel.kind === 'codexApp') return runCodex(node, envelope, ctx)
+  if (node.channel.kind === 'ompRpc' || node.channel.kind === 'pty' && node.channel.toolId === 'omp') {
+    const channel=node.channel
+    const live=ctx.live.find(l=>l.ptyId===channel.ptyId && l.projectId===ctx.projectId && l.toolId==='omp' && l.kind==='ompRpc' && l.alive)
+    if(!live) return {ok:false,text:'',error:'请先绑定已打开的 OMP 会话'}
+    const text=renderEnvelope(envelope,{transform:ctx.verbatim?'verbatim':'roleWrap',contract:node.roleContract})
+    try {
+      if(!ctx.send){await api.writeSessionText(live.ptyId,text);return {ok:true,text:'已写入 OMP 草稿，未发送'}}
+      return {ok:true,text:await runOmpPrompt(live.ptyId,text,ctx.isCurrent,undefined,ctx.onInputRequired)}
+    } catch(e){return {ok:false,text:'',error:String(e)}}
+  }
   return runPty(node, envelope, ctx)
 }
 
@@ -85,7 +97,7 @@ async function runCodex(node: FlowNode, envelope: Envelope, ctx: AdapterContext)
 }
 
 async function runPty(node: FlowNode, envelope: Envelope, ctx: AdapterContext): Promise<AdapterOutcome> {
-  if (node.channel.kind !== 'pty') return { ok: false, text: '', error: '不是窗口节点' }
+  if ((node.channel.kind !== 'pty' && node.channel.kind !== 'ompRpc')) return { ok: false, text: '', error: '不是窗口节点' }
   const ready = preparePtyRun(node, ctx.live, ctx.projectId, { send: ctx.send })
   if (!ready.ok) return { ok: false, text: '', error: ready.error }
   const rendered = renderEnvelope(envelope, {

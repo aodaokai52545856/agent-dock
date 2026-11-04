@@ -321,7 +321,7 @@ onUnmounted(() => {
         </div>
         <div v-if="tab === 'logs'" class="pager"><span>共 {{ formatExactTokens(logs.total) }} 条记录</span><label>每页<select v-model.number="pageSize" aria-label="每页记录数"><option v-for="size in [20, 50, 100]" :key="size" :value="size">{{ size }}</option></select>条</label><span class="page-position">{{ page + 1 }} / {{ pageCount }}</span><button type="button" class="btn btn-ghost btn-small" :disabled="page <= 0 || loading" @click="page = Math.max(0, page - 1)">上一页</button><button type="button" class="btn btn-ghost btn-small" :disabled="page + 1 >= pageCount || loading" @click="page += 1">下一页</button></div>
       </section>
-      <p class="source-note">本地会话统计 · 含 Claude 独立账号 · 成本按 CC Switch 价表估算</p>
+      <p class="source-note">本地会话统计 · 含 Claude 独立账号与 OMP profiles · OMP 费用读取原生记录，其他成本按价表估算</p>
     </div>
 
     <Teleport to="body"><div v-if="settingsOpen || selectedLog" class="ad-mask ad-mask--flush" @click.self="closeDrawers"><aside v-modal="closeDrawers" class="ad-drawer usage-drawer" role="dialog" aria-modal="true" :aria-label="selectedLog ? '请求详情' : '用量设置'" tabindex="-1"><header><h2>{{ selectedLog ? '请求详情' : '用量设置' }}</h2><button type="button" class="btn btn-ghost btn-small" @click="closeDrawers">关闭</button></header>

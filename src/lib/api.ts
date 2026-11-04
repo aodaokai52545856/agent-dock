@@ -1,3 +1,4 @@
+import { isOmpRuntime, ompCommand, ompDraft, ompState } from './omp'
 import { invoke } from '@tauri-apps/api/core'
 import { previewSpend } from './grokSpend'
 import { emptyUsageDashboard, emptyUsageLogs } from './usage'
@@ -317,17 +318,24 @@ export async function ptyOpen(payload: {
   cols: number
   rows: number
   uiTheme?: 'light' | 'dark'
+  profileId?: string
+  ompMode?: import('./types').OmpLaunchMode
 }): Promise<PtyOpened> {
   return invoke('pty_open', payload)
 }
 
 export async function ptyWrite(ptyId: string, data: string): Promise<void> {
   if (!isTauri) return
+  if (isOmpRuntime(ptyId)) {
+    const submit=data.endsWith('\r'); const text=data.replace(/^\x1b\[200~/,'').replace(/\x1b\[201~\r?$/,'');
+    return writeSessionText(ptyId,text,submit);
+  }
   return invoke('pty_write', { ptyId, data })
 }
 
 export async function ptyResize(ptyId: string, cols: number, rows: number): Promise<void> {
   if (!isTauri) return
+  if (isOmpRuntime(ptyId)) return
   return invoke('pty_resize', { ptyId, cols, rows })
 }
 
@@ -393,24 +401,24 @@ export async function ptyBindSession(
 }
 
 export async function listLivePtys(): Promise<LivePtyInfo[]> {
-  return invoke('list_live_ptys')
+  return invoke<LivePtyInfo[]>('list_live_ptys').then(rows=>rows.map(row=>({...row,runtimeId:row.ptyId,profileId:row.toolId==='omp'?row.account?.id:undefined,busy:row.kind==='ompRpc'?!(ompState.sessions[row.ptyId]?.settled??true):undefined})))
 }
 
 export async function appVersion(): Promise<string> {
-  if (!isTauri) return '0.1.19'
+  if (!isTauri) return '0.1.20'
   return invoke('app_version')
 }
 
 export async function checkAppUpdate(proxyUrl?: string): Promise<AppUpdateInfo> {
   if (!isTauri) {
     return {
-      localVersion: '0.1.19',
-      latestVersion: '0.1.19',
+      localVersion: '0.1.20',
+      latestVersion: '0.1.20',
       compare: '已是最新',
       kind: 'win-setup',
       kindLabel: 'Windows 安装包',
-      assetName: 'AgentDock-0.1.19-Setup.exe',
-      htmlUrl: 'https://github.com/aodaokai52545856/agent-dock/releases/tag/v0.1.19'
+      assetName: 'AgentDock-0.1.20-Setup.exe',
+      htmlUrl: 'https://github.com/aodaokai52545856/agent-dock/releases/tag/v0.1.20'
     }
   }
   return invoke('check_app_update', { proxyUrl: proxyUrl ?? null })
@@ -793,4 +801,14 @@ export async function cursorDevRun(payload: {
   agentId?: string | null
 }): Promise<CursorDevResult> {
   return invoke('cursor_dev_run', payload)
+}
+
+/** Shared composer action: citations stay drafts; send actions submit a turn. */
+export async function writeSessionText(runtimeId:string,text:string,submit=false):Promise<void>{
+  if(isOmpRuntime(runtimeId)){
+    if(submit) await ompCommand(runtimeId,{type:'prompt',message:text,streamingBehavior:'followUp'})
+    else ompDraft(runtimeId,text)
+    return
+  }
+  return ptyWrite(runtimeId,`\x1b[200~${text}\x1b[201~${submit?'\r':''}`)
 }

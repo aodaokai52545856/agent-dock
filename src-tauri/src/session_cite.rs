@@ -93,6 +93,7 @@ pub(crate) fn list_session_docs_for(
         return Err("请先打开会话".into());
     }
     match tool_id {
+        ToolId::Omp => Ok(Vec::new()),
         ToolId::Opencode | ToolId::Pi | ToolId::Dsh => Ok(Vec::new()),
         ToolId::Claude => Ok(collect_claude_docs(&project.path, session_id)),
         ToolId::Grokbuild => {
@@ -119,6 +120,7 @@ fn list_session_turns_for(
         return Err("请先打开会话".into());
     }
     match tool_id {
+        ToolId::Omp => crate::tools::omp::find_session_file(&project.path, session_id).map(|p| { crate::tools::omp::branch(&crate::tools::omp::entries(&p)).into_iter().filter_map(|v| { let m=&v["message"]; let role=m["role"].as_str()?; if !matches!(role,"user"|"assistant") { return None; } let text=crate::tools::omp::text(&m["content"]); if text.is_empty(){return None;} Some(SessionTurn{id:v["id"].as_str().unwrap_or("").into(),role:role.into(),excerpt:tools::truncate_title(&text,120),text}) }).collect() }).ok_or("OMP 会话文件不存在".into()),
         ToolId::Opencode | ToolId::Pi | ToolId::Dsh => Ok(Vec::new()),
         ToolId::Claude => {
             let path = tools::find_claude_session_file(&project.path, session_id)
@@ -565,7 +567,7 @@ fn read_session_summary(project: &Project, tool_id: ToolId, session_id: &str) ->
             let raw = read_text_capped_tail(&path, JSONL_BYTE_CAP).unwrap_or_default();
             extract_claude_jsonl(&raw, &project.path, &mut HashMap::new())
         }
-        ToolId::Opencode | ToolId::Pi | ToolId::Dsh => None,
+        ToolId::Opencode | ToolId::Pi | ToolId::Omp | ToolId::Dsh => None,
     }
     .ok_or_else(|| "这次会话还没有可展示的总结。".to_string())?;
     Ok(SessionDocBody {

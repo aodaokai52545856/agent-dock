@@ -41,7 +41,7 @@ const railSession = computed(() => {
 
 const canCiteTurns = computed(() => {
   const session = railSession.value
-  return Boolean(session && (session.toolId === 'grokbuild' || session.toolId === 'kimi'))
+  return Boolean(session && (session.toolId === 'grokbuild' || session.toolId === 'kimi' || session.toolId === 'omp'))
 })
 
 async function loadDocs() {
@@ -133,11 +133,11 @@ function tagClass(kind: string) {
 
 const emptyCopy = computed(() => {
   if (!selectedProject.value) return '先选一个项目。'
-  if (!railSession.value && !activeLive.value) return '选择一个会话，查看提到的 Markdown 文档和每一轮总结。'
+  if (!railSession.value && !activeLive.value) return '选择一个会话，查看模型交付的结果文档和每一轮总结。'
   if (railSession.value?.toolId === 'dsh') {
     return 'DeepSeek Web 会话没有可预览文档。'
   }
-  return '这次会话还没有提到 Markdown 文档，也还没有总结输出。'
+  return '这次会话还没有交付结果文档，也还没有总结输出。'
 })
 
 const files = computed(() => docs.value.filter(doc => doc.kind !== 'summary'))
@@ -154,21 +154,21 @@ const title = (doc: SessionDoc) => doc.kind === 'summary' ? doc.title.replace(/^
     <div class="body" :aria-hidden="collapsed">
       <div class="head"><div><h2>会话文档</h2><p>{{ files.length }} 份文档 · {{ summaries.length }} 轮总结</p></div><button type="button" class="icon-btn" title="收起文档栏" aria-label="收起文档栏" @click="toggleDocRail">›</button></div>
       <div v-if="railSession" class="session"><span class="session-tool">{{ toolLabel(railSession.toolId) }}</span><span class="session-title" :title="railSession.title">{{ railSession.title }}</span></div>
-      <div class="tabs" role="tablist" aria-label="文档分类"><button id="doc-files-tab" type="button" role="tab" :aria-selected="tab === 'files'" aria-controls="session-doc-list" @click="tab = 'files'">Markdown 文档<span>{{ files.length }}</span></button><button id="doc-summaries-tab" type="button" role="tab" :aria-selected="tab === 'summaries'" aria-controls="session-doc-list" @click="tab = 'summaries'">每轮总结<span>{{ summaries.length }}</span></button></div>
+      <div class="tabs" role="tablist" aria-label="文档分类"><button id="doc-files-tab" type="button" role="tab" :aria-selected="tab === 'files'" aria-controls="session-doc-list" @click="tab = 'files'">结果文档<span>{{ files.length }}</span></button><button id="doc-summaries-tab" type="button" role="tab" :aria-selected="tab === 'summaries'" aria-controls="session-doc-list" @click="tab = 'summaries'">每轮总结<span>{{ summaries.length }}</span></button></div>
       <div class="toolbar"><input v-model="query" type="search" :placeholder="tab === 'files' ? '搜索文件名或路径' : '搜索问题或总结内容'" aria-label="搜索会话文档" /><button type="button" class="text-btn" :disabled="refreshing || !railSession" @click="loadDocs">{{ refreshing ? '刷新中' : '刷新' }}</button></div>
       <div v-if="status === 'loading'" class="state muted" role="status">正在整理会话文档和总结…</div>
       <div v-else-if="status === 'error'" class="state"><p>{{ error }}</p><button type="button" class="btn btn-ghost btn-small" @click="loadDocs">重试</button></div>
       <div v-else-if="status === 'idle' || status === 'empty'" class="state empty-state"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h8l4 4v14H6zM14 3v5h5M9 12h6m-6 4h6" /></svg><h3>{{ railSession ? '暂无会话资料' : '选择会话后查看文档' }}</h3><p>{{ emptyCopy }}</p></div>
-      <div v-else-if="!shown.length" class="state muted" role="status">{{ query.trim() ? '未找到匹配结果' : tab === 'files' ? '暂未识别到 Markdown 文档，可查看每轮总结。' : '此会话暂无总结输出。' }}</div>
+      <div v-else-if="!shown.length" class="state muted" role="status">{{ query.trim() ? '未找到匹配结果' : tab === 'files' ? '模型尚未交付 Markdown 结果文档，可查看每轮总结。' : '此会话暂无总结输出。' }}</div>
       <ul v-else id="session-doc-list" class="docs" role="tabpanel" :aria-labelledby="tab === 'files' ? 'doc-files-tab' : 'doc-summaries-tab'">
         <li v-for="doc in shown" :key="doc.path"><button type="button" class="doc" :class="{ 'doc-summary': doc.kind === 'summary', 'doc-missing': doc.exists === false }" @click="emit('open', doc)">
           <span class="doc-top"><span class="ad-tag" :class="tagClass(doc.kind)">{{ doc.kind === 'summary' && doc.round ? `第 ${doc.round} 轮` : kindLabel(doc.kind) }}</span><span class="doc-time" :title="doc.updatedAt ? new Date(doc.updatedAt).toLocaleString() : ''">{{ relativeTime(doc.updatedAt) }}</span></span>
           <span class="doc-main"><svg v-if="doc.kind !== 'summary'" class="doc-glyph" viewBox="0 0 16 16" aria-hidden="true"><path d="M4.5 2.5h4.2L12.5 6.3V13.5H4.5zM8.6 2.5V6.3H12.5" /></svg><span class="doc-title" :title="title(doc)">{{ title(doc) }}</span><span class="open-arrow" aria-hidden="true">↗</span></span>
           <span v-if="excerpt(doc)" class="doc-excerpt">{{ excerpt(doc) }}</span>
-          <span class="doc-path" :title="doc.relPath || doc.path">{{ doc.kind === 'summary' ? '已保存到本机 · 点击阅读全文' : doc.relPath || doc.path }}</span><span v-if="doc.exists === false" class="missing-label">已提及，文件尚未生成或已移动</span>
+          <span class="doc-path" :title="doc.relPath || doc.path">{{ doc.kind === 'summary' ? '已保存到本机 · 点击阅读全文' : doc.relPath || doc.path }}</span><span v-if="doc.exists === false" class="missing-label">结果文件已移动或删除</span>
         </button></li>
       </ul>
-      <footer><span>{{ tab === 'summaries' ? '每轮独立保存，重新打开会话可回看' : '包含会话中提到、读取和写入的 Markdown' }}</span><button v-if="canCiteTurns" type="button" class="text-btn" @click="openCite">引用片段</button></footer>
+      <footer><span>{{ tab === 'summaries' ? '每轮独立保存，重新打开会话可回看' : '仅展示模型最终答复中交付的 Markdown 文档' }}</span><button v-if="canCiteTurns" type="button" class="text-btn" @click="openCite">引用片段</button></footer>
     </div>
   </aside>
 </template>

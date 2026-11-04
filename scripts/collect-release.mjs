@@ -60,7 +60,8 @@ export function plannedCopies(os, cargoTarget, version) {
     return [
       { from: join(cargoTarget, 'agent-dock.exe'), to: releaseFileName('win-exe', version), required: true },
       {
-        from: firstMatch(join(bundle, 'nsis'), (name) => name.toLowerCase().endsWith('-setup.exe')),
+        from: firstMatch(join(bundle, 'nsis'), (name) =>
+          name.includes(`_${version}_`) && name.toLowerCase().endsWith('-setup.exe')),
         to: releaseFileName('win-setup', version),
         required: false
       }

@@ -1,7 +1,7 @@
-//! Session-owned Markdown references and durable, per-user-turn assistant outputs.
+//! Delivered Markdown documents and durable, per-user-turn assistant outputs.
 use crate::{
     path_norm::normalize_path,
-    session_cite::{self, SessionDoc, SessionDocBody},
+    session_cite::{SessionDoc, SessionDocBody},
     state::Project,
     tools::{self, ToolId},
 };
@@ -93,6 +93,7 @@ fn source(project: &Project, tool: ToolId, session: &str) -> Option<PathBuf> {
             tools::find_kimi_session_dir(session).map(|p| p.join("agents/main/wire.jsonl"))
         }
         ToolId::Pi => tools::find_pi_session_file(&project.path, session),
+        ToolId::Omp => tools::omp::find_session_file(&project.path, session),
         ToolId::Opencode => Some(
             std::env::var_os("OPENCODE_DB")
                 .map(PathBuf::from)
@@ -140,14 +141,21 @@ fn list_in(
     let migrated = !path.exists() && legacy.is_file();
     let mut archive = load(if migrated { &legacy } else { &path })?;
     let mut changed = migrated;
-    // Retain native plan files as well as the broader references discovered below.
-    if let Ok(native) = session_cite::list_session_docs_for(project, tool, session) {
-        for doc in native.into_iter().filter(|d| d.kind != "summary") {
-            let key = normalize_path(&doc.path);
-            if archive.documents.get(&key) != Some(&doc) {
-                archive.documents.insert(key, doc);
-                changed = true;
+    // OMP journals are trees. Rebuild from the selected branch instead of
+    // appending abandoned branches to the round archive.
+    if tool == ToolId::Omp {
+        if let Some(log) = log.filter(|p| p.is_file()) {
+            archive = Archive::default();
+            let entries = tools::omp::entries(log);
+            for (offset, value) in tools::omp::branch(&entries).into_iter().enumerate() {
+                consume(&mut archive, value, tool, offset as u64);
             }
+            archive.source = normalize_path(&log.to_string_lossy());
+            archive.cursor = log.metadata().map_err(|e| e.to_string())?.len();
+            archive.modified = tools::file_mtime_millis(log);
+            archive.header_len = archive.cursor.min(4096);
+            archive.header = fingerprint(log, archive.header_len)?;
+            changed = true;
         }
     }
     if tool == ToolId::Opencode {
@@ -175,7 +183,6 @@ fn list_in(
                 .map_err(|e| e.to_string())?;
             let mut reader = BufReader::new(file);
             let mut line = Vec::new();
-            let mut mentions = HashSet::new();
             loop {
                 line.clear();
                 let offset = archive.cursor;
@@ -187,7 +194,6 @@ fn list_in(
                 }
                 match serde_json::from_slice::<Value>(&line) {
                     Ok(value) => {
-                        collect_strings(&value, &mut mentions);
                         consume(&mut archive, &value, tool, offset);
                     }
                     Err(_) if !line.ends_with(b"\n") => break, // Resume at this offset once the writer completes the line.
@@ -195,13 +201,6 @@ fn list_in(
                 }
                 archive.cursor += bytes as u64;
             }
-            collect_references(
-                &mut archive,
-                project,
-                log.parent().unwrap_or(Path::new(&project.path)),
-                tool,
-                mentions,
-            );
             archive.source = name;
             archive.modified = modified;
             archive.header_len = archive.cursor.min(4096);
@@ -209,6 +208,25 @@ fn list_in(
             changed = true;
         }
     }
+    // Derive deliveries from completed answers, never from prompts, tool inputs,
+    // read results or native scratch plans. Rebuild even for unchanged/missing
+    // logs so archives created by the old broad collector are cleaned up too.
+    let mentions = archive
+        .rounds
+        .iter()
+        .filter(|round| round.complete)
+        .flat_map(|round| output_mentions(&round.text))
+        .collect();
+    let previous = std::mem::take(&mut archive.documents);
+    collect_references(
+        &mut archive,
+        project,
+        log.and_then(Path::parent)
+            .unwrap_or(Path::new(&project.path)),
+        tool,
+        mentions,
+    );
+    changed |= archive.documents != previous;
     if changed {
         save(&path, &archive)?;
     }
@@ -289,15 +307,9 @@ fn collect_opencode(
         .map_err(|e| format!("读取 OpenCode 消息失败：{e}"))?;
     let mut rows = statement.query([session]).map_err(|e| e.to_string())?;
     let mut pending: Option<(String, i64, Value, Vec<Value>)> = None;
-    let mut mentions = HashSet::new();
     archive.current = None;
-    let flush = |archive: &mut Archive,
-                 pending: (String, i64, Value, Vec<Value>),
-                 mentions: &mut HashSet<String>| {
+    let flush = |archive: &mut Archive, pending: (String, i64, Value, Vec<Value>)| {
         let (id, at, info, parts) = pending;
-        for part in &parts {
-            collect_strings(part, mentions);
-        }
         let role = info.get("role").and_then(Value::as_str).unwrap_or("");
         let last_tool = parts
             .iter()
@@ -322,7 +334,7 @@ fn collect_opencode(
     while let Some(row) = rows.next().map_err(|e| e.to_string())? {
         let id: String = row.get(0).map_err(|e| e.to_string())?;
         if pending.as_ref().is_some_and(|p| p.0 != id) {
-            flush(archive, pending.take().unwrap(), &mut mentions);
+            flush(archive, pending.take().unwrap());
         }
         if pending.is_none() {
             let at: i64 = row.get(1).map_err(|e| e.to_string())?;
@@ -341,15 +353,8 @@ fn collect_opencode(
         }
     }
     if let Some(pending) = pending {
-        flush(archive, pending, &mut mentions);
+        flush(archive, pending);
     }
-    collect_references(
-        archive,
-        project,
-        db.parent().unwrap_or(Path::new(&project.path)),
-        ToolId::Opencode,
-        mentions,
-    );
     archive.source = normalize_path(&db.to_string_lossy());
     archive.source_revision = revision;
     Ok(true)
@@ -466,11 +471,6 @@ fn user(archive: &mut Archive, value: &Value, prompt: String, offset: u64) {
     {
         return;
     }
-    if let Some(id) = &archive.current {
-        if let Some(round) = archive.rounds.iter_mut().find(|r| &r.id == id) {
-            round.complete = true;
-        }
-    }
     let raw_id = tools::first_string(value, &["uuid", "id", "turnId", "turn_id"])
         .unwrap_or_else(|| format!("{offset}:{prompt}"));
     let id = digest(&raw_id);
@@ -513,9 +513,8 @@ fn tool_call(archive: &mut Archive) {
         .iter_mut()
         .find(|r| Some(&r.id) == archive.current.as_ref())
     {
-        if !round.complete {
-            round.text.clear();
-        }
+        round.text.clear();
+        round.complete = false;
     }
 }
 fn consume(archive: &mut Archive, value: &Value, tool: ToolId, offset: u64) {
@@ -551,7 +550,14 @@ fn consume(archive: &mut Archive, value: &Value, tool: ToolId, offset: u64) {
                     }
                 }
                 Some("assistant") => {
-                    if let Some(text) = plain(message.get("content").unwrap_or(&Value::Null)) {
+                    if message
+                        .get("tool_calls")
+                        .and_then(Value::as_array)
+                        .is_some_and(|calls| !calls.is_empty())
+                    {
+                        tool_call(archive);
+                    } else if let Some(text) = plain(message.get("content").unwrap_or(&Value::Null))
+                    {
                         assistant(archive, text, timestamp(value), false, true);
                     }
                 }
@@ -584,7 +590,7 @@ fn consume(archive: &mut Archive, value: &Value, tool: ToolId, offset: u64) {
         }
         return;
     }
-    let role = if tool == ToolId::Pi {
+    let role = if matches!(tool, ToolId::Pi | ToolId::Omp) {
         message.get("role").and_then(Value::as_str).unwrap_or("")
     } else {
         kind
@@ -612,7 +618,11 @@ fn consume(archive: &mut Archive, value: &Value, tool: ToolId, offset: u64) {
         }
         if let Some(text) = plain(content) {
             let complete = message.get("stop_reason").and_then(Value::as_str) == Some("end_turn")
-                || message.get("stopReason").and_then(Value::as_str) == Some("stop");
+                || message.get("stopReason").and_then(Value::as_str) == Some("stop")
+                // Grok's chat history stores whole assistant messages without a stop field.
+                || (tool == ToolId::Grokbuild
+                    && message.get("stop_reason").is_none()
+                    && message.get("stopReason").is_none());
             assistant(archive, text, timestamp(value), false, complete);
         }
     }
@@ -709,30 +719,40 @@ fn mentions(text: &str) -> Vec<String> {
         .map(|p| decode_path(&p))
         .collect()
 }
-fn collect_strings(value: &Value, paths: &mut HashSet<String>) {
-    match value {
-        Value::String(text) => {
-            paths.extend(mentions(text));
-            if text.starts_with('{') {
-                if let Ok(value) = serde_json::from_str::<Value>(text) {
-                    collect_strings(&value, paths);
+fn output_mentions(text: &str) -> Vec<String> {
+    // Code examples and shell snippets describe inputs, not delivered files.
+    let mut fence: Option<(char, usize)> = None;
+    let mut prose = String::new();
+    for line in text.lines() {
+        let trimmed = line.trim_start();
+        let marker = trimmed.chars().next().unwrap_or(' ');
+        let count = trimmed.chars().take_while(|c| *c == marker).count();
+        if matches!(marker, '`' | '~') && count >= 3 {
+            if let Some((open, len)) = fence {
+                if marker == open && count >= len && trimmed[count..].trim().is_empty() {
+                    fence = None;
                 }
+            } else {
+                fence = Some((marker, count));
             }
+            continue;
         }
-        Value::Array(items) => {
-            for item in items {
-                collect_strings(item, paths);
-            }
+        if fence.is_none() && !line.starts_with("    ") && !line.starts_with('\t') {
+            prose.push_str(line);
+            prose.push('\n');
         }
-        Value::Object(map) => {
-            for (key, item) in map {
-                if !matches!(key.as_str(), "thinking" | "signature" | "data") {
-                    collect_strings(item, paths);
-                }
-            }
-        }
-        _ => {}
     }
+    mentions(&prose)
+        .into_iter()
+        .filter(|path| {
+            !path.starts_with('-')
+                && !path.contains(['*', '?', '[', ']', '{', '}', '|', '\n', '\r'])
+                && Path::new(path)
+                    .extension()
+                    .and_then(|ext| ext.to_str())
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
+        })
+        .collect()
 }
 fn lexical(path: PathBuf) -> PathBuf {
     let mut clean = PathBuf::new();
@@ -851,14 +871,11 @@ fn collect_reference(
         }
     };
     let key = normalize_path(&path.to_string_lossy());
-    let allowed = if path.is_file() {
-        path.extension()
+    let allowed = path.is_file()
+        && path
+            .extension()
             .and_then(|ext| ext.to_str())
-            .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
-    } else {
-        let root = normalize_path(&project.path);
-        key.starts_with(&(root + "/"))
-    };
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("md"));
     if !allowed {
         return;
     }
@@ -985,11 +1002,17 @@ mod tests {
     }
 
     #[test]
-    fn references_include_mentions_links_reads_and_unicode_paths() {
+    fn deliveries_exclude_prompts_reads_scratch_files_and_missing_paths() {
         let root = tempfile::tempdir().unwrap();
         let p = project(root.path());
         fs::create_dir_all(root.path().join("docs")).unwrap();
-        for name in ["guide.md", "design plan.md", "方案.md"] {
+        for name in [
+            "guide.md",
+            "design plan.md",
+            "方案.md",
+            "scratch.md",
+            "example.md",
+        ] {
             fs::write(root.path().join("docs").join(name), "# document").unwrap();
         }
         let log = root.path().join("history.jsonl");
@@ -1001,7 +1024,9 @@ mod tests {
                     "请看 `docs/guide.md:12`、[设计](<docs/design%20plan.md>) 和 docs/方案.md。",
                 ),
                 json!({"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"docs/guide.md"}}]}}),
-                answer("文档都已阅读，后续计划是 `docs/future.md`。"),
+                json!({"type":"assistant","message":{"content":[{"type":"tool_use","name":"Write","input":{"file_path":"docs/scratch.md"}}]}}),
+                json!({"type":"user","message":{"content":[{"type":"tool_result","content":"docs/guide.md AGENTS.md README.md --include=*.md"}]}}),
+                answer("结果文档：[设计](<docs/design%20plan.md>) 和 `docs/方案.md`。\n后续计划是 `docs/future.md`。\n```sh\ncat docs/example.md\n```\n通配符 `*.md` 和 `--include=*.py --include=*.md`。"),
             ],
         );
         let docs = list_in(
@@ -1013,15 +1038,116 @@ mod tests {
         )
         .unwrap();
         let files: Vec<_> = docs.iter().filter(|d| d.kind != "summary").collect();
-        assert_eq!(files.len(), 4, "{files:?}");
+        assert_eq!(files.len(), 2, "{files:?}");
         assert!(files.iter().any(|d| d.title == "方案"));
         assert!(files
             .iter()
             .any(|d| d.title == "design plan" && d.exists == Some(true)));
-        assert!(files
-            .iter()
-            .any(|d| d.title == "future" && d.exists == Some(false)));
+        assert!(files.iter().all(|d| d.exists == Some(true)));
         assert_eq!(decode_path("docs/%文.md"), "docs/%文.md");
+    }
+
+    #[test]
+    fn cached_read_references_are_removed_without_a_source_log() {
+        let root = tempfile::tempdir().unwrap();
+        let p = project(root.path());
+        let cache = root.path().join("cache");
+        for name in ["AGENTS.md", "README.md", "scratch.md", "result.md"] {
+            fs::write(root.path().join(name), "# Document").unwrap();
+        }
+        let mut archive = Archive::default();
+        consume(&mut archive, &prompt("one", "生成报告"), ToolId::Claude, 0);
+        consume(
+            &mut archive,
+            &answer("结果：`result.md`"),
+            ToolId::Claude,
+            1,
+        );
+        for name in ["AGENTS.md", "README.md", "scratch.md", "*.md", "result.md"] {
+            collect_reference(&mut archive, &p, root.path(), ToolId::Claude, name);
+        }
+        save(&archive_path(&cache, &p, ToolId::Claude, "s"), &archive).unwrap();
+
+        let docs = list_in(&cache, &p, ToolId::Claude, "s", None).unwrap();
+        let files: Vec<_> = docs.iter().filter(|d| d.kind != "summary").collect();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].title, "result");
+        assert_eq!(
+            docs,
+            list_in(&cache, &p, ToolId::Claude, "s", None).unwrap()
+        );
+        assert!(!referenced_in(&cache, &p, &root.path().join("AGENTS.md")).unwrap());
+        assert!(referenced_in(&cache, &p, &root.path().join("result.md")).unwrap());
+
+        fs::remove_file(root.path().join("result.md")).unwrap();
+        assert!(list_in(&cache, &p, ToolId::Claude, "s", None)
+            .unwrap()
+            .iter()
+            .all(|d| d.kind == "summary"));
+    }
+
+    #[test]
+    fn unfinished_answers_and_new_prompts_do_not_publish_documents() {
+        let root = tempfile::tempdir().unwrap();
+        let p = project(root.path());
+        let cache = root.path().join("cache");
+        let log = root.path().join("history.jsonl");
+        for name in ["draft.md", "result.md"] {
+            fs::write(root.path().join(name), "# Document").unwrap();
+        }
+        write_log(
+            &log,
+            &[
+                prompt("one", "生成报告"),
+                json!({"type":"assistant","message":{"content":"正在整理 `draft.md`"}}),
+            ],
+        );
+        assert!(list_in(&cache, &p, ToolId::Claude, "s", Some(&log))
+            .unwrap()
+            .iter()
+            .all(|d| d.kind == "summary"));
+        let mut file = fs::OpenOptions::new().append(true).open(&log).unwrap();
+        writeln!(file, "{}", prompt("two", "重新生成")).unwrap();
+        assert!(list_in(&cache, &p, ToolId::Claude, "s", Some(&log))
+            .unwrap()
+            .iter()
+            .all(|d| d.kind == "summary"));
+        writeln!(file, "{}", answer("已交付 `result.md`")).unwrap();
+        let docs = list_in(&cache, &p, ToolId::Claude, "s", Some(&log)).unwrap();
+        assert_eq!(docs.iter().filter(|d| d.kind != "summary").count(), 1);
+        assert!(docs.iter().any(|d| d.title == "result"));
+        assert!(!docs.iter().any(|d| d.title == "draft"));
+    }
+
+    #[test]
+    fn omp_deliveries_follow_the_active_branch_and_exclude_tool_paths() {
+        let root = tempfile::tempdir().unwrap();
+        let p = project(root.path());
+        let cache = root.path().join("cache");
+        let log = root.path().join("history.jsonl");
+        for name in ["AGENTS.md", "scratch.md", "old.md", "result.md"] {
+            fs::write(root.path().join(name), "# Document").unwrap();
+        }
+        write_log(
+            &log,
+            &[
+                json!({"type":"message","id":"u","parentId":null,"message":{"role":"user","content":"生成报告"}}),
+                json!({"type":"message","id":"t","parentId":"u","message":{"role":"assistant","content":[{"type":"toolCall","name":"read","arguments":{"path":"AGENTS.md"}},{"type":"toolCall","name":"write","arguments":{"path":"scratch.md","content":"# Scratch"}}],"stopReason":"toolUse"}}),
+                json!({"type":"message","id":"a1","parentId":"t","message":{"role":"assistant","content":[{"type":"text","text":"结果：`old.md`"}],"stopReason":"stop"}}),
+            ],
+        );
+        let docs = list_in(&cache, &p, ToolId::Omp, "s", Some(&log)).unwrap();
+        assert_eq!(docs.iter().filter(|d| d.kind != "summary").count(), 1);
+        assert!(docs.iter().any(|d| d.title == "old"));
+
+        let mut file = fs::OpenOptions::new().append(true).open(&log).unwrap();
+        writeln!(file, "{}", json!({"type":"message","id":"a2","parentId":"t","message":{"role":"assistant","content":[{"type":"text","text":"结果：`result.md`"}],"stopReason":"stop"}})).unwrap();
+        let docs = list_in(&cache, &p, ToolId::Omp, "s", Some(&log)).unwrap();
+        assert_eq!(docs.iter().filter(|d| d.kind != "summary").count(), 1);
+        assert!(docs.iter().any(|d| d.title == "result"));
+        assert!(!docs
+            .iter()
+            .any(|d| matches!(d.title.as_str(), "old" | "AGENTS" | "scratch")));
     }
 
     #[test]
@@ -1170,7 +1296,7 @@ mod tests {
     }
 
     #[test]
-    fn opencode_sqlite_parts_include_final_text_and_read_references() {
+    fn opencode_sqlite_parts_include_final_text_and_only_delivered_files() {
         let root = tempfile::tempdir().unwrap();
         let p = project(root.path());
         let db = root.path().join("opencode.db");
@@ -1179,6 +1305,7 @@ mod tests {
         conn.execute("INSERT INTO session VALUES('s',?1)", [&p.path])
             .unwrap();
         fs::write(root.path().join("guide.md"), "# Guide").unwrap();
+        fs::write(root.path().join("result.md"), "# Result").unwrap();
         for (id, at, role) in [
             ("u1", 1, "user"),
             ("a1", 2, "assistant"),
@@ -1207,7 +1334,12 @@ mod tests {
             ),
             ("p4", "a1", 4, json!({"type":"text","text":"第一轮完成"})),
             ("p5", "u2", 5, json!({"type":"text","text":"第二个问题"})),
-            ("p6", "a2", 6, json!({"type":"text","text":"第二轮完成"})),
+            (
+                "p6",
+                "a2",
+                6,
+                json!({"type":"text","text":"第二轮完成，结果见 `result.md`"}),
+            ),
         ] {
             conn.execute(
                 "INSERT INTO part VALUES(?1,?2,?3,?3,?4)",
@@ -1218,7 +1350,8 @@ mod tests {
         let cache = root.path().join("cache");
         let docs = list_in(&cache, &p, ToolId::Opencode, "s", Some(&db)).unwrap();
         assert_eq!(docs.iter().filter(|d| d.kind == "summary").count(), 2);
-        assert!(docs.iter().any(|d| d.title == "guide"));
+        assert!(!docs.iter().any(|d| d.title == "guide"));
+        assert!(docs.iter().any(|d| d.title == "result"));
         let first = docs.iter().find(|d| d.round == Some(1)).unwrap();
         assert_eq!(
             read_in(&cache, &p, &first.path).unwrap().unwrap().text,
@@ -1255,7 +1388,7 @@ mod tests {
             &log,
             &[
                 prompt("one", "请看 guide.md"),
-                answer("早期结果"),
+                answer("早期结果已保存到 `guide.md`"),
                 json!({"type":"user","message":{"content":[{"type":"tool_result","content":"x".repeat(9 * 1024 * 1024)}]}}),
                 prompt("two", "第二轮"),
                 answer("尾部结果"),
@@ -1301,8 +1434,8 @@ mod tests {
         write_log(
             &log,
             &[
-                prompt("one", &format!("请看 `{}`", external.display())),
-                answer("已阅读共享文档"),
+                prompt("one", "输出结果到共享目录"),
+                answer(&format!("结果文档：`{}`", external.display())),
             ],
         );
         let cache = root.path().join("cache");

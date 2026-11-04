@@ -42,6 +42,7 @@
   --ad-kimi: #007cff;
   --ad-claude: #d97757;
   --ad-pi: #f4f4f4;
+  --ad-omp: #e5a772;
   --ad-dsh: #4d6bfe;
   --ad-mark: #f4f4f4;
   --ad-opencode-inner: #4b4646;
@@ -121,6 +122,7 @@ html[data-theme='light'] {
   --ad-shadow-dialog: 0 18px 48px rgba(0, 0, 0, 0.16), 0 0 0 1px rgba(0, 0, 0, 0.05);
   --ad-shadow-menu: 0 12px 32px rgba(0, 0, 0, 0.14), 0 0 0 1px rgba(0, 0, 0, 0.06);
   --ad-pi: #171717;
+  --ad-omp: #9b5425;
   --ad-mark: #171717;
   --ad-opencode-inner: #cfcecd;
   --ad-opencode-outer: #211e1e;

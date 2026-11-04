@@ -49,6 +49,8 @@ export function createVersionCenter(backend: Backend) {
       if (taskRunning(task) || reconciled.has(task.id)) continue
       reconciled.add(task.id)
       if (task.target === 'app') continue
+      // A prepared tool update carries the target version, not the installed version.
+      if (task.status === 'ready') continue
       const row = state.rows.find(row => row.toolId === task.target)
       if (!row || !task.localVersion) continue
       const removed = task.action === 'uninstall' && task.status === 'succeeded'

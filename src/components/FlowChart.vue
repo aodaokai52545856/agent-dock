@@ -80,7 +80,7 @@ function channelText(node: FlowNode) {
 }
 
 function nodeWarn(node: FlowNode) {
-  if (node.channel.kind !== 'pty') return false
+  if ((node.channel.kind !== 'pty' && node.channel.kind !== 'ompRpc')) return false
   return !inspectPty(node.channel, store.live, store.selectedProjectId).ok
 }
 

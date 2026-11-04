@@ -27,6 +27,9 @@ mod state;
 mod tools;
 mod window_chrome;
 mod version_tasks;
+mod omp_rpc;
+mod omp_startup;
+mod omp_usage;
 
 use chrono::Utc;
 use path_norm::folder_name;
@@ -93,6 +96,7 @@ struct ToolProbeMap {
     kimi: BinaryProbe,
     claude: BinaryProbe,
     pi: BinaryProbe,
+    omp: BinaryProbe,
     dsh: BinaryProbe,
 }
 
@@ -720,6 +724,7 @@ async fn probe_tools(app: AppHandle) -> Result<ToolProbeMap, String> {
         kimi: tools::probe_binary(ToolId::Kimi, &state.settings),
         claude: tools::probe_binary(ToolId::Claude, &state.settings),
         pi: tools::probe_binary(ToolId::Pi, &state.settings),
+        omp: tools::probe_binary(ToolId::Omp, &state.settings),
         dsh: tools::probe_binary(ToolId::Dsh, &state.settings),
     })
     .await
@@ -847,7 +852,30 @@ async fn pty_open(
     cols: u16,
     rows: u16,
     ui_theme: Option<String>,
+    profile_id: Option<String>,
+    omp_mode: Option<state::OmpLaunchMode>,
 ) -> Result<PtyOpened, String> {
+    if tool_id == ToolId::Omp {
+        let state = state::load_state(&app)?;
+        let native = matches!(omp_mode.unwrap_or_else(|| state.settings.omp_launch_mode.clone()), state::OmpLaunchMode::Native);
+        let terminals = hub.inner().clone();
+        return tauri::async_runtime::spawn_blocking(move || {
+            if let Some(id) = session_id.as_deref() {
+                let live = terminals.list().into_iter().chain(omp_rpc::global().list()).find(|live| live.project_id == project_id && live.session_id.as_deref() == Some(id));
+                if let Some(live) = live {
+                    if native != (live.kind == "pty") { return Err("此 OMP 会话已以另一种方式打开，请先关闭后切换启动方式".into()); }
+                }
+            }
+            if native {
+                let project = state::find_project(&state, &project_id)?;
+                let profile = if let Some(id) = &session_id { tools::omp::split_id(id)?.0 } else { profile_id.filter(|p| !p.is_empty()).unwrap_or_else(|| tools::omp::default_profile(&state.settings)) };
+                let args = tools::omp::native_args(&project.path, session_id.as_deref(), &profile)?;
+                terminals.open(app, &state, &project_id, tool_id, session_id, title, cols, rows, ui_theme.as_deref(), Some(args))
+            } else {
+                omp_rpc::global().open(app, &state, &project_id, session_id, profile_id, title)
+            }
+        }).await.map_err(|e|e.to_string())?;
+    }
     if tool_id == ToolId::Dsh {
         let state = state::load_state(&app)?;
         let web = web.inner().clone();
@@ -863,7 +891,7 @@ async fn pty_open(
         let _auth_guard = if tool_id == ToolId::Claude {
             Some(claude_accounts::lock_operation()?)
         } else { None };
-        hub.open(app, &state, &project_id, tool_id, session_id, title, cols, rows, ui_theme.as_deref())
+        hub.open(app, &state, &project_id, tool_id, session_id, title, cols, rows, ui_theme.as_deref(), None)
     }).await.map_err(|_| "启动终端失败。".to_string())?
 }
 
@@ -888,6 +916,7 @@ fn pty_kill(
         let _ = dsh_embed::close(&app);
         return Ok(());
     }
+    if pty_id.starts_with("omp-") { return omp_rpc::global().close(&pty_id); }
     hub.kill(&pty_id)
 }
 
@@ -939,6 +968,7 @@ fn pty_bind_session(
 fn list_live_ptys(hub: State<Arc<PtyHub>>, web: State<Arc<dsh_web::Hub>>) -> Vec<LivePtyInfo> {
     let mut live = hub.list();
     live.extend(web.list());
+    live.extend(omp_rpc::global().list());
     live
 }
 
@@ -1024,6 +1054,38 @@ async fn cursor_dev_run(
     .map_err(|err| format!("启动 Cursor 开发失败：{err}"))?
 }
 
+#[tauri::command]
+fn omp_profiles() -> Vec<tools::omp::Profile> { tools::omp::profiles() }
+#[tauri::command]
+async fn omp_cli_login(app:AppHandle,hub:State<'_,Arc<PtyHub>>,project_id:String,profile_id:String)->Result<PtyOpened,String>{
+    tools::omp::validate_profile(&profile_id)?;
+    let state=state::load_state(&app)?;let hub=hub.inner().clone();
+    tauri::async_runtime::spawn_blocking(move||hub.open(app,&state,&project_id,ToolId::Omp,None,format!("OMP 登录 · {profile_id}"),120,32,None,Some(vec!["--profile".into(),profile_id,"login".into()]))).await.map_err(|e|e.to_string())?
+}
+#[tauri::command]
+fn omp_open_config(profile_id:String)->Result<(),String>{
+    tools::omp::validate_profile(&profile_id)?;
+    let dir=tools::omp::agent_dir(&profile_id);
+    let file=[dir.join("config.yml"),dir.join("config.yaml")].into_iter().find(|p|p.is_file());
+    let path=file.unwrap_or(dir);if !path.exists(){return Err("OMP 配置目录尚未创建，请先启动此 profile".into());}
+    #[cfg(windows)] let mut cmd=std::process::Command::new("explorer.exe");
+    #[cfg(target_os="macos")] let mut cmd=std::process::Command::new("open");
+    #[cfg(all(unix,not(target_os="macos")))] let mut cmd=std::process::Command::new("xdg-open");
+    platform::apply_no_window(&mut cmd);
+    #[cfg(windows)] if path.is_file(){cmd.arg("/select,");}
+    cmd.arg(path).spawn().map_err(|e|e.to_string())?;Ok(())
+}
+#[tauri::command]
+async fn omp_snapshot(runtime_id: String, refresh: Option<bool>) -> Result<omp_rpc::Snapshot, String> {
+    tauri::async_runtime::spawn_blocking(move || { let hub=omp_rpc::global(); if refresh.unwrap_or(false) {hub.refresh(&runtime_id)?;} hub.snapshot(&runtime_id) }).await.map_err(|e|e.to_string())?
+}
+#[tauri::command]
+async fn omp_command(runtime_id: String, command: serde_json::Value) -> Result<serde_json::Value, String> {
+    tauri::async_runtime::spawn_blocking(move || omp_rpc::global().request(&runtime_id,command)).await.map_err(|e|e.to_string())?
+}
+#[tauri::command]
+fn omp_respond_ui(runtime_id: String, response: serde_json::Value) -> Result<(),String> { omp_rpc::global().respond(&runtime_id,response) }
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     platform::apply_process_path();
@@ -1071,6 +1133,7 @@ pub fn run() {
                 let closer = app.handle().clone();
                 window_chrome::attach(&win, move || {
                     if closer.state::<Arc<version_tasks::Hub>>().running() { return false; }
+                    omp_rpc::global().close_all();
                     dsh_web::shutdown_app(&closer);
                     true
                 });
@@ -1090,6 +1153,12 @@ pub fn run() {
             reveal_main_window,
             set_window_frost,
             probe_tools,
+            omp_profiles,
+            omp_cli_login,
+            omp_open_config,
+            omp_snapshot,
+            omp_command,
+            omp_respond_ui,
             app_version,
             check_app_update,
             upgrade_app,
@@ -1166,6 +1235,7 @@ pub fn run() {
                 event,
                 tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
             ) {
+                omp_rpc::global().close_all();
                 dsh_web::shutdown_app(app);
             }
         });

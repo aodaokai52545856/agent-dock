@@ -110,7 +110,14 @@ async function drive(flow: FlowDef, result: EngineResult) {
       live: store.live,
       ptyDataAt: store.ptyDataAt,
       cursorApiKey: store.settings.cursorApiKey,
-      isCurrent: () => seq === runSeq
+      isCurrent: () => seq === runSeq,
+      onInputRequired(required) {
+        if(seq!==runSeq)return
+        run.status=required?'waiting':'running'
+        const step=[...run.steps].reverse().find(s=>s.nodeId===node.id && (s.status==='working'||s.status==='input-required'))
+        if(step)step.status=required?'input-required':'working'
+        setRun(run)
+      }
     })
     if (seq !== runSeq) return
     if (outcome.cursorAgentId && node.channel.kind === 'cursorSdk') {
@@ -423,7 +430,7 @@ export async function jumpBoundWindow(ptyId: string) {
 export async function openWindowForNode(nodeId: string) {
   const flow = currentFlow()
   const node = flow?.nodes.find((item) => item.id === nodeId)
-  if (!node || node.channel.kind !== 'pty') return
+  if (!node || (node.channel.kind !== 'pty' && node.channel.kind !== 'ompRpc')) return
   const project = store.projects.find((item) => item.id === store.selectedProjectId)
   if (!project) {
     showToast('先选一个项目')
@@ -437,6 +444,8 @@ export async function openWindowForNode(nodeId: string) {
     const opened = await api.ptyOpen({
       projectId: project.id,
       toolId: node.channel.toolId,
+      ompMode:node.channel.toolId==='omp'?'wrapped':undefined,
+      profileId:node.channel.profileId,
       title: node.title || '新会话',
       cols: 120,
       rows: 32,
@@ -457,7 +466,7 @@ export async function openWindowForNode(nodeId: string) {
     if (!opened.sessionId) watchPendingSession(opened.ptyId)
     updateNode(nodeId, {
       channel: {
-        kind: 'pty',
+        kind: node.channel.kind,
         toolId: node.channel.toolId,
         ptyId: opened.ptyId,
         sessionId: opened.sessionId || ''

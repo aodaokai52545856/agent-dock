@@ -14,13 +14,13 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/aodaokai52545856/agent-dock/releases/tag/v0.1.19"><img src="https://img.shields.io/badge/⬇%20Download-v0.1.19-0A0A0A?style=for-the-badge&logo=github&logoColor=white" alt="Download v0.1.19"></a>
+  <a href="https://github.com/aodaokai52545856/agent-dock/releases/tag/v0.1.20"><img src="https://img.shields.io/badge/⬇%20Download-v0.1.20-0A0A0A?style=for-the-badge&logo=github&logoColor=white" alt="Download v0.1.20"></a>
   &nbsp;
   <a href="#快速开始"><img src="https://img.shields.io/badge/Quick_Start-启动-1a1a1a?style=for-the-badge" alt="Quick Start"></a>
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.1.19-111111?style=flat-square" alt="version">
+  <img src="https://img.shields.io/badge/version-0.1.20-111111?style=flat-square" alt="version">
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-0d0d0d?style=flat-square" alt="platform">
   <img src="https://img.shields.io/badge/stack-Tauri%202%20·%20Vue%203%20·%20Rust-141414?style=flat-square" alt="stack">
   <img src="https://img.shields.io/badge/license-Apache%202.0-3d9a6a?style=flat-square" alt="license">
@@ -29,7 +29,7 @@
 <p align="center">
   <a href="#下载">下载</a>
   ·
-  <a href="#v0119-新能力">新能力</a>
+  <a href="#v0120-新能力">新能力</a>
   ·
   <a href="#能力">能力</a>
   ·
@@ -68,6 +68,20 @@
 
 ---
 
+<a id="v0120-新能力"></a>
+
+## v0.1.20 新能力
+
+- 新增独立 OMP（oh-my-pi）工具，支持原生终端和封装聊天两种启动方式；接入 profiles、登录、模型切换、工具审批、消息队列、子代理和会话树。
+- OMP 会话接入引用、文档、用量统计与自动编排，按 profile 和当前会话分支读取历史。
+- 版本中心支持 OMP 检测、安装、升级与卸载；存在活动会话时先准备更新，再恢复已保存会话。
+- 修复原生终端大量输出与尺寸变化的同步问题，长回答停稳后自动恢复底部视口，查看历史时延后处理。
+- 文档栏只收录最终回答交付的现存 Markdown，清理读取记录、临时文件和未完成回答带来的误收录。
+- 文字转换浮钮支持拖动，面板随按钮位置和窗口大小调整。
+
+详见 [OMP 使用与验证](docs/omp-integration.md)。
+
+---
 <a id="v0119-新能力"></a>
 
 ## v0.1.19 新能力
@@ -273,19 +287,19 @@
 
 ## 下载
 
-> **v0.1.19** · 跨平台安装包 · 无需本机 Rust
+> **v0.1.20** · 跨平台安装包 · 无需本机 Rust
 
 | 文件 | 平台 | 说明 | 大小约 |
 | :---: | :---: | --- | ---: |
-| [**AgentDock-0.1.19-Setup.exe**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.19/AgentDock-0.1.19-Setup.exe) | Windows | NSIS 安装包（推荐） | 构建后确定 |
-| [**AgentDock-0.1.19.exe**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.19/AgentDock-0.1.19.exe) | Windows | 绿色便携版 | 构建后确定 |
-| [**AgentDock-0.1.19.dmg**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.19/AgentDock-0.1.19.dmg) | macOS | 磁盘映像 | 构建后确定 |
-| [**AgentDock-0.1.19.app.tar.gz**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.19/AgentDock-0.1.19.app.tar.gz) | macOS | `.app` 压缩包 | 构建后确定 |
-| [**AgentDock-0.1.19.AppImage**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.19/AgentDock-0.1.19.AppImage) | Linux | 免安装可执行 | 构建后确定 |
-| [**AgentDock-0.1.19.deb**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.19/AgentDock-0.1.19.deb) | Linux | Debian / Ubuntu | 构建后确定 |
+| [**AgentDock-0.1.20-Setup.exe**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.20/AgentDock-0.1.20-Setup.exe) | Windows | NSIS 安装包（推荐） | 构建后确定 |
+| [**AgentDock-0.1.20.exe**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.20/AgentDock-0.1.20.exe) | Windows | 绿色便携版 | 构建后确定 |
+| [**AgentDock-0.1.20.dmg**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.20/AgentDock-0.1.20.dmg) | macOS | 磁盘映像 | 构建后确定 |
+| [**AgentDock-0.1.20.app.tar.gz**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.20/AgentDock-0.1.20.app.tar.gz) | macOS | `.app` 压缩包 | 构建后确定 |
+| [**AgentDock-0.1.20.AppImage**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.20/AgentDock-0.1.20.AppImage) | Linux | 免安装可执行 | 构建后确定 |
+| [**AgentDock-0.1.20.deb**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.20/AgentDock-0.1.20.deb) | Linux | Debian / Ubuntu | 构建后确定 |
 
 <p align="center">
-  <a href="https://github.com/aodaokai52545856/agent-dock/releases/tag/v0.1.19"><b>→ 打开 Releases · v0.1.19</b></a>
+  <a href="https://github.com/aodaokai52545856/agent-dock/releases/tag/v0.1.20"><b>→ 打开 Releases · v0.1.20</b></a>
 </p>
 
 **运行前提**
@@ -297,7 +311,7 @@
 | **CLI** | `opencode` / `grok` / `kimi` / `claude` 等自行安装并登录；Dock **不代登录** |
 | **编排** | 自动开发需 Cursor API Key；Codex 审查需本机已登录 Codex |
 
-> **macOS 提示：** CI 产物暂未 Apple 公证。若提示「已损坏」，终端执行 `xattr -cr ~/Downloads/AgentDock-0.1.19.dmg`，或对 app **右键 → 打开**。
+> **macOS 提示：** CI 产物暂未 Apple 公证。若提示「已损坏」，终端执行 `xattr -cr ~/Downloads/AgentDock-0.1.20.dmg`，或对 app **右键 → 打开**。
 
 ---
 
@@ -367,7 +381,7 @@ npm run tauri:dev
 
 **必须在对应系统上打包**，不能从 Windows 打出 `.dmg` / `.AppImage`。产物把界面打进二进制，不再监听开发端口，落到 `release/`。
 
-版本号读 `package.json` 的 `version`。当前 `0.1.19` 会打出 `AgentDock-0.1.19-Setup.exe` 等文件名。
+版本号读 `package.json` 的 `version`。当前 `0.1.20` 会打出 `AgentDock-0.1.20-Setup.exe` 等文件名。
 
 ```bash
 npm run pack          # 当前系统
@@ -429,3 +443,11 @@ npm run test:live && npm run test:pack
 ## 许可证
 
 [Apache License 2.0](LICENSE)
+
+## OMP（oh-my-pi）
+
+OMP 以独立工具接入，保留原有 Pi。支持原生终端与封装聊天两种方式，接入图片、工具审批、模型切换、消息队列、子代理、会话树、引用、文档、用量和自动编排。
+
+在“版本与更新”中检测、安装或升级 OMP；已有 Bun、Homebrew 和官方独立安装会按来源更新。活动会话存在时先准备更新，确认应用后关闭并恢复已保存的会话。配置与凭证继续由 OMP profiles 管理。
+
+详见 [OMP 使用与验证](docs/omp-integration.md)。

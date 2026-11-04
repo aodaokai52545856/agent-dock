@@ -9,7 +9,7 @@ export function gateFromRun(flow: FlowDef | null, run: FlowRun | null): GateStat
   if (run.status === 'completed') return 'passed'
   const node = flow?.nodes.find((item) => item.id === run.currentNodeId)
   if (node?.channel.kind === 'codexApp') return 'reviewing'
-  if (node?.channel.kind === 'cursorSdk' || node?.channel.kind === 'pty') return 'developing'
+  if (node?.channel.kind === 'cursorSdk' || node?.channel.kind === 'pty' || node?.channel.kind === 'ompRpc') return 'developing'
   return 'developing'
 }
 

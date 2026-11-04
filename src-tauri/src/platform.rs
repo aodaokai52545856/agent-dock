@@ -54,6 +54,8 @@ pub fn resolve_shell(configured: &str) -> Result<String, String> {
 pub fn extra_bin_dirs() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
     if let Some(home) = dirs::home_dir() {
+        dirs.push(home.join(".bun").join("bin"));
+        dirs.push(home.join("AppData").join("Local").join("omp"));
         dirs.push(home.join(".kimi-code").join("bin"));
         dirs.push(home.join(".grok").join("bin"));
         dirs.push(home.join(".local").join("bin"));

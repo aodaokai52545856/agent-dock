@@ -15,7 +15,7 @@ import {
   themeDefaults,
   type UiTheme
 } from '../lib/appearance'
-import type { AppSettings } from '../lib/types'
+import { parseOmpLaunchMode, type AppSettings } from '../lib/types'
 import {
   UI_FROST_MAX,
   UI_FROST_MIN,
@@ -68,6 +68,9 @@ function syncForm() {
   form.codexPath = props.settings.codexPath ?? ''
   form.claudePath = props.settings.claudePath ?? ''
   form.piPath = props.settings.piPath ?? ''
+  form.ompPath = props.settings.ompPath ?? ''
+  form.ompDefaultProfile = props.settings.ompDefaultProfile ?? ''
+  form.ompLaunchMode = parseOmpLaunchMode(props.settings.ompLaunchMode)
   form.dshPath = props.settings.dshPath ?? ''
   form.saving = false
 }
@@ -94,13 +97,16 @@ const form = reactive({
   codexPath: props.settings.codexPath ?? '',
   claudePath: props.settings.claudePath ?? '',
   piPath: props.settings.piPath ?? '',
+  ompPath: props.settings.ompPath ?? '',
+  ompDefaultProfile: props.settings.ompDefaultProfile ?? '',
+  ompLaunchMode: parseOmpLaunchMode(props.settings.ompLaunchMode),
   dshPath: props.settings.dshPath ?? '',
   saving: false
 })
 syncForm()
 
 const configDirty = computed(() =>
-  (['cursorApiKey', 'codexPath', 'claudePath', 'piPath', 'dshPath'] as const)
+  form.ompLaunchMode!==parseOmpLaunchMode(props.settings.ompLaunchMode) || (['cursorApiKey', 'codexPath', 'claudePath', 'piPath', 'ompPath', 'ompDefaultProfile', 'dshPath'] as const)
     .some(key => form[key] !== (props.settings[key] ?? ''))
 )
 
@@ -204,6 +210,9 @@ function submit() {
     codexPath: form.codexPath.trim(),
     claudePath: form.claudePath.trim(),
     piPath: form.piPath.trim(),
+    ompPath: form.ompPath.trim(),
+    ompDefaultProfile: form.ompDefaultProfile.trim(),
+    ompLaunchMode: form.ompLaunchMode,
     dshPath: form.dshPath.trim()
   })
 }
@@ -399,6 +408,15 @@ defineExpose({ stopSave })
         <span>Claude Code 路径</span>
         <input v-model="form.claudePath" type="text" placeholder="留空则从 PATH 查找 claude" />
       </label>
+      <label class="field">
+        <span>OMP 路径</span>
+        <input v-model="form.ompPath" type="text" placeholder="留空则自动检测 omp" />
+      </label>
+      <label class="field">
+        <span>OMP 默认 profile</span>
+        <input v-model="form.ompDefaultProfile" type="text" placeholder="留空沿用 OMP 环境设置" />
+      </label>
+      <label class="field"><span>OMP 默认启动方式</span><select v-model="form.ompLaunchMode" aria-label="OMP 默认启动方式"><option value="native">原生模式 · OMP 终端</option><option value="wrapped">封装模式 · Dock 聊天界面</option></select></label>
       <label class="field">
         <span>Pi 路径</span>
         <input v-model="form.piPath" type="text" placeholder="留空则从 PATH 查找 pi" />

@@ -325,7 +325,7 @@ watch(projectSessionRows, (rows) => {
 })
 
 function menuCanCite() {
-  return Boolean(menu.value && !menuPending() && (menu.value.toolId === 'grokbuild' || menu.value.toolId === 'kimi'))
+  return Boolean(menu.value && !menuPending() && (menu.value.toolId === 'grokbuild' || menu.value.toolId === 'kimi' || menu.value.toolId === 'omp'))
 }
 
 function menuCanContinueClaude() {

@@ -144,6 +144,7 @@ fn read_state(session_dir: &Path, id: &str, work_dir: &str, project_cwd: &str) -
     let path = session_dir.join("state.json");
     if !path.is_file() {
         return Some(SessionRow {
+                    profile_id: None,
             tool_id: ToolId::Kimi,
             id: id.to_string(),
             title: id.to_string(),
@@ -180,6 +181,7 @@ fn read_state(session_dir: &Path, id: &str, work_dir: &str, project_cwd: &str) -
         }
     });
     Some(SessionRow {
+                    profile_id: None,
         tool_id: ToolId::Kimi,
         id: id.to_string(),
         title,

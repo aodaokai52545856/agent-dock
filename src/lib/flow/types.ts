@@ -11,7 +11,7 @@ export const ARTIFACT_CHAR_CAP = 200_000
 export type RoleId = string
 export type PaneMode = 'edit' | 'run'
 
-export type ChannelKind = 'codexApp' | 'pty' | 'cursorSdk' | 'human'
+export type ChannelKind = 'codexApp' | 'pty' | 'ompRpc' | 'cursorSdk' | 'human'
 
 export type CodexChannel = {
   kind: 'codexApp'
@@ -23,7 +23,8 @@ export type CodexChannel = {
 }
 
 export type PtyChannel = {
-  kind: 'pty'
+  kind: 'pty' | 'ompRpc'
+  profileId?: string
   toolId: ToolId
   sessionId: string
   ptyId: string

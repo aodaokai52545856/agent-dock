@@ -74,6 +74,7 @@ pub fn list_sessions_in(root: &Path, cwd: &str) -> Result<Vec<SessionRow>, Strin
                 continue;
             }
             rows.push(SessionRow {
+                    profile_id: None,
                 tool_id: ToolId::Pi,
                 id,
                 title,

@@ -347,6 +347,7 @@ pub fn encode_cwd(cwd: &str) -> String {
 
 pub fn list_sessions(cwd: &str) -> Result<Vec<SessionRow>, String> {
     Ok(vec![SessionRow {
+                    profile_id: None,
         tool_id: ToolId::Dsh,
         id: FIXED_SESSION_ID.into(),
         title: FIXED_SESSION_TITLE.into(),
@@ -400,6 +401,7 @@ pub fn list_sessions_in(root: &Path, cwd: &str) -> Result<Vec<SessionRow>, Strin
                 continue;
             }
             rows.push(SessionRow {
+                    profile_id: None,
                 tool_id: ToolId::Dsh,
                 id,
                 title,

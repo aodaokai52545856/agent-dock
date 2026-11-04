@@ -329,7 +329,7 @@ fn stable_hash(line: &str) -> String {
 }
 
 const HOURLY_RANGE_SECS: i64 = 36 * 3600;
-const MSG_MISSING: &str = "请先打开 CC Switch，让它扫描会话日志";
+const MSG_MISSING: &str = "CC Switch 数据库尚未就绪；本地 Claude 独立账号和 OMP 记录仍可查看";
 const MSG_BUSY: &str = "用量库正被 CC Switch 占用，请稍后重试";
 const MSG_SCHEMA: &str = "这份 CC Switch 数据库对不上，请升级 CC Switch";
 const MSG_EXPORT_NONE: &str = "没有可同步的副号用量";
@@ -1087,13 +1087,15 @@ pub fn take_snapshot(
             return snap.clone();
         }
     }
-    let (records, pricing, status, files) =
+    let (mut records, pricing, status, files) =
         load_snapshot(ccswitch_db_path().as_deref(), &extras, ledger_path.as_deref());
+    let (omp_records, omp_files) = crate::omp_usage::scan();
+    records.extend(omp_records);
     let snap = UsageSnapshot {
         records,
         pricing,
         status,
-        files_scanned: files,
+        files_scanned: files + omp_files,
         extras,
     };
     *lock_mutex(&SNAPSHOT) = Some(snap.clone());

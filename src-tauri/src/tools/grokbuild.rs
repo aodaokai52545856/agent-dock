@@ -132,6 +132,7 @@ fn parse_summary(path: &Path, project_cwd: &str) -> Option<SessionRow> {
         .or_else(|| parse_time_value(value.get("created_at").unwrap_or(&Value::Null)))
         .unwrap_or_else(|| file_mtime_millis(path));
     Some(SessionRow {
+                    profile_id: None,
         tool_id: ToolId::Grokbuild,
         id,
         title: title.lines().next().unwrap_or("").trim().to_string(),

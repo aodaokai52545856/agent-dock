@@ -15,6 +15,7 @@ const tab = ref<'software' | 'tasks'>('software')
 const expanded = ref<ToolId | ''>('')
 const pendingUninstall = ref<ToolVersionInfo | null>(null)
 const installConfirm = ref(false)
+const ompApplyConfirm = ref(false)
 const helpOpen = ref(false)
 const appIcon = new URL('../../src-tauri/icons/128x128.png', import.meta.url).href
 const checking = computed(() => Object.values(state.checking).some(Boolean))
@@ -45,6 +46,7 @@ function statusLabel(target: string, compare: string) {
   if (state.checking[target]) return '检测中'
   const task = lastTask(target)
   if (task && taskRunning(task)) return task.status === 'queued' ? '等待执行' : task.stage
+  if (state.snapshot.readyTools?.[target]) return '待应用'
   if (target === 'app' && appReady.value) return '待安装'
   if (state.errors[target]) return '检测失败'
   if (task?.status === 'failed') return '执行失败'
@@ -59,6 +61,7 @@ function statusClass(label: string) {
 function actionLabel(row: ToolVersionInfo) {
   const task = lastTask(row.toolId)
   if (task && taskRunning(task)) return task.status === 'queued' ? '等待中' : '执行中…'
+  if (state.snapshot.readyTools?.[row.toolId]) return '应用更新'
   return toolInstalled(row) ? '升级' : '安装'
 }
 function uninstallBody(row: ToolVersionInfo) {
@@ -72,7 +75,8 @@ function uninstall() {
 }
 function installApp() { installConfirm.value = false; void versionCenter.start(['app'], 'apply') }
 function retry(task: VersionTask) {
-  if (task.action === 'apply') installConfirm.value = true
+  if (task.action === 'apply' && task.target === 'omp') ompApplyConfirm.value = true
+  else if (task.action === 'apply') installConfirm.value = true
   else if (task.action === 'uninstall') pendingUninstall.value = state.rows.find(row => row.toolId === task.target) || null
   else void versionCenter.start([task.target], task.action)
 }
@@ -100,7 +104,7 @@ async function copy(text: string) { showToast(await api.clipboardWrite(text) ? '
       <section v-if="batch.length" class="batch-banner" :class="{ 'has-error': failedCount && !running }" aria-label="升级任务进度" aria-live="polite">
         <div class="batch-heading">
           <span class="task-dot" :class="{ pulsing: running }" />
-          <strong>{{ running ? `${targetLabel(active?.target || '')} · ${active?.stage || '等待执行'}` : failedCount ? `${failedCount} 项失败，其余任务已处理` : batchReady ? '客户端更新已下载，等待安装' : '版本任务已完成' }}</strong>
+          <strong>{{ running ? `${targetLabel(active?.target || '')} · ${active?.stage || '等待执行'}` : failedCount ? `${failedCount} 项失败，其余任务已处理` : batchReady ? '更新已准备好，等待应用' : '版本任务已完成' }}</strong>
           <span class="batch-count">{{ finished }} / {{ batch.length }}</span><button type="button" class="text-btn" @click="tab = 'tasks'">查看任务</button>
         </div>
         <div class="progress-track" role="progressbar" :aria-valuenow="Math.round(progress)" :aria-valuemin="0" :aria-valuemax="100" aria-label="任务完成进度"><span :style="{ width: `${progress}%` }" /></div>
@@ -138,7 +142,8 @@ async function copy(text: string) { showToast(await api.clipboardWrite(text) ? '
                     <td><span class="status" :class="statusClass(statusLabel(row.toolId, row.compare))">{{ statusLabel(row.toolId, row.compare) }}</span></td>
                     <td><div class="row-actions">
                       <button type="button" class="btn btn-ghost btn-small" :disabled="busy" @click="versionCenter.check(row.toolId)">检测</button>
-                      <button type="button" class="btn btn-ghost btn-small" :disabled="busy || !canUpgradeTool(row)" @click="versionCenter.start([row.toolId], 'upgrade')">{{ actionLabel(row) }}</button>
+                      <button type="button" class="btn btn-ghost btn-small" :disabled="busy || !canUpgradeTool(row)" @click="state.snapshot.readyTools?.[row.toolId] ? (ompApplyConfirm = true) : versionCenter.start([row.toolId], 'upgrade')">{{ actionLabel(row) }}</button>
+                      <button v-if="row.toolId === 'omp' && state.snapshot.readyTools?.omp && lastTask('omp')?.status === 'failed'" type="button" class="text-btn" :disabled="busy" @click="versionCenter.start(['omp'], 'upgrade')">重新下载</button>
                       <button type="button" class="text-btn detail-toggle" :aria-label="`${toolLabel(row.toolId)}详情`" :aria-expanded="expanded === row.toolId" @click="expanded = expanded === row.toolId ? '' : row.toolId">详情 <span aria-hidden="true">{{ expanded === row.toolId ? '⌃' : '⌄' }}</span></button>
                     </div></td>
                   </tr>
@@ -173,6 +178,7 @@ async function copy(text: string) { showToast(await api.clipboardWrite(text) ? '
       <div v-if="helpOpen" class="help-note">网络代理用于检测和下载安装包，留空时直连。批量升级按顺序执行，某项失败后仍会继续后面的任务。卸载只移除命令行，会话和配置会保留。</div>
     </section>
     <ConfirmDialog :open="!!pendingUninstall" :title="pendingUninstall ? `卸载 ${toolLabel(pendingUninstall.toolId)}` : ''" :body="pendingUninstall ? uninstallBody(pendingUninstall) : ''" action="卸载" danger @close="pendingUninstall = null" @confirm="uninstall" />
+    <ConfirmDialog :open="ompApplyConfirm" title="应用 OMP 更新" body="将停止并关闭当前 OMP 会话，更新程序后恢复已保存的会话；不会自动重发任务。请先确认当前工作可以中断。" action="应用更新" @close="ompApplyConfirm = false" @confirm="ompApplyConfirm = false; versionCenter.start(['omp'], 'apply')" />
     <ConfirmDialog :open="installConfirm" title="安装 Agent Dock 更新" body="安装将替换当前客户端，Windows 和便携版会退出并完成更新。请先保存当前工作；macOS 和 Linux 安装包会交给系统安装器处理。" action="安装更新" @close="installConfirm = false" @confirm="installApp" />
   </div>
 </template>

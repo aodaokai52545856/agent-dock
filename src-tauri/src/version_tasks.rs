@@ -10,7 +10,7 @@ use std::{
     panic::{catch_unwind, AssertUnwindSafe},
     sync::{Arc, Mutex},
 };
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 use uuid::Uuid;
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -56,6 +56,7 @@ pub struct Snapshot {
     pub revision: u64,
     pub batch_id: String,
     pub ready_version: Option<String>,
+    pub ready_tools: std::collections::BTreeMap<String, String>,
     pub tasks: Vec<Task>,
 }
 impl Snapshot {
@@ -93,10 +94,12 @@ impl Hub {
         })
     }
     pub fn snapshot(&self) -> Snapshot {
-        self.state
+        let mut snapshot=self.state
             .lock()
             .unwrap_or_else(|err| err.into_inner())
-            .clone()
+            .clone();
+        if let Some(p)=tools::omp_update::pending(){snapshot.ready_tools.insert("omp".into(),p.version);}
+        snapshot
     }
     pub fn running(&self) -> bool {
         self.snapshot().running()
@@ -122,8 +125,8 @@ impl Hub {
         action: Action,
         execute: impl Fn(&Task, &Hub) -> Result<Outcome, String> + Send + 'static,
     ) -> Result<Snapshot, String> {
-        if targets.is_empty() || targets.len() > 6 {
-            return Err("请选择 1–6 项升级任务。".into());
+        if targets.is_empty() || targets.len() > tools::update::version_tools(None).len() + 1 {
+            return Err(format!("请选择 1–{} 项升级任务。",tools::update::version_tools(None).len()+1));
         }
         let mut seen = HashSet::new();
         for target in &targets {
@@ -131,12 +134,13 @@ impl Hub {
                 return Err("同一工具不能重复加入任务。".into());
             }
             match (target.as_str(), action) {
+                ("omp", Action::Apply) if targets.len() == 1 && tools::omp_update::pending().is_some() => {}
                 ("app", Action::Download | Action::Apply) if targets.len() == 1 => {}
                 (_, Action::Upgrade | Action::Uninstall) if ToolId::parse(target).is_some() => {}
                 _ => return Err("升级任务类型无效。".into()),
             }
         }
-        if action == Action::Apply
+        if action == Action::Apply && targets[0] == "app"
             && self
                 .prepared
                 .lock()
@@ -211,6 +215,7 @@ impl Hub {
                                 row.local_version = outcome.version;
                                 row.restart = outcome.restart;
                                 row.stage = match row.status {
+                                    Status::Ready if row.target=="omp" => "更新已准备好，等待应用",
                                     Status::Ready => "下载完成，等待安装",
                                     Status::Failed => "执行失败",
                                     _ => "已完成",
@@ -246,15 +251,17 @@ impl Hub {
             let mut ready = None;
             if let Some(row) = state.tasks.iter_mut().find(|row| row.id == id) {
                 update(row);
-                if row.action == Action::Download && row.status == Status::Ready {
+                if row.target == "app" && row.action == Action::Download && row.status == Status::Ready {
                     ready = Some(Some(row.local_version.clone()));
-                } else if row.action == Action::Apply && row.status == Status::Succeeded {
+                } else if row.target == "app" && row.action == Action::Apply && row.status == Status::Succeeded {
                     ready = Some(None);
                 }
             }
             if let Some(version) = ready {
                 state.ready_version = version;
             }
+            if let Some(p) = tools::omp_update::pending() { state.ready_tools.insert("omp".into(), p.version); }
+            else { state.ready_tools.remove("omp"); }
             state.revision += 1;
             state.clone()
         };
@@ -268,9 +275,52 @@ impl Hub {
         proxy: Option<&str>,
         task: &Task,
     ) -> Result<Outcome, String> {
+        if task.target == "omp" && matches!(task.action, Action::Upgrade | Action::Apply) {
+            let hub = crate::omp_rpc::global();
+            let prepared = if task.action == Action::Apply {
+                tools::omp_update::pending().ok_or("OMP 更新已失效，请重新检测更新")?
+            } else {
+                tools::omp_update::prepare(settings, proxy, &mut |bytes,total| self.change(&task.id, |row| {
+                    row.stage = "正在下载 OMP".into(); row.downloaded=bytes; row.total=total;
+                }))?
+            };
+            let terminals=app.state::<Arc<crate::pty::PtyHub>>();
+            let cli_sessions=terminals.list().into_iter().filter(|p|p.tool_id==ToolId::Omp).collect::<Vec<_>>();
+            if task.action == Action::Upgrade && (!hub.list().is_empty() || !cli_sessions.is_empty()) {
+                return Ok(Outcome { status:Status::Ready,version:prepared.version,restart:false,
+                    log:"OMP 更新已准备好。点击应用更新后将关闭并恢复 OMP 会话，不会自动重发任务。".into() });
+            }
+            let active=hub.list();
+            for cli in &cli_sessions {terminals.kill(&cli.pty_id)?;}
+            // Acknowledged application: close only OMP, then restore saved session identities.
+            for live in &active { if let Some(id)=&live.session_id { let _=hub.request(&live.pty_id,serde_json::json!({"type":"abort"}));
+                self.change(&task.id, |row|row.stage=format!("保存会话 {id}")); }
+                hub.close(&live.pty_id)?;
+            }
+            let applied=tools::omp_update::apply(&prepared,proxy);
+            let state=crate::state::load_state(app)?;
+            let mut restore_errors=Vec::new();
+            for live in active { if live.session_id.is_some(){ if let Err(e)=hub.open(app.clone(),&state,&live.project_id,live.session_id.clone(),live.account.map(|a|a.id),live.title) { restore_errors.push(e); }}}
+            for live in cli_sessions {
+                if let Some(id) = &live.session_id {
+                    let restored = (|| -> Result<(), String> {
+                        let project=crate::state::find_project(&state,&live.project_id)?;
+                        let profile=tools::omp::split_id(id)?.0;
+                        let args=tools::omp::native_args(&project.path,Some(id),&profile)?;
+                        terminals.open(app.clone(),&state,&live.project_id,ToolId::Omp,Some(id.clone()),live.title,120,32,Some(&state.settings.ui_theme),Some(args))?;
+                        Ok(())
+                    })();
+                    if let Err(error)=restored {restore_errors.push(error);}
+                }
+            }
+            let mut log=applied?;
+            if !restore_errors.is_empty(){log.push_str(&format!("\n部分会话需手动恢复：{}",restore_errors.join("；")));}
+            return Ok(Outcome{status:Status::Succeeded,log,version:prepared.version,restart:false});
+        }
         match task.action {
             Action::Upgrade | Action::Uninstall => {
                 let tool = ToolId::parse(&task.target).ok_or("无效的工具类型")?;
+                if tool==ToolId::Omp && app.state::<Arc<crate::pty::PtyHub>>().list().iter().any(|p|p.tool_id==ToolId::Omp){return Err("请先关闭 OMP 原生会话和登录终端再卸载".into());}
                 let result = if task.action == Action::Uninstall {
                     tools::update::uninstall_tool(tool, settings)
                 } else {
@@ -354,6 +404,16 @@ mod tests {
             version: "2.0".into(),
             restart: false,
         })
+    }
+    #[test]
+    fn every_registered_tool_including_omp_fits_one_batch() {
+        let hub=Hub::with_publisher(|_|{});
+        let targets=tools::update::version_tools(None).into_iter().map(|t|t.as_str().to_string()).collect::<Vec<_>>();
+        assert!(targets.len()>6);
+        hub.start_with(targets,Action::Upgrade,|_,_|done()).unwrap();
+        let final_state=wait(&hub);
+        assert_eq!(final_state.tasks.len(),tools::update::version_tools(None).len());
+        assert!(final_state.tasks.iter().all(|t|t.status==Status::Succeeded));
     }
     fn wait(hub: &Hub) -> Snapshot {
         for _ in 0..200 {

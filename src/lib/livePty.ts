@@ -177,6 +177,7 @@ export function toolTint(toolId: ToolId) {
   if (toolId === 'opencode') return 'var(--ad-opencode)'
   if (toolId === 'kimi') return 'var(--ad-kimi)'
   if (toolId === 'claude') return 'var(--ad-claude)'
+  if (toolId === 'omp') return 'var(--ad-omp)'
   if (toolId === 'pi') return 'var(--ad-pi)'
   if (toolId === 'dsh') return 'var(--ad-dsh)'
   return 'var(--ad-grok)'

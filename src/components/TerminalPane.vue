@@ -25,6 +25,8 @@ import {
   termThemeBackground
 } from '../lib/termGlass'
 import { attachSynchronizedOutput, createRefreshGate } from '../lib/termSync'
+import { createTermStream } from '../lib/termStream'
+import { createTermRecovery } from '../lib/termRecovery'
 import ToolMark from './ToolMark.vue'
 import { TOOLS, type ToolId } from '../lib/types'
 
@@ -35,6 +37,9 @@ type Host = {
   offData: { dispose: () => void }
   offSurface: { dispose: () => void }
   offClipboard: { dispose: () => void }
+  stream: ReturnType<typeof createTermStream>
+  recovery?: ReturnType<typeof createTermRecovery>
+  offRecovery?: { dispose: () => void }
   lastCols: number
   lastRows: number
   lastW: number
@@ -156,7 +161,7 @@ async function pasteFromClipboard(ptyId: string, term: Terminal) {
 }
 
 function canHost(ptyId: string) {
-  return Boolean(ptyId) && !isDshWeb(liveForPty(ptyId))
+  return Boolean(ptyId) && !isDshWeb(liveForPty(ptyId)) && liveForPty(ptyId)?.kind !== 'ompRpc'
 }
 
 function theme(ptyId?: string) {
@@ -230,6 +235,8 @@ function ensureHost(ptyId: string) {
   const mount = document.getElementById('term-mount')
   mount?.appendChild(el)
   const term = new Terminal({
+    cols: 120,
+    rows: 32,
     fontFamily: termFontFamily(),
     fontSize: props.fontSize,
     theme: theme(ptyId),
@@ -258,8 +265,32 @@ function ensureHost(ptyId: string) {
     },
     pasteEnabled: () => toolForPty(ptyId) === 'claude'
   })
-  const host = { term, fit, el, offData, offSurface, offClipboard, lastCols: 0, lastRows: 0, lastW: 0, lastH: 0 }
+  const stream = createTermStream((data, done) => term.write(data, done))
+  const host: Host = { term, fit, el, offData, offSurface, offClipboard, stream, lastCols: 0, lastRows: 0, lastW: 0, lastH: 0 }
   hosts.set(ptyId, host)
+  if (isWindows && toolForPty(ptyId) === 'omp') {
+    const recovery = createTermRecovery({
+      canRecover: () => store.activePtyId === ptyId && !isLayoutBusy() && !term.hasSelection()
+        && term.buffer.active.type === 'normal' && term.buffer.active.viewportY === term.buffer.active.baseY,
+      recover: () => redrawHost(ptyId, host, false),
+      scheduleTimeout: (cb, ms) => window.setTimeout(cb, ms),
+      cancelTimeout: id => window.clearTimeout(id)
+    })
+    // Observe user scrolling as well as new output: a pending repair waits while
+    // the user reads history, then runs when they return to the live viewport.
+    const onWheel = () => recovery.request()
+    const offScroll = term.onScroll(onWheel)
+    const offSelection = term.onSelectionChange(onWheel)
+    el.addEventListener('wheel', onWheel, { passive: true })
+    host.recovery = recovery
+    host.offRecovery = {
+      dispose() {
+        offScroll.dispose()
+        offSelection.dispose()
+        el.removeEventListener('wheel', onWheel)
+      }
+    }
+  }
   return host
 }
 
@@ -307,6 +338,10 @@ function bindTermSurface(term: Terminal, ptyId: string) {
 }
 
 function fitHost(ptyId: string, host: Host, force = false) {
+  void host.stream.resize(() => resizeHost(ptyId, host, force))
+}
+
+async function resizeHost(ptyId: string, host: Host, force = false) {
   if (!force && isLayoutBusy()) return
   const width = host.el.clientWidth
   const height = host.el.clientHeight
@@ -324,10 +359,12 @@ function fitHost(ptyId: string, host: Host, force = false) {
     const cols = host.term.cols
     const rows = host.term.rows
     if (cols === host.lastCols && rows === host.lastRows) return
+    await api.ptyResize(ptyId, cols, rows)
     host.lastCols = cols
     host.lastRows = rows
-    void api.ptyResize(ptyId, cols, rows)
   } catch {
+    host.lastW = 0
+    host.lastH = 0
     /* mount not measured yet */
   }
 }
@@ -339,6 +376,30 @@ function fitActive(force = false) {
   if (!host) return
   fitHost(id, host, force)
   refreshHost(host)
+}
+
+async function redrawActive() {
+  const id = store.activePtyId
+  const host = id ? hosts.get(id) : undefined
+  if (!host || !id || toolForPty(id) !== 'omp') return
+  await redrawHost(id, host, true)
+}
+
+async function redrawHost(id: string, host: Host, focus: boolean) {
+  await host.stream.resize(async () => {
+    if (hosts.get(id) !== host) return
+    const { cols, rows } = host.term
+    // A genuine size change asks OMP/ConPTY for a full repaint, even when
+    // its current viewport already matches. This preserves input and tasks.
+    host.term.resize(cols + 1, rows)
+    try { await api.ptyResize(id, cols + 1, rows) }
+    finally {
+      host.term.resize(cols, rows)
+      await api.ptyResize(id, cols, rows)
+    }
+    refreshHost(host)
+    if (focus) host.term.focus()
+  })
 }
 
 function show(ptyId: string | '') {
@@ -353,6 +414,7 @@ function show(ptyId: string | '') {
       fitHost(visible, host, true)
       refreshHost(host)
       host.term.focus()
+      host.recovery?.request()
     })
   })
 }
@@ -363,6 +425,9 @@ function disposeHost(ptyId: string) {
   host.offData.dispose()
   host.offSurface.dispose()
   host.offClipboard.dispose()
+  host.offRecovery?.dispose()
+  host.recovery?.dispose()
+  host.stream.dispose()
   host.term.dispose()
   host.el.remove()
   hosts.delete(ptyId)
@@ -400,6 +465,7 @@ watch(
 
 watch([paneAnimating, paneDragging, windowResizing, windowMoving], (now) => {
   fitScheduler.onBusyChange(now[0] || now[1] || now[2] || now[3])
+  if (!isLayoutBusy() && store.activePtyId) hosts.get(store.activePtyId)?.recovery?.request()
 })
 
 watch(windowMoving, (moving, was) => {
@@ -410,7 +476,10 @@ onMounted(async () => {
   if (api.isTauri) {
     unlistenData = await listen<{ ptyId: string; data: string }>('pty-data', (event) => {
       const host = ensureHost(event.payload.ptyId)
-      if (host) host.term.write(event.payload.data)
+      if (host) {
+        host.stream.write(event.payload.data)
+        host.recovery?.noteOutput(event.payload.data)
+      }
       if (isSignificantPtyChunk(event.payload.data)) notePtyData(event.payload.ptyId)
     })
     unlistenExit = await listen<{ ptyId: string }>('pty-exit', (event) => {
@@ -448,7 +517,7 @@ onUnmounted(() => {
   hosts.forEach((_, id) => disposeHost(id))
 })
 
-defineExpose({ ensureHost, show, dispose: disposeHost, fitActive })
+defineExpose({ ensureHost, show, dispose: disposeHost, fitActive, redrawActive })
 </script>
 
 <template>

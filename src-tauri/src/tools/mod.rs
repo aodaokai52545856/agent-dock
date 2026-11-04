@@ -4,6 +4,8 @@ mod grokbuild;
 mod kimi;
 mod opencode;
 mod pi;
+pub mod omp;
+pub mod omp_update;
 pub mod update;
 
 use crate::path_norm::normalize_path;
@@ -20,6 +22,7 @@ pub enum ToolId {
     Kimi,
     Claude,
     Pi,
+    Omp,
     Dsh,
 }
 
@@ -31,6 +34,7 @@ impl ToolId {
             ToolId::Kimi => "kimi",
             ToolId::Claude => "claude",
             ToolId::Pi => "pi",
+            ToolId::Omp => "omp",
             ToolId::Dsh => "dsh",
         }
     }
@@ -42,6 +46,7 @@ impl ToolId {
             "kimi" => Some(Self::Kimi),
             "claude" => Some(Self::Claude),
             "pi" => Some(Self::Pi),
+            "omp" => Some(Self::Omp),
             "dsh" => Some(Self::Dsh),
             _ => None,
         }
@@ -54,6 +59,7 @@ impl ToolId {
             ToolId::Kimi => "Kimi",
             ToolId::Claude => "Claude Code",
             ToolId::Pi => "Pi",
+            ToolId::Omp => "OMP",
             ToolId::Dsh => "DeepSeek Harness",
         }
     }
@@ -65,6 +71,7 @@ impl ToolId {
             ToolId::Kimi => &settings.kimi_path,
             ToolId::Claude => &settings.claude_path,
             ToolId::Pi => &settings.pi_path,
+            ToolId::Omp => &settings.omp_path,
             ToolId::Dsh => &settings.dsh_path,
         }
     }
@@ -76,6 +83,7 @@ impl ToolId {
             ToolId::Kimi => &["kimi"],
             ToolId::Claude => &["claude"],
             ToolId::Pi => &["pi"],
+            ToolId::Omp => &["omp"],
             ToolId::Dsh => &["dsh"],
         }
     }
@@ -91,6 +99,8 @@ pub struct SessionAccount {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionRow {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile_id: Option<String>,
     pub tool_id: ToolId,
     pub id: String,
     pub title: String,
@@ -129,6 +139,7 @@ pub fn resolve_binary(tool: ToolId, settings: &AppSettings) -> Result<PathBuf, S
             override_path
         ));
     }
+    if tool == ToolId::Omp && omp_update::managed_binary().is_file() { return Ok(omp_update::managed_binary()); }
     for name in tool.candidates() {
         if let Some(path) = platform::which_cmd(name) {
             return Ok(path);
@@ -166,6 +177,7 @@ pub fn list_sessions(tool: ToolId, cwd: &str, settings: &AppSettings) -> Result<
         ToolId::Kimi => kimi::list_sessions(cwd),
         ToolId::Claude => claude::list_sessions(cwd),
         ToolId::Pi => pi::list_sessions(cwd),
+        ToolId::Omp => omp::list_sessions(cwd),
         ToolId::Dsh => dsh::list_sessions(cwd),
     }
 }
@@ -186,6 +198,7 @@ pub fn rename_session(
     }
     match tool {
         ToolId::Opencode | ToolId::Pi => Ok(RenameKind::Overlay),
+        ToolId::Omp => omp::rename_session(cwd, session_id, title, _settings).map(|_| RenameKind::Native),
         ToolId::Dsh => Err("DeepSeek 入口不能改名。".into()),
         ToolId::Claude => claude::rename_session(cwd, session_id, title).map(|_| RenameKind::Native),
         ToolId::Grokbuild => grokbuild::rename_session(cwd, session_id, title).map(|_| RenameKind::Native),
@@ -205,6 +218,7 @@ pub fn delete_session(
         ToolId::Kimi => kimi::delete_session(session_id),
         ToolId::Claude => claude::delete_session(session_id, cwd),
         ToolId::Pi => pi::delete_session(cwd, session_id),
+        ToolId::Omp => omp::delete_session(cwd, session_id, settings),
         ToolId::Dsh => dsh::delete_session(cwd, session_id),
     }
 }
@@ -214,6 +228,7 @@ pub fn resume_args(tool: ToolId, session_id: &str) -> Vec<String> {
         ToolId::Opencode | ToolId::Pi => vec!["--session".into(), session_id.into()],
         ToolId::Grokbuild | ToolId::Claude => vec!["--resume".into(), session_id.into()],
         ToolId::Kimi => vec!["--session".into(), session_id.into()],
+        ToolId::Omp => vec!["--resume".into(), session_id.into()],
         ToolId::Dsh => Vec::new(),
     }
 }

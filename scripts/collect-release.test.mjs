@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict'
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   appVersion,
+  copyReleaseFiles,
   detectPackOs,
   plannedCopies,
   releaseFileName,
@@ -52,6 +55,24 @@ test('windows plan copies portable exe and nsis setup', () => {
   assert.equal(plan[0].to, 'AgentDock-0.1.0.exe')
   assert.equal(plan[0].required, true)
   assert.equal(plan[1].to, 'AgentDock-0.1.0-Setup.exe')
+})
+
+test('windows collection does not relabel an older installer as the current version', () => {
+  const fixture = mkdtempSync(join(tmpdir(), 'agent-dock-release-'))
+  const target = join(fixture, 'target')
+  const nsis = join(target, 'bundle', 'nsis')
+  try {
+    mkdirSync(nsis, { recursive: true })
+    writeFileSync(join(target, 'agent-dock.exe'), 'current executable')
+    writeFileSync(join(nsis, 'Agent Dock_0.1.0_x64-setup.exe'), 'old installer')
+    assert.equal(plannedCopies('win', target, '0.1.19')[1].from, null)
+    writeFileSync(join(nsis, 'Agent Dock_0.1.19_x64-setup.exe'), 'current installer')
+    const output = join(fixture, 'release')
+    copyReleaseFiles('win', target, output, '0.1.19')
+    assert.equal(readFileSync(join(output, 'AgentDock-0.1.19-Setup.exe'), 'utf8'), 'current installer')
+  } finally {
+    rmSync(fixture, { recursive: true, force: true })
+  }
 })
 
 test('mac plan copies app bundle and dmg', () => {

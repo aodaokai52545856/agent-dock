@@ -22,6 +22,9 @@ import StatusBar from './components/StatusBar.vue'
 import WindowResizeFrame from './components/WindowResizeFrame.vue'
 import TitleBar from './components/TitleBar.vue'
 import DshWebPane from './components/DshWebPane.vue'
+import OmpPane from './components/OmpPane.vue'
+import { startOmpService, stopOmpService } from './lib/omp'
+import { rememberOmpMode } from './lib/ompMode'
 import TerminalPane from './components/TerminalPane.vue'
 import TextConvertFab from './components/TextConvertFab.vue'
 import UsagePane from './components/UsagePane.vue'
@@ -40,6 +43,8 @@ import { DSH_FIXED_SESSION_ID, DSH_FIXED_SESSION_TITLE, isFixedDshSession } from
 import { isDshWeb, liveOfProject } from './lib/livePty'
 import {
   activeLive,
+  emitSessionDone,
+  reconcileOmpBindings,
   boot,
   deleteCurrentSession,
   deleteSessions,
@@ -67,7 +72,7 @@ import {
 } from './lib/store'
 import { isPendingSessionId, resolveOpenTarget } from './lib/liveBind'
 import { refreshCodexThreads } from './lib/pipeline'
-import type { ClaudeContinuation, ProjectDraft, SessionDoc, ToolId } from './lib/types'
+import type { ClaudeContinuation, ProjectDraft, SessionDoc, ToolId, OmpLaunchMode } from './lib/types'
 import { appearanceFromSettings, resolvedTheme, systemPrefersLight } from './lib/appearance'
 import { startVersionService, stopVersionService } from './lib/versionService'
 
@@ -97,12 +102,14 @@ watch(renamingId, (id, prev) => {
 })
 const projectDialog = ref<{ stopSave: () => void } | null>(null)
 const settingsDialog = ref<{ stopSave: () => void } | null>(null)
-const termRef = ref<{ dispose: (id: string) => void; fitActive: (force?: boolean) => void } | null>(null)
+const termRef = ref<{ dispose: (id: string) => void; fitActive: (force?: boolean) => void; redrawActive: () => Promise<void> } | null>(null)
 const consoleWs = ref<HTMLElement | null>(null)
 const bridgeWs = ref<HTMLElement | null>(null)
 const paneLoading = ref(false)
 const paneLoadingText = ref('正在打开会话')
 const newSessionOpen = ref(false)
+const ompResume=ref<{sessionId:string;projectId:string;title:string;profileId?:string}|null>(null)
+watch(newSessionOpen,open=>{if(!open)ompResume.value=null})
 const reopenNewSession = ref(false)
 const previewDoc = ref<SessionDoc | null>(null)
 const previewOpen = ref(false)
@@ -113,6 +120,16 @@ const removingProject = computed(() => store.projects.find((item) => item.id ===
 
 onMounted(() => {
   void boot()
+  if(api.isTauri) void startOmpService(s=>{
+    const i=store.live.findIndex(l=>l.ptyId===s.runtimeId);
+    const previous=i>=0?store.live[i]:undefined;
+    const live={...s.info,runtimeId:s.runtimeId,profileId:s.profileId,busy:!s.settled};
+    rememberOmpMode(live);
+    if(i>=0) store.live[i]=live; else if(live.alive) store.live.push(live);
+    reconcileOmpBindings();
+    if(live.sessionId && (previous?.sessionId!==live.sessionId || previous?.title!==live.title)) void refreshSessions({silent:true});
+    if(store.activePtyId===s.runtimeId && live.sessionId) store.focusedSession={toolId:'omp',sessionId:live.sessionId,title:live.title};
+  },id=>{const live=store.live.find(l=>l.ptyId===id);if(live) void emitSessionDone(live);void refreshSessions({silent:true})})
   void startVersionService()
   void nextTick().then(() => {
     requestAnimationFrame(() => {
@@ -125,6 +142,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   stopVersionService()
+  stopOmpService()
   window.removeEventListener('focus', refreshAfterWindowFocus)
   window.removeEventListener('blur', markWindowBlurred)
 })
@@ -445,7 +463,12 @@ async function finishPaneReady() {
   termRef.value?.fitActive(true)
 }
 
-async function openSession(sessionId?: string, toolId?: ToolId) {
+async function redrawTerminal() {
+  try { await termRef.value?.redrawActive() }
+  catch (error) { showToast(error instanceof Error ? error.message : String(error)) }
+}
+
+async function openSession(sessionId?: string, toolId?: ToolId, profileId?: string, ompMode?:OmpLaunchMode) {
   const project = selectedProject.value
   if (!project) {
     newSessionOpen.value = true
@@ -472,12 +495,20 @@ async function openSession(sessionId?: string, toolId?: ToolId) {
     await finishPaneReady()
     return
   }
+  if(tool==='omp'&&!ompMode){
+    store.selectedTool='omp'
+    ompResume.value=target.sessionId?{sessionId:target.sessionId,projectId:project.id,title:session?.title||'OMP 会话',profileId:session?.profileId||session?.account?.id}:null
+    newSessionOpen.value=true
+    return
+  }
   paneLoadingText.value = tool === 'dsh' ? '正在打开 DeepSeek Web' : '正在打开会话'
   paneLoading.value = true
   try {
     const opened = await api.ptyOpen({
       projectId: project.id,
       toolId: tool,
+      profileId,
+      ompMode,
       sessionId: target.sessionId,
       title: session?.title ?? (tool === 'dsh' ? DSH_FIXED_SESSION_TITLE : '新会话'),
       cols: 120,
@@ -546,13 +577,13 @@ async function onEmptyStart(toolId?: ToolId) {
   newSessionOpen.value = true
 }
 
-async function onCreateSession(payload: { projectId: string; toolId: ToolId }) {
+async function onCreateSession(payload: { projectId: string; toolId: ToolId; profileId?: string; ompMode?:OmpLaunchMode; sessionId?:string }) {
   newSessionOpen.value = false
   store.selectedTool = payload.toolId
   if (store.selectedProjectId !== payload.projectId) {
     await selectProject(payload.projectId)
   }
-  await openSession(undefined, payload.toolId)
+  await openSession(payload.sessionId, payload.toolId, payload.profileId, payload.ompMode)
 }
 
 async function onSaveSettings(settings: typeof store.settings) {
@@ -721,9 +752,10 @@ const confirmCopy = () => {
             :loading="paneLoading"
             :loading-text="paneLoadingText"
             @close="askClose"
+            @redraw="redrawTerminal"
           />
           <div class="term-stack">
-            <div class="term-under" :class="{ 'is-covered': isDshWeb(activeLive) }">
+            <div class="term-under" :class="{ 'is-covered': isDshWeb(activeLive) || activeLive?.kind === 'ompRpc' }">
               <TerminalPane
                 ref="termRef"
                 :loading="paneLoading"
@@ -732,6 +764,7 @@ const confirmCopy = () => {
                 @start="onEmptyStart"
               />
             </div>
+            <div v-if="activeLive?.kind === 'ompRpc'" class="omp-over" :style="{right:docRailPaneWidth()+'px'}"><OmpPane :runtime-id="activeLive.ptyId" /></div>
             <div v-if="isDshWeb(activeLive)" class="dsh-over">
               <DshWebPane :url="activeLive?.url || ''" />
             </div>
@@ -788,6 +821,7 @@ const confirmCopy = () => {
 
     <NewSessionDialog
       :open="newSessionOpen"
+      :resume="ompResume"
       @close="newSessionOpen = false"
       @create="onCreateSession"
       @add-project="onAddProjectFromSession"
@@ -1072,4 +1106,8 @@ const confirmCopy = () => {
   color: var(--ad-text);
   background: var(--ad-selected);
 }
+</style>
+
+<style scoped>
+.omp-over{position:absolute;inset:0;z-index:2;min-height:0;}
 </style>

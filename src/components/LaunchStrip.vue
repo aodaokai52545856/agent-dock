@@ -5,6 +5,7 @@ import { toolLabel } from '../lib/types'
 
 const emit = defineEmits<{
   close: []
+  redraw: []
 }>()
 
 const props = defineProps<{
@@ -32,12 +33,20 @@ const live = computed(() => Boolean(activeLive.value))
       <strong :title="selectedProject?.name">{{ selectedProject?.name ?? '项目' }}</strong>
       <span class="dot">·</span>
       <span>{{ activeLive ? toolLabel(activeLive.toolId) : selectedProject ? toolLabel(store.selectedTool) : '工具' }}</span>
+      <span v-if="activeLive?.toolId==='omp'">{{ activeLive.kind==='ompRpc'?'封装模式':'原生模式' }}</span>
       <span class="dot">·</span>
       <span class="proxy" :class="{ on: selectedProject?.proxyEnabled }" :title="proxyText">{{ proxyText }}</span>
       <span class="dot">·</span>
       <span class="title" :title="title">{{ title }}</span>
     </span>
     <div class="tools">
+      <button
+        v-if="activeLive?.toolId === 'omp' && activeLive.kind === 'pty'"
+        type="button"
+        class="tool"
+        title="重新同步原生终端画面，保留当前输入和任务"
+        @click="emit('redraw')"
+      >重绘终端</button>
       <span
         class="pulse"
         :class="{ 'is-live': live && !loading, 'is-loading': loading }"

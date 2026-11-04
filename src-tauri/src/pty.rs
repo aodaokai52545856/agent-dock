@@ -179,6 +179,15 @@ impl PtyHub {
     pub fn kill(&self, pty_id: &str) -> Result<(), String> {
         let mut sessions = self.sessions.lock().expect("pty lock");
         if let Some(mut pty) = sessions.remove(pty_id) {
+            #[cfg(windows)]
+            if pty.tool_id == ToolId::Omp {
+                if let Some(pid)=pty.child.process_id() {
+                    let mut command=std::process::Command::new("taskkill.exe");
+                    command.args(["/PID",&pid.to_string(),"/T","/F"]);
+                    platform::apply_no_window(&mut command);
+                    let _=command.output();
+                }
+            }
             let _ = pty.child.kill();
         }
         Ok(())
@@ -195,6 +204,7 @@ impl PtyHub {
         cols: u16,
         rows: u16,
         ui_theme: Option<&str>,
+        command_args: Option<Vec<String>>,
     ) -> Result<PtyOpened, String> {
         let key = match session_id.as_deref() {
             Some(id) => session_live_key(project_id, tool_id, id),
@@ -233,10 +243,13 @@ impl PtyHub {
             Some(crate::claude_accounts::launch_context(&app, &project.path, session_id.as_deref(), &base)?)
         } else { None };
         let extra_args = {
-            let mut args = tools::launch_args_for(tool_id, session_id.as_deref(), Some(&exe));
+            let mut args = command_args.unwrap_or_else(|| tools::launch_args_for(tool_id, session_id.as_deref(), Some(&exe)));
             args.extend(claude_theme_args(tool_id, ui_theme));
             args
         };
+        let omp_profile = if tool_id == ToolId::Omp {
+            extra_args.windows(2).find(|pair| pair[0] == "--profile").map(|pair| pair[1].clone())
+        } else { None };
 
         let pty_system = NativePtySystem::default();
         let pair = pty_system
@@ -251,25 +264,32 @@ impl PtyHub {
             })
             .map_err(|err| format!("无法创建终端：{err}"))?;
 
-        let shell = platform::resolve_shell(&state.settings.powershell_path)?;
-        let kind = shell_kind(&shell);
-        let launch = match kind {
-            ShellKind::PowerShell => {
-                let mut line = wrap_utf8_launch(&build_launch_command(&exe, &extra_args));
-                line = format!("$env:COLORFGBG='{}'; {line}", colorfgbg_for(tool_id, ui_theme));
-                if tool_id == ToolId::Grokbuild && state.settings.grok_follow_glass {
-                    line = format!("{}{line}", grok_glass_ps_prefix());
+        let mut cmd = if native_omp_command(tool_id, &exe) {
+            let mut cmd = CommandBuilder::new(&exe);
+            cmd.args(&extra_args);
+            cmd
+        } else {
+            let shell = platform::resolve_shell(&state.settings.powershell_path)?;
+            let kind = shell_kind(&shell);
+            let launch = match kind {
+                ShellKind::PowerShell => {
+                    let mut line = wrap_utf8_launch(&build_launch_command(&exe, &extra_args));
+                    line = format!("$env:COLORFGBG='{}'; {line}", colorfgbg_for(tool_id, ui_theme));
+                    if tool_id == ToolId::Grokbuild && state.settings.grok_follow_glass {
+                        line = format!("{}{line}", grok_glass_ps_prefix());
+                    }
+                    line
                 }
-                line
-            }
-            ShellKind::Fish | ShellKind::Posix => build_posix_launch(&exe, &extra_args),
+                ShellKind::Fish | ShellKind::Posix => build_posix_launch(&exe, &extra_args),
+            };
+            let launch = match &claude {
+                Some(context) => claude_launch_env(&launch, kind, context),
+                None => launch,
+            };
+            let mut cmd = CommandBuilder::new(&shell);
+            apply_shell_args(&mut cmd, kind, &shell, &launch);
+            cmd
         };
-        let launch = match &claude {
-            Some(context) => claude_launch_env(&launch, kind, context),
-            None => launch,
-        };
-        let mut cmd = CommandBuilder::new(&shell);
-        apply_shell_args(&mut cmd, kind, &shell, &launch);
         cmd.cwd(&project.path);
         cmd.env("TERM", "xterm-256color");
         cmd.env("COLORTERM", "truecolor");
@@ -279,6 +299,9 @@ impl PtyHub {
         cmd.env("TERM_PROGRAM_VERSION", "5.5.0");
         cmd.env("COLORFGBG", colorfgbg_for(tool_id, ui_theme));
         apply_grok_glass_env(&mut cmd, tool_id, state.settings.grok_follow_glass);
+        if tool_id == ToolId::Omp && project.proxy_enabled {
+            cmd.env("PI_PROXY", &project.proxy_url);
+        }
         if tool_id == ToolId::Dsh {
             if let Some(secret) = crate::dsh_keys::active_secret(&app) {
                 cmd.env("DEEPSEEK_API_KEY", secret);
@@ -322,7 +345,7 @@ impl PtyHub {
         let account = claude.as_ref().map(|context| tools::SessionAccount {
             id: context.id.clone(),
             name: context.name.clone(),
-        });
+        }).or_else(|| omp_profile.map(|profile| tools::SessionAccount { id:profile.clone(), name:profile }));
 
         {
             let mut sessions = self.sessions.lock().expect("pty lock");
@@ -452,6 +475,15 @@ fn now_millis() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0)
+}
+
+fn native_omp_command(tool_id: ToolId, exe: &Path) -> bool {
+    // Keep shell dispatch for package-manager shims, but let an actual OMP
+    // executable own the console directly (including its raw input modes).
+    tool_id == ToolId::Omp && !matches!(
+        exe.extension().and_then(|ext| ext.to_str()).map(str::to_ascii_lowercase).as_deref(),
+        Some("cmd" | "bat" | "ps1")
+    )
 }
 
 fn reap_dead(sessions: &mut HashMap<String, LivePty>) {
@@ -717,6 +749,16 @@ pub fn decode_utf8_stream(pending: &mut Vec<u8>, incoming: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_omp_owns_its_console_while_shell_shims_keep_shell_dispatch() {
+        assert!(native_omp_command(ToolId::Omp, Path::new("C:/bin/omp.exe")));
+        assert!(native_omp_command(ToolId::Omp, Path::new("/usr/local/bin/omp")));
+        for name in ["omp.cmd", "omp.CMD", "omp.bat", "omp.ps1"] {
+            assert!(!native_omp_command(ToolId::Omp, Path::new(name)));
+        }
+        assert!(!native_omp_command(ToolId::Pi, Path::new("pi.exe")));
+    }
 
     #[test]
     fn claude_shell_launch_applies_isolation_after_profile_with_quoted_values() {

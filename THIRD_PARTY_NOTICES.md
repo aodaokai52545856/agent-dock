@@ -71,3 +71,21 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+## oh-my-pi Rust RPC client
+
+- Project: https://github.com/can1357/oh-my-pi
+- Revision: `d6bc0b76eb82ed0dbd3eeffd8de7309f02c22a81`
+- Source: `sdk/rust/omp-rpc`, vendored at `src-tauri/vendor/omp-rpc`
+- License: MIT; full license is included at `src-tauri/vendor/omp-rpc/LICENSE`.
+
+The wire types and transport are reused with documented desktop-host additions
+in `src-tauri/vendor/omp-rpc/UPSTREAM.md`.
+
+## oh-my-pi icon
+
+- Source: https://github.com/can1357/oh-my-pi/blob/d6bc0b76eb82ed0dbd3eeffd8de7309f02c22a81/assets/icon.svg
+- License: MIT; full license is included at `src-tauri/vendor/omp-rpc/LICENSE`.
+
+The official icon geometry and orange accents are retained. Its white foreground
+uses the Dock theme's icon color so it remains visible in light and dark themes.

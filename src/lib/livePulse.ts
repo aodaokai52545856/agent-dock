@@ -16,6 +16,7 @@ export function isPtyBusy(lastDataAt: number | undefined, now: number, windowMs 
 
 export function liveDotForPty(item: LivePtyInfo | null | undefined, lastDataAt: number | undefined, now: number): LiveDotKind {
   if (!item || !isLivePty(item)) return 'off'
+  if(item.kind==='ompRpc')return item.busy?'busy':'open'
   return isPtyBusy(lastDataAt, now) ? 'busy' : 'open'
 }
 
@@ -45,7 +46,7 @@ export function projectLiveDot(
 ): LiveDotKind {
   const items = liveOfProject(live, projectId)
   if (!items.length) return 'off'
-  if (items.some((item) => isPtyBusy(lastDataAt[item.ptyId], now))) return 'busy'
+  if (items.some((item) => item.kind==='ompRpc' ? item.busy : isPtyBusy(lastDataAt[item.ptyId], now))) return 'busy'
   return 'open'
 }
 
@@ -58,7 +59,7 @@ export function projectLiveCounts(
   const items = liveOfProject(live, projectId)
   return {
     open: items.length,
-    busy: items.filter((item) => isPtyBusy(lastDataAt[item.ptyId], now)).length
+    busy: items.filter((item) => item.kind==='ompRpc' ? item.busy : isPtyBusy(lastDataAt[item.ptyId], now)).length
   }
 }
 

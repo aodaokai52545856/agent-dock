@@ -57,6 +57,7 @@ pub fn list_sessions(cwd: &str, settings: &AppSettings) -> Result<Vec<SessionRow
                 item.title
             };
             SessionRow {
+                    profile_id: None,
                 tool_id: ToolId::Opencode,
                 id: item.id,
                 title,

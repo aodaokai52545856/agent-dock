@@ -1,5 +1,6 @@
 import { computed, reactive } from 'vue'
 import * as api from './api'
+import { rememberOmpMode } from './ompMode'
 import { DSH_FIXED_SESSION_ID, DSH_FIXED_SESSION_TITLE } from './dsh'
 import { canPhysicallyDeleteSession } from './sessionBatch'
 import { compareSessionRecency } from './sessionGroups'
@@ -39,7 +40,7 @@ import {
 } from './ptyDone'
 import { defaultShellPath } from './platform'
 import { flowAsPipeline } from './flow/compat.ts'
-import { ensureProjectFlows, loadAllFlows, loadAllRuns, selectedFlow } from './flow/model.ts'
+import { ensureProjectFlows, loadAllFlows, loadAllRuns, selectedFlow, persistAllFlows } from './flow/model.ts'
 import { loadCustomRoles, type RoleDef } from './flow/roles.ts'
 import type { FlowRun, ProjectFlows } from './flow/types.ts'
 import type {
@@ -114,6 +115,9 @@ const defaultSettings = (): AppSettings => ({
   kimiPath: '',
   claudePath: '',
   piPath: '',
+  ompPath: '',
+  ompDefaultProfile: '',
+  ompLaunchMode: 'wrapped',
   dshPath: '',
   powershellPath: defaultShellPath(),
   terminalFontSize: 14,
@@ -198,6 +202,7 @@ export const store = reactive({
     kimi: false,
     claude: false,
     pi: false,
+    omp: false,
     dsh: false
   } as Record<ToolId, boolean>,
   sessionRefreshBusy: false,
@@ -452,7 +457,7 @@ function archiveSessionArtifacts(live?: LivePtyInfo) {
   }
 }
 
-async function emitSessionDone(live: LivePtyInfo) {
+export async function emitSessionDone(live: LivePtyInfo) {
   const watching = store.activePtyId === live.ptyId
   const windowFocused = typeof document !== 'undefined' && document.hasFocus()
   if (doneNoticeTarget({ watching, windowFocused }) === 'skip') return
@@ -679,6 +684,7 @@ async function refreshSessionsNow(opts?: { silent?: boolean }) {
       kimi: false,
       claude: false,
       pi: false,
+    omp: false,
       dsh: false
     }
     store.sessionRefreshBusy = false
@@ -761,6 +767,7 @@ function applyPreviewSessions() {
     kimi: false,
     claude: false,
     pi: false,
+    omp: false,
     dsh: false
   }
   store.sessionStatus = rows.length ? 'ready' : 'empty'
@@ -1035,10 +1042,25 @@ export async function refreshLive() {
   const previousProject = store.live.find((item) => item.ptyId === previous)?.projectId ?? store.selectedProjectId
   const local = store.live.slice()
   store.live = mergeLiveFromServer(await api.listLivePtys(), local)
+  reconcileOmpBindings()
   prunePtyDone(store.live)
   if (previous && !store.live.some((item) => item.ptyId === previous)) {
     adoptLiveFallback(previous, previousProject)
   }
+}
+
+/** Keep logical OMP bindings when an update replaces the process instance. */
+export function reconcileOmpBindings() {
+  let changed=false
+  for(const [projectId,bundle] of Object.entries(store.projectFlows)) for(const flow of bundle.flows) for(const node of flow.nodes){
+    const c=node.channel
+    if(c.kind!=='ompRpc' && !(c.kind==='pty' && c.toolId==='omp'))continue
+    const live=store.live.find(l=>l.projectId===projectId && l.toolId==='omp' && l.kind==='ompRpc' && l.alive && (l.ptyId===c.ptyId || Boolean(c.sessionId && l.sessionId===c.sessionId)))
+    if(live && (c.ptyId!==live.ptyId || c.sessionId!==live.sessionId)){
+      c.ptyId=live.ptyId;c.sessionId=live.sessionId||'';c.profileId=live.profileId||live.account?.id;changed=true
+    }
+  }
+  if(changed)persistAllFlows(store.projectFlows)
 }
 
 export function notePtyData(ptyId: string, at = Date.now()) {
@@ -1059,6 +1081,7 @@ export function markPtyExit(ptyId: string, opts?: { userClosed?: boolean; skipRe
 }
 
 export function rememberOpened(info: LivePtyInfo) {
+  rememberOmpMode(info)
   const openedAt = info.openedAt ?? store.live.find((item) => item.ptyId === info.ptyId)?.openedAt ?? Date.now()
   const next = { ...info, openedAt, alive: true }
   const idx = store.live.findIndex((item) => item.ptyId === info.ptyId)
@@ -1094,6 +1117,7 @@ export async function bindLiveSession(ptyId: string, sessionId: string, title?: 
   const current = store.live.find((item) => item.ptyId === ptyId)
   if (!current) return
   current.sessionId = sessionId
+  rememberOmpMode(current)
   current.key = liveKey(current.projectId, current.toolId, sessionId)
   if (title?.trim()) current.title = title.trim()
   if (store.activePtyId === ptyId) {

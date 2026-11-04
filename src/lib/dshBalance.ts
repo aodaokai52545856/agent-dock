@@ -4,7 +4,7 @@ export const DSH_BALANCE_INTERVAL_MS = 60_000
 
 export function shouldShowDshBalance(filter: SessionToolFilter, selectedTool: ToolId, appMode = 'console') {
   if (appMode !== 'console') return false
-  if (filter === 'opencode' || filter === 'kimi' || filter === 'pi' || filter === 'grokbuild') {
+  if (filter === 'opencode' || filter === 'kimi' || filter === 'pi' || filter === 'omp' || filter === 'grokbuild') {
     return false
   }
   if (filter === 'dsh' || filter === 'claude') return true

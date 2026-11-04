@@ -161,9 +161,10 @@ function normalizeNode(node: FlowNode): FlowNode {
           baseBranch: channel.baseBranch || 'main',
           customInstructions: channel.customInstructions || ''
         }
-      : channel?.kind === 'pty'
+      : (channel?.kind === 'pty' || channel?.kind === 'ompRpc')
         ? {
-            kind: 'pty',
+            kind: channel.toolId==='omp'?'ompRpc':channel.kind,
+            profileId: channel.profileId,
             toolId: channel.toolId || 'grokbuild',
             sessionId: channel.sessionId || '',
             ptyId: channel.ptyId || ''

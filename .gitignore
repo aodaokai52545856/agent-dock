@@ -13,3 +13,4 @@ src-tauri/.playwright-cli
 .pwtmp/
 .pw-tmp/
 .worktrees/
+.codegraph/

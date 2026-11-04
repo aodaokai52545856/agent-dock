@@ -58,6 +58,7 @@ pub fn official_url(tool: ToolId) -> &'static str {
         ToolId::Kimi => "https://code.kimi.com",
         ToolId::Claude => "https://code.claude.com/docs/en/quickstart",
         ToolId::Pi => "https://pi.dev",
+        ToolId::Omp => "https://omp.sh",
         ToolId::Dsh => "https://github.com/deepseek-ai/deepseek-harness",
     }
 }
@@ -71,6 +72,7 @@ pub fn version_tools(tool: Option<ToolId>) -> Vec<ToolId> {
             ToolId::Kimi,
             ToolId::Claude,
             ToolId::Pi,
+            ToolId::Omp,
             ToolId::Dsh,
         ],
     }
@@ -83,7 +85,7 @@ pub fn list_versions(
 ) -> Vec<ToolVersionInfo> {
     version_tools(tool)
         .into_iter()
-        .map(|item| version_info(item, settings, proxy_url))
+        .map(|item| { let mut row=version_info(item, settings, proxy_url); if item == ToolId::Omp { if let Some(path)=&row.path {row.checks.push(ToolCheck{name:"安装来源".into(),ok:true,detail:super::omp_update::source(Path::new(path))});} } row })
         .collect()
 }
 
@@ -91,6 +93,7 @@ pub fn upgrade_tool(tool: ToolId, settings: &AppSettings, proxy_url: Option<&str
     let mut log = String::new();
     let proxy = proxy_pairs(proxy_url.unwrap_or(&settings.default_proxy_url));
     let result = match tool {
+        ToolId::Omp => return super::omp_update::upgrade(settings, Some(proxy_url.unwrap_or(&settings.default_proxy_url))),
         ToolId::Opencode => upgrade_via_npm(&mut log, "opencode-ai", &proxy),
         ToolId::Kimi => upgrade_kimi(&mut log, settings, &proxy),
         ToolId::Grokbuild => upgrade_grok(&mut log, settings, &proxy),
@@ -120,6 +123,7 @@ pub fn upgrade_tool(tool: ToolId, settings: &AppSettings, proxy_url: Option<&str
 pub fn uninstall_tool(tool: ToolId, settings: &AppSettings) -> UpgradeResult {
     let mut log = String::new();
     let mut did = false;
+    if tool == ToolId::Omp { return super::omp_update::uninstall(settings); }
     if tool == ToolId::Kimi {
         did |= uninstall_kimi_official(&mut log);
     }
@@ -234,7 +238,7 @@ fn version_args(tool: ToolId) -> &'static [&'static str] {
     match tool {
         ToolId::Grokbuild => &["version"],
         ToolId::Dsh => &["-V"],
-        ToolId::Opencode | ToolId::Kimi | ToolId::Claude | ToolId::Pi => &["--version"],
+        ToolId::Opencode | ToolId::Kimi | ToolId::Claude | ToolId::Pi | ToolId::Omp => &["--version"],
     }
 }
 
@@ -307,6 +311,7 @@ fn remote_version(tool: ToolId, settings: &AppSettings, exe: Option<&Path>, prox
             _ => npm_view("@moonshot-ai/kimi-code", &proxy),
         },
         ToolId::Claude => npm_view("@anthropic-ai/claude-code", &proxy),
+        ToolId::Omp => super::omp_update::latest(Some(proxy_url.unwrap_or(&settings.default_proxy_url))).unwrap_or_else(|_| "查询失败".into()),
         ToolId::Pi => npm_view("@earendil-works/pi-coding-agent", &proxy),
         ToolId::Dsh => npm_view("@deepseek-ai/dsh", &proxy),
         ToolId::Grokbuild => match exe {
@@ -1011,6 +1016,7 @@ fn npm_package(tool: ToolId) -> &'static str {
         ToolId::Kimi => "@moonshot-ai/kimi-code",
         ToolId::Claude => "@anthropic-ai/claude-code",
         ToolId::Pi => "@earendil-works/pi-coding-agent",
+        ToolId::Omp => "@oh-my-pi/pi-coding-agent",
         ToolId::Dsh => "@deepseek-ai/dsh",
         ToolId::Grokbuild => "grok",
     }
@@ -1569,7 +1575,7 @@ mod tests {
     #[test]
     fn version_tools_one_or_all() {
         assert_eq!(version_tools(Some(ToolId::Dsh)), vec![ToolId::Dsh]);
-        assert_eq!(version_tools(None).len(), 6);
+        assert_eq!(version_tools(None).len(), 7);
         assert!(version_tools(None).contains(&ToolId::Dsh));
     }
 
@@ -1581,6 +1587,7 @@ mod tests {
             ToolId::Kimi,
             ToolId::Claude,
             ToolId::Pi,
+            ToolId::Omp,
             ToolId::Dsh,
         ] {
             assert!(official_url(tool).starts_with("https://"));

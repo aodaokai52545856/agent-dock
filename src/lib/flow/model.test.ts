@@ -32,6 +32,14 @@ function memory(): StorageLike {
   }
 }
 
+test('OMP RPC bindings retain runtime and profile after reload',()=>{
+  const storage=memory();const bundle=seedProjectFlows();
+  bundle.flows[0].nodes[0].channel={kind:'ompRpc',toolId:'omp',ptyId:'omp-one',sessionId:'omp@d29yaw:one',profileId:'work'}
+  persistAllFlows({p:bundle},storage)
+  const channel=loadAllFlows(storage).p.flows[0].nodes[0].channel
+  assert.deepEqual(channel,{kind:'ompRpc',toolId:'omp',ptyId:'omp-one',sessionId:'omp@d29yaw:one',profileId:'work'})
+})
+
 test('migrate pipeline keeps slice threads and retries', () => {
   const pipeline = emptyPipeline('p1')
   pipeline.slice = 4

@@ -41,6 +41,13 @@ function channel(partial: Partial<PtyChannel> = {}): PtyChannel {
 const a = grok({ ptyId: 'pty-a', title: '登录限流' })
 const b = grok({ ptyId: 'pty-b', title: '审查意见' })
 
+test('OMP RPC orchestration cannot bind a native terminal',()=>{
+  const native=grok({ptyId:'native',title:'OMP native',toolId:'omp',kind:'pty'})
+  const wrapped=grok({ptyId:'rpc',title:'OMP wrapped',toolId:'omp',kind:'ompRpc'})
+  assert.equal(inspectPty(channel({kind:'ompRpc',toolId:'omp',ptyId:'native'}),[native,wrapped],'proj').ok,false)
+  assert.equal(inspectPty(channel({kind:'ompRpc',toolId:'omp',ptyId:'rpc'}),[native,wrapped],'proj').ok,true)
+})
+
 test('bound ptyId picks that Grok window among two live ones', () => {
   const live = resolvePty(channel({ ptyId: 'pty-b', sessionId: 'sess-pty-b' }), [a, b], 'proj')
   assert.equal(live?.ptyId, 'pty-b')

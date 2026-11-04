@@ -100,6 +100,7 @@ pub fn list_sessions_in(home: &Path, cwd: &str) -> Result<Vec<SessionRow>, Strin
             rows.insert(
                 stem.to_string(),
                 SessionRow {
+                    profile_id: None,
                     tool_id: ToolId::Claude,
                     id: stem.to_string(),
                     title: pick_title(&meta, None, None),
@@ -212,6 +213,7 @@ fn merge_registry(
         rows.insert(
             reg.id.clone(),
             SessionRow {
+                    profile_id: None,
                 tool_id: ToolId::Claude,
                 id: reg.id,
                 title: pick_title(

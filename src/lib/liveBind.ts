@@ -57,7 +57,7 @@ export function matchUnboundLiveToSessions(
   )
   const usedSession = new Set<string>()
   const binds: LiveBind[] = []
-  const tools: ToolId[] = ['opencode', 'grokbuild', 'kimi', 'claude', 'pi', 'dsh']
+  const tools: ToolId[] = ['opencode', 'grokbuild', 'kimi', 'claude', 'pi', 'omp', 'dsh']
 
   for (const toolId of tools) {
     const unbound = live
@@ -75,7 +75,7 @@ export function matchUnboundLiveToSessions(
       const session = candidates.find(
         (row) =>
           !usedSession.has(`${toolId}:${row.id}`) && row.updatedAt >= openedAt - slackMs &&
-          (toolId !== 'claude' || Boolean(pty.account?.id && pty.account.id === row.account?.id))
+          (!['claude','omp'].includes(toolId) || Boolean(pty.account?.id && pty.account.id === row.account?.id))
       )
       if (!session) continue
       usedSession.add(`${toolId}:${session.id}`)

@@ -20,6 +20,7 @@ function probes(missing: Partial<Record<keyof ToolProbeMap, boolean>> = {}): Too
     kimi: { found: missing.kimi !== true },
     claude: { found: missing.claude !== true },
     pi: { found: missing.pi !== true },
+    omp: { found: missing.omp !== true },
     dsh: { found: missing.dsh !== true }
   }
 }
@@ -29,8 +30,8 @@ function test(name: string, fn: () => void) {
   console.log(`ok ${name}`)
 }
 
-test('six CLI tools including Pi and DeepSeek Harness', () => {
-  assert.equal(TOOLS.length, 6)
+test('seven CLI tools including Pi, OMP and DeepSeek Harness', () => {
+  assert.equal(TOOLS.length, 7)
   assert.ok(TOOLS.some((tool) => tool.id === 'claude'))
   assert.ok(TOOLS.some((tool) => tool.id === 'pi'))
   const dsh = TOOLS.find((tool) => tool.id === 'dsh')

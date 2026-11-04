@@ -48,6 +48,13 @@ test('new live pty binds to a session that appeared after it opened', () => {
   assert.deepEqual(binds, [{ ptyId: 'p1', sessionId: 'fresh', title: '修圆角', toolId: 'grokbuild' }])
 })
 
+test('OMP native terminals bind only journals from their own profile',()=>{
+  const binds=matchUnboundLiveToSessions(
+    [live({ptyId:'native',toolId:'omp',account:{id:'work',name:'work'}})],
+    [session({id:'other',toolId:'omp',updatedAt:1_000_900,account:{id:'default',name:'default'}}),session({id:'own',toolId:'omp',updatedAt:1_000_500,account:{id:'work',name:'work'}})],'a')
+  assert.equal(binds[0]?.sessionId,'own')
+})
+
 test('does not bind an old disk session to a new unbound pty', () => {
   const binds = matchUnboundLiveToSessions(
     [live({ ptyId: 'p1', openedAt: 1_000_000 })],

@@ -11,7 +11,7 @@ import {
 } from '../lib/docPreview'
 import { renderMarkdown } from '../lib/markdown'
 import { pageMermaidTheme, paintMermaidDiagrams } from '../lib/mermaidRender'
-import { formatCiteBlock, wrapBracketedPaste } from '../lib/sessionCite'
+import { formatCiteBlock } from '../lib/sessionCite'
 import { showToast, store } from '../lib/store'
 import type { SessionDoc, SessionDocBody, ToolId } from '../lib/types'
 
@@ -135,7 +135,7 @@ async function cite(includeBody: boolean) {
   }
   citing.value = true
   try {
-    await api.ptyWrite(store.activePtyId, wrapBracketedPaste(citePayload(includeBody)))
+    await api.writeSessionText(store.activePtyId, citePayload(includeBody))
     showToast('已写入当前终端，未发送')
     emit('close')
   } catch (err) {

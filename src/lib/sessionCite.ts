@@ -4,6 +4,7 @@ function toolName(toolId: ToolId) {
   if (toolId === 'grokbuild') return 'Grok'
   if (toolId === 'kimi') return 'Kimi'
   if (toolId === 'claude') return 'Claude Code'
+  if (toolId === 'omp') return 'OMP'
   if (toolId === 'pi') return 'Pi'
   if (toolId === 'dsh') return 'DeepSeek'
   return 'OpenCode'

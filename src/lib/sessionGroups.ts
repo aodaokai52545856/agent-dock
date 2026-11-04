@@ -4,14 +4,14 @@ export const SESSION_GROUP_COLLAPSE_KEY = 'ad-session-group-collapsed'
 
 const TOOL_IDS = new Set(TOOLS.map((tool) => tool.id))
 
-export type SessionGroupId = ToolId | `claude:${string}`
+export type SessionGroupId = ToolId | `claude:${string}` | `omp:${string}`
 
 export function compareSessionRecency(a: SessionRow, b: SessionRow) {
   return b.updatedAt - a.updatedAt || a.toolId.localeCompare(b.toolId) || a.id.localeCompare(b.id)
 }
 
 export function accountSessionGroups(toolId: ToolId, sessions: SessionRow[]) {
-  if (toolId !== 'claude' || !sessions.length) {
+  if ((toolId !== 'claude' && toolId !== 'omp') || !sessions.length) {
     return [{ id: toolId as SessionGroupId, label: toolLabel(toolId), sessions }]
   }
   const buckets = new Map<string, SessionRow[]>()
@@ -24,8 +24,8 @@ export function accountSessionGroups(toolId: ToolId, sessions: SessionRow[]) {
   return [...buckets].sort(([a], [b]) =>
     a === b ? 0 : a === 'system' ? -1 : b === 'system' ? 1 : a.localeCompare(b)
   ).map(([id, rows]) => ({
-    id: `claude:${id}` as SessionGroupId,
-    label: `Claude · ${rows[0].account?.name || '归属未知'}`,
+    id: `${toolId}:${id}` as SessionGroupId,
+    label: `${toolId === 'omp' ? 'OMP' : 'Claude'} · ${rows[0].account?.name || '归属未知'}`,
     sessions: [...rows].sort(compareSessionRecency)
   }))
 }
@@ -36,7 +36,7 @@ export function parseCollapsedGroups(raw: string | null | undefined): Set<Sessio
     const value = JSON.parse(raw)
     if (!Array.isArray(value)) return new Set()
     return new Set(value.filter((id): id is SessionGroupId => typeof id === 'string' && (
-      TOOL_IDS.has(id as ToolId) || (id.startsWith('claude:') && id.length > 7 && id.length <= 200)
+      TOOL_IDS.has(id as ToolId) || ((id.startsWith('claude:') || id.startsWith('omp:')) && (id.split(':')[1]?.length || 0) > 0 && id.length <= 200)
     )))
   } catch {
     return new Set()

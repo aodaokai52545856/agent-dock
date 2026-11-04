@@ -29,8 +29,8 @@ const props = defineProps<{
 }>()
 
 const roles = computed(() => allRoles(store.customRoles))
-const channels: ChannelKind[] = ['codexApp', 'pty', 'cursorSdk', 'human']
-const tools: ToolId[] = ['grokbuild', 'kimi', 'claude', 'opencode', 'pi', 'dsh']
+const channels: ChannelKind[] = ['codexApp', 'pty', 'ompRpc', 'cursorSdk', 'human']
+const tools: ToolId[] = ['grokbuild', 'kimi', 'claude', 'opencode', 'pi', 'omp', 'dsh']
 const targets: { id: ReviewTargetKind; label: string }[] = [
   { id: 'uncommittedChanges', label: '未提交改动' },
   { id: 'commit', label: '指定 commit' },
@@ -40,14 +40,14 @@ const targets: { id: ReviewTargetKind; label: string }[] = [
 
 const liveWindows = computed(() =>
   liveOfProject(store.live, store.selectedProjectId).filter((item) => {
-    if (props.node.channel.kind !== 'pty') return true
-    return item.toolId === props.node.channel.toolId
+    if ((props.node.channel.kind !== 'pty' && props.node.channel.kind !== 'ompRpc')) return true
+    return item.toolId === props.node.channel.toolId && (item.toolId!=='omp'||item.kind==='ompRpc')
   })
 )
 
 const channelHint = computed(() => describeChannel(props.node.channel, store.live))
 const boundLive = computed(() => {
-  if (props.node.channel.kind !== 'pty') return null
+  if ((props.node.channel.kind !== 'pty' && props.node.channel.kind !== 'ompRpc')) return null
   const found = inspectPty(props.node.channel, store.live, store.selectedProjectId)
   return found.ok ? found.live : null
 })
@@ -68,6 +68,7 @@ function isThreadOn(id: string) {
 function setChannelKind(kind: ChannelKind) {
   if (kind === 'codexApp') updateNode(props.node.id, { channel: defaultChannel('reviewer') })
   else if (kind === 'pty') updateNode(props.node.id, { channel: { kind: 'pty', toolId: 'grokbuild', sessionId: '', ptyId: '' } })
+  else if (kind === 'ompRpc') updateNode(props.node.id, {channel:{kind:'ompRpc',toolId:'omp',sessionId:'',ptyId:''}})
   else if (kind === 'cursorSdk') updateNode(props.node.id, { channel: { kind: 'cursorSdk', agentId: '' } })
   else updateNode(props.node.id, { channel: { kind: 'human' } })
 }
@@ -81,12 +82,12 @@ function onContract(event: Event) {
 }
 
 function setToolId(toolId: ToolId) {
-  if (props.node.channel.kind !== 'pty') return
-  updateNode(props.node.id, { channel: { kind: 'pty', toolId, sessionId: '', ptyId: '' } })
+  if ((props.node.channel.kind !== 'pty' && props.node.channel.kind !== 'ompRpc')) return
+  updateNode(props.node.id, { channel: { kind: toolId==='omp'?'ompRpc':'pty', toolId, sessionId: '', ptyId: '' } })
 }
 
 function bindPty(ptyId: string) {
-  if (props.node.channel.kind !== 'pty') return
+  if ((props.node.channel.kind !== 'pty' && props.node.channel.kind !== 'ompRpc')) return
   if (!ptyId) {
     updateNode(props.node.id, { channel: { ...props.node.channel, ptyId: '', sessionId: '' } })
     return
@@ -94,9 +95,10 @@ function bindPty(ptyId: string) {
   const live = store.live.find((item) => item.ptyId === ptyId)
   updateNode(props.node.id, {
     channel: {
-      kind: 'pty',
+      kind: live?.toolId==='omp'?'ompRpc':props.node.channel.kind,
       toolId: live?.toolId || props.node.channel.toolId,
       ptyId,
+      profileId: live?.profileId || live?.account?.id,
       sessionId: live?.sessionId || ''
     }
   })
@@ -150,9 +152,9 @@ function onCodexField(field: 'commitSha' | 'baseBranch' | 'customInstructions', 
       <textarea :value="node.roleContract" rows="2" @change="onContract" />
     </label>
 
-    <div v-if="node.channel.kind === 'pty'" class="pty-bind">
+    <div v-if="(node.channel.kind === 'pty' || node.channel.kind === 'ompRpc')" class="pty-bind">
       <div class="row">
-        <label class="field tight">
+        <label v-if="node.channel.kind !== 'ompRpc'" class="field tight">
           <span>窗口类型</span>
           <select
             :value="node.channel.toolId"
@@ -185,6 +187,7 @@ function onCodexField(field: 'commitSha' | 'baseBranch' | 'customInstructions', 
         </button>
       </div>
       <p v-if="!liveWindows.length" class="hint">控制台里先打开该类型窗口，或点上面的按钮新开一扇。</p>
+      <p v-if="node.channel.toolId==='omp'" class="hint">Dock 自动编排使用封装模式；原生终端里的多智能体由 OMP 自己管理。</p>
     </div>
 
     <div v-else-if="node.channel.kind === 'codexApp'" class="targets">

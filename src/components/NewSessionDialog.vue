@@ -1,25 +1,32 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
+import { ompProfiles } from '../lib/omp'
 import ToolMark from './ToolMark.vue'
-import { TOOLS, type ToolId } from '../lib/types'
+import { TOOLS, type ToolId, type OmpLaunchMode } from '../lib/types'
+import { preferredOmpMode } from '../lib/ompMode'
 import { store } from '../lib/store'
 
 const props = defineProps<{
   open: boolean
+  resume?: {sessionId:string;projectId:string;title:string;profileId?:string}|null
 }>()
 
 const emit = defineEmits<{
   close: []
-  create: [payload: { projectId: string; toolId: ToolId }]
+  create: [payload: { projectId: string; toolId: ToolId; profileId?: string; ompMode?:OmpLaunchMode; sessionId?:string }]
   addProject: []
 }>()
 
 const form = reactive({
   projectId: '',
+  profileId: '',
+  ompMode: 'wrapped' as OmpLaunchMode,
   toolId: '' as ToolId | '',
   error: ''
 })
 
+const profiles = ref<{id:string;agentDir:string}[]>([])
+watch(()=>props.open,open=>{if(open){form.profileId=props.resume?.profileId||store.settings.ompDefaultProfile||'';void ompProfiles().then(v=>profiles.value=v).catch(()=>{})}})
 const pickerOpen = ref(false)
 const pickerFocus = ref(0)
 
@@ -33,8 +40,9 @@ watch(
   (open) => {
     pickerOpen.value = false
     if (!open) return
-    form.projectId = store.selectedProjectId || store.projects[0]?.id || ''
-    form.toolId = store.selectedTool
+    form.projectId = props.resume?.projectId || store.selectedProjectId || store.projects[0]?.id || ''
+    form.toolId = props.resume?'omp':store.selectedTool
+    form.ompMode=preferredOmpMode(form.projectId,props.resume?.sessionId,store.settings.ompLaunchMode)
     form.error = ''
   }
 )
@@ -104,7 +112,7 @@ function submit() {
     return
   }
   form.error = ''
-  emit('create', { projectId: form.projectId, toolId: form.toolId })
+  emit('create', { projectId: form.projectId, toolId: form.toolId, profileId:form.profileId, ompMode:form.toolId==='omp'?form.ompMode:undefined,sessionId:props.resume?.sessionId })
 }
 </script>
 
@@ -119,8 +127,8 @@ function submit() {
       @click="closePicker"
       @keydown="onKey"
     >
-      <h2>新建会话</h2>
-      <p class="lead">选择项目和工具，打开一个独立会话。</p>
+      <h2>{{ resume?'打开 OMP 会话':'新建会话' }}</h2>
+      <p class="lead">{{ resume?resume.title:'选择项目和工具，打开一个独立会话。' }}</p>
 
       <div v-if="!store.projects.length" class="empty">
         <p>还没有项目。先添加一个代码目录。</p>
@@ -141,6 +149,7 @@ function submit() {
               aria-haspopup="listbox"
               :aria-expanded="pickerOpen"
               aria-label="选择项目"
+              :disabled="Boolean(resume)"
               @click="togglePicker"
             >
               <span class="picker-value">{{ projectLabel }}</span>
@@ -171,7 +180,8 @@ function submit() {
           </div>
         </div>
 
-        <div class="field">
+        <label v-if="form.toolId === 'omp'" class="field"><span class="label">OMP profile</span><select v-model="form.profileId" aria-label="OMP profile" :disabled="Boolean(resume)"><option value="">沿用默认配置</option><option v-for="p in profiles" :key="p.id" :value="p.id">{{ p.id }}</option></select></label>
+        <div v-if="!resume" class="field">
           <span class="label">工具</span>
           <div class="tools" role="radiogroup" aria-label="工具">
             <button
@@ -194,10 +204,11 @@ function submit() {
           </div>
         </div>
 
+        <label v-if="form.toolId==='omp'" class="field"><span class="label">OMP 启动方式</span><select v-model="form.ompMode" aria-label="OMP 启动方式"><option value="native">原生模式 · OMP 终端</option><option value="wrapped">封装模式 · Dock 聊天界面</option></select><small class="mode-hint">{{ form.ompMode==='native'?'使用 OMP 自带的终端界面、快捷键和原生交互。':'使用 Dock 消息面板、文档引用和 RPC 自动编排。' }}</small></label>
         <p v-if="form.error" class="err">{{ form.error }}</p>
         <div class="actions">
           <button type="button" class="btn btn-ghost" @click="emit('close')">取消</button>
-          <button type="button" class="btn btn-primary" :disabled="!canCreate" @click="submit">新建会话</button>
+          <button type="button" class="btn btn-primary" :disabled="!canCreate" @click="submit">{{ resume?'打开会话':'新建会话' }}</button>
         </div>
       </template>
     </div>
@@ -205,7 +216,10 @@ function submit() {
 </template>
 
 <style scoped>
+.mode-hint{color:var(--ad-muted);font-size:12px;line-height:1.5}
 .dialog {
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
   width: 420px;
   max-width: calc(100vw - 48px);
 }

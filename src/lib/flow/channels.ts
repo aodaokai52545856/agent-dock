@@ -5,6 +5,7 @@ import type { ChannelBinding, ChannelKind, CodexChannel, FlowDef, FlowNode, PtyC
 export const CHANNEL_LABEL: Record<ChannelKind, string> = {
   codexApp: 'Codex 应用程序',
   pty: '终端窗口',
+  ompRpc: 'OMP 封装会话（RPC）',
   cursorSdk: 'Cursor SDK',
   human: '人工'
 }
@@ -34,13 +35,14 @@ export function defaultChannel(role: RoleId): ChannelBinding {
   const kind = findRole(role)?.defaultChannel || 'pty'
   if (kind === 'codexApp') return defaultCodexChannel()
   if (kind === 'pty') return defaultPtyChannel()
+  if (kind === 'ompRpc') return {kind:'ompRpc',toolId:'omp',sessionId:'',ptyId:''}
   if (kind === 'cursorSdk') return { kind: 'cursorSdk', agentId: '' }
   return { kind: 'human' }
 }
 
 export function channelSupportsAuto(channel: ChannelBinding) {
   if (channel.kind === 'codexApp' || channel.kind === 'cursorSdk' || channel.kind === 'human') return true
-  return channel.kind === 'pty' && AUTO_PTY_TOOLS.includes(channel.toolId)
+  return (channel.kind === 'pty' || channel.kind === 'ompRpc') && (channel.toolId === 'omp' || AUTO_PTY_TOOLS.includes(channel.toolId))
 }
 
 export function ptyToolLabel(toolId: ToolId) {
@@ -52,7 +54,7 @@ export function describeChannel(channel: ChannelBinding, live: LivePtyInfo[] = [
     const n = channel.threadIds.length
     return n ? `Codex · ${n} 条线程` : 'Codex · 新开审查线程'
   }
-  if (channel.kind === 'pty') {
+  if ((channel.kind === 'pty' || channel.kind === 'ompRpc')) {
     const tool = ptyToolLabel(channel.toolId)
     if (!channel.ptyId) return `未绑定的 ${tool} 窗口`
     const found = inspectPty(channel, live, live.find((item) => item.ptyId === channel.ptyId)?.projectId || '')
@@ -72,7 +74,7 @@ export function firstCodexNode(flow: FlowDef | null | undefined) {
 }
 
 export function firstPtyNode(flow: FlowDef | null | undefined) {
-  return flow?.nodes.find((node) => node.channel.kind === 'pty') ?? null
+  return flow?.nodes.find((node) => (node.channel.kind === 'pty' || node.channel.kind === 'ompRpc')) ?? null
 }
 
 export function defaultNodeTitle(role: RoleId) {
@@ -95,6 +97,7 @@ export function inspectPty(
     const byId = ofProject.find((item) => item.ptyId === channel.ptyId)
     if (byId) {
       if (byId.toolId !== channel.toolId) return { ok: false, reason: 'mismatch' }
+      if(channel.toolId==='omp'&&byId.kind!=='ompRpc')return {ok:false,reason:'mismatch'}
       return { ok: true, live: byId }
     }
     const known = live.find((item) => item.ptyId === channel.ptyId)
@@ -103,7 +106,7 @@ export function inspectPty(
   }
   if (channel.sessionId) {
     const matches = ofProject.filter(
-      (item) => item.toolId === channel.toolId && item.sessionId === channel.sessionId
+      (item) => item.toolId === channel.toolId && item.sessionId === channel.sessionId && (channel.toolId!=='omp'||item.kind==='ompRpc')
     )
     if (matches.length === 1) return { ok: true, live: matches[0] }
     if (matches.length > 1) return { ok: false, reason: 'ambiguous' }
@@ -131,13 +134,13 @@ export function ptyOccupant(flow: FlowDef | null | undefined, ptyId: string, exc
   if (!ptyId || !flow) return null
   return flow.nodes.find((node) => (
     node.id !== exceptNodeId
-    && node.channel.kind === 'pty'
+    && (node.channel.kind === 'pty' || node.channel.kind === 'ompRpc')
     && node.channel.ptyId === ptyId
   )) ?? null
 }
 
 export function ptyBindError(node: FlowNode, reason: PtyInspectReason) {
-  const tool = node.channel.kind === 'pty' ? ptyToolLabel(node.channel.toolId) : '窗口'
+  const tool = (node.channel.kind === 'pty' || node.channel.kind === 'ompRpc') ? ptyToolLabel(node.channel.toolId) : '窗口'
   const name = node.title || roleLabel(node.role)
   if (reason === 'closed') return `节点「${name}」绑定的窗口已关闭，请重新选择`
   if (reason === 'mismatch') return `节点「${name}」绑定的窗口类型不匹配，请重新选择`
@@ -146,7 +149,7 @@ export function ptyBindError(node: FlowNode, reason: PtyInspectReason) {
 }
 
 function nodeNeedsAutoSession(flow: FlowDef, node: FlowNode) {
-  if (node.channel.kind !== 'pty' || !channelSupportsAuto(node.channel)) return false
+  if ((node.channel.kind !== 'pty' && node.channel.kind !== 'ompRpc') || !channelSupportsAuto(node.channel)) return false
   const edge = flow.edges.find((item) => item.from === node.id)
   return !edge || edge.mode === 'auto'
 }
@@ -158,13 +161,13 @@ export function validateFlowPtyBindings(
 ): string | null {
   const owners = new Map<string, FlowNode[]>()
   for (const node of flow.nodes) {
-    if (node.channel.kind !== 'pty') continue
+    if ((node.channel.kind !== 'pty' && node.channel.kind !== 'ompRpc')) continue
     const found = inspectPty(node.channel, live, projectId)
     if (!found.ok) return ptyBindError(node, found.reason)
     const bucket = owners.get(found.live.ptyId) || []
     bucket.push(node)
     owners.set(found.live.ptyId, bucket)
-    if (nodeNeedsAutoSession(flow, node) && !found.live.sessionId) {
+    if (node.channel.kind !== 'ompRpc' && nodeNeedsAutoSession(flow, node) && !found.live.sessionId) {
       return `先在「${found.live.title || ptyToolLabel(node.channel.toolId)}」窗口里完成至少一轮对话，再自动接驳`
     }
   }
@@ -190,7 +193,7 @@ export function preparePtyRun(
   projectId: string,
   opts: { send: boolean }
 ): PtyRunPrep {
-  if (node.channel.kind !== 'pty') return { ok: false, error: '不是窗口节点' }
+  if ((node.channel.kind !== 'pty' && node.channel.kind !== 'ompRpc')) return { ok: false, error: '不是窗口节点' }
   const found = inspectPty(node.channel, live, projectId)
   if (!found.ok) return { ok: false, error: ptyBindError(node, found.reason) }
   const sessionId = found.live.sessionId || ''

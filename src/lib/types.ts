@@ -1,4 +1,6 @@
-export type ToolId = 'opencode' | 'grokbuild' | 'kimi' | 'claude' | 'pi' | 'dsh'
+export type ToolId = 'opencode' | 'grokbuild' | 'kimi' | 'claude' | 'pi' | 'omp' | 'dsh'
+export type OmpLaunchMode = 'native' | 'wrapped'
+export function parseOmpLaunchMode(value:unknown):OmpLaunchMode { return value==='native'?'native':'wrapped' }
 
 export type RenameKind = 'native' | 'overlay'
 
@@ -33,6 +35,9 @@ export interface AppSettings {
   kimiPath: string
   claudePath: string
   piPath: string
+  ompPath: string
+  ompDefaultProfile: string
+  ompLaunchMode: OmpLaunchMode
   dshPath: string
   powershellPath: string
   terminalFontSize: number
@@ -103,6 +108,7 @@ export interface SessionAccount {
 }
 
 export interface SessionRow {
+  profileId?: string | null
   account?: SessionAccount | null
   toolId: ToolId
   id: string
@@ -167,6 +173,7 @@ export interface ToolProbeMap {
   kimi: BinaryProbe
   claude: BinaryProbe
   pi: BinaryProbe
+  omp: BinaryProbe
   dsh: BinaryProbe
 }
 
@@ -182,7 +189,11 @@ export interface PtyOpened {
   url?: string | null
 }
 
-export interface LivePtyInfo {
+export interface LiveSessionInfo {
+  busy?: boolean
+  runtimeId?: string
+  profileId?: string
+
   account?: SessionAccount | null
   sessionUpdatedAt?: number
   ptyId: string
@@ -196,6 +207,9 @@ export interface LivePtyInfo {
   kind?: 'pty' | 'web' | string | null
   url?: string | null
 }
+
+/** Compatibility name for existing terminal consumers. */
+export type LivePtyInfo = LiveSessionInfo
 
 export interface ProjectDraft {
   name: string
@@ -264,6 +278,7 @@ export interface VersionTaskSnapshot {
   revision: number
   batchId: string
   readyVersion: string | null
+  readyTools?: Record<string, string>
   tasks: VersionTask[]
 }
 
@@ -520,6 +535,7 @@ export const TOOL_OFFICIAL_URLS: Record<ToolId, string> = {
   kimi: 'https://code.kimi.com',
   claude: 'https://code.claude.com/docs/en/quickstart',
   pi: 'https://pi.dev',
+  omp: 'https://omp.sh',
   dsh: 'https://github.com/deepseek-ai/deepseek-harness'
 }
 
@@ -528,6 +544,7 @@ export const TOOLS: { id: ToolId; label: string; hint: string; tint: string }[] 
   { id: 'grokbuild', label: 'Grok', hint: '启动 Grok', tint: 'var(--ad-grok)' },
   { id: 'kimi', label: 'Kimi', hint: '启动 Kimi', tint: 'var(--ad-kimi)' },
   { id: 'claude', label: 'Claude Code', hint: '启动 Claude Code', tint: 'var(--ad-claude)' },
+  { id: 'omp', label: 'OMP', hint: '启动 oh-my-pi', tint: 'var(--ad-omp)' },
   { id: 'pi', label: 'Pi', hint: '启动 Pi', tint: 'var(--ad-pi)' },
   { id: 'dsh', label: 'DeepSeek', hint: '打开 DeepSeek Web', tint: 'var(--ad-dsh)' }
 ]

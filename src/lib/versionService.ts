@@ -1,7 +1,7 @@
 import { listen } from '@tauri-apps/api/event'
 import * as api from './api'
 import { createVersionCenter } from './versionCenter'
-import { refreshSessions, setToolProbes, showToast } from './store'
+import { refreshSessions, refreshLive, setToolProbes, showToast } from './store'
 import type { VersionTaskSnapshot } from './types'
 
 export const versionCenter = createVersionCenter({
@@ -11,12 +11,13 @@ export const versionCenter = createVersionCenter({
     const ready = tasks.some(task => task.status === 'ready')
     const installing = tasks.some(task => task.restart)
     const text = failed ? `${failed} 项任务失败，其余任务已处理，可在版本面板查看日志并重试`
-      : ready ? 'Agent Dock 更新已下载，可在版本面板安装' : installing ? '正在安装 Agent Dock，客户端即将退出' : `${tasks.length} 项版本任务已完成`
+      : ready ? '更新已准备好，可在版本面板应用' : installing ? '正在安装 Agent Dock，客户端即将退出' : `${tasks.length} 项版本任务已完成`
     showToast(text)
     if (api.isTauri && !document.hasFocus()) void api.notifyDesktop('版本管理', text)
     if (api.isTauri && tasks.some(task => task.target !== 'app')) {
       void api.probeTools().then(setToolProbes).catch(() => {})
       void refreshSessions({ silent: true })
+      void refreshLive()
     }
   }
 })
