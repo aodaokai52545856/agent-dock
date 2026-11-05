@@ -55,3 +55,11 @@ test('ordinary code fences stay pre code', () => {
   assert.match(html, /language-ts/)
   assert.equal(html.includes('ad-mermaid'), false)
 })
+
+test('wide tables keep native table structure and column alignment in a scroll region', () => {
+  const html = renderMarkdown('| 字段 | 数量 |\n| :--- | ---: |\n| `pairs.actual` | 123 |')
+  assert.match(html, /class="ad-table-scroll"[^>]*role="region"[^>]*tabindex="0"/)
+  assert.match(html, /<table>[\s\S]*<thead>[\s\S]*<tbody>/)
+  assert.match(html, /<td align="right">123<\/td>/)
+  assert.match(html, /<code>pairs.actual<\/code>/)
+})

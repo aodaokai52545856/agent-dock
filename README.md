@@ -14,13 +14,13 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/aodaokai52545856/agent-dock/releases/tag/v0.1.21"><img src="https://img.shields.io/badge/⬇%20Download-v0.1.21-0A0A0A?style=for-the-badge&logo=github&logoColor=white" alt="Download v0.1.21"></a>
+  <a href="https://github.com/aodaokai52545856/agent-dock/releases/tag/v0.1.22"><img src="https://img.shields.io/badge/⬇%20Download-v0.1.22-0A0A0A?style=for-the-badge&logo=github&logoColor=white" alt="Download v0.1.22"></a>
   &nbsp;
   <a href="#快速开始"><img src="https://img.shields.io/badge/Quick_Start-启动-1a1a1a?style=for-the-badge" alt="Quick Start"></a>
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.1.21-111111?style=flat-square" alt="version">
+  <img src="https://img.shields.io/badge/version-0.1.22-111111?style=flat-square" alt="version">
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-0d0d0d?style=flat-square" alt="platform">
   <img src="https://img.shields.io/badge/stack-Tauri%202%20·%20Vue%203%20·%20Rust-141414?style=flat-square" alt="stack">
   <img src="https://img.shields.io/badge/license-Apache%202.0-3d9a6a?style=flat-square" alt="license">
@@ -29,7 +29,7 @@
 <p align="center">
   <a href="#下载">下载</a>
   ·
-  <a href="#v0121-新能力">新能力</a>
+  <a href="#v0122-新能力">新能力</a>
   ·
   <a href="#能力">能力</a>
   ·
@@ -68,6 +68,17 @@
 
 ---
 
+<a id="v0122-新能力"></a>
+
+## v0.1.22 新能力
+
+- 修复 OMP 原生终端停止跟随输出、底部内容截断和切回窗口跳到会话开头的问题，保留输入草稿及主动停留的历史位置。
+- 恢复右侧可拖动滚动条；同一批输出最多恢复一次，修复无极滚轮连续触底时反复重绘闪屏。
+- 优化文档阅读窗口，提供可收起目录、当前章节高亮、紧凑排版切换和小窗口布局，完善空态与加载失败反馈。
+- 改善 Markdown 表格与代码字段排版，保留数值列对齐；Mermaid 图表支持缩放、适应、展开、横向布局和源码查看。
+- 补充终端滚动、后台恢复、连续触底及文档阅读器的自动化回归。
+
+---
 <a id="v0121-新能力"></a>
 
 ## v0.1.21 新能力
@@ -287,19 +298,19 @@
 
 ## 下载
 
-> **v0.1.21** · 跨平台安装包 · 无需本机 Rust
+> **v0.1.22** · 跨平台安装包 · 无需本机 Rust
 
 | 文件 | 平台 | 说明 | 大小约 |
 | :---: | :---: | --- | ---: |
-| [**AgentDock-0.1.21-Setup.exe**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.21/AgentDock-0.1.21-Setup.exe) | Windows | NSIS 安装包（推荐） | 构建后确定 |
-| [**AgentDock-0.1.21.exe**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.21/AgentDock-0.1.21.exe) | Windows | 绿色便携版 | 构建后确定 |
-| [**AgentDock-0.1.21.dmg**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.21/AgentDock-0.1.21.dmg) | macOS | 磁盘映像 | 构建后确定 |
-| [**AgentDock-0.1.21.app.tar.gz**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.21/AgentDock-0.1.21.app.tar.gz) | macOS | `.app` 压缩包 | 构建后确定 |
-| [**AgentDock-0.1.21.AppImage**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.21/AgentDock-0.1.21.AppImage) | Linux | 免安装可执行 | 构建后确定 |
-| [**AgentDock-0.1.21.deb**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.21/AgentDock-0.1.21.deb) | Linux | Debian / Ubuntu | 构建后确定 |
+| [**AgentDock-0.1.22-Setup.exe**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.22/AgentDock-0.1.22-Setup.exe) | Windows | NSIS 安装包（推荐） | 构建后确定 |
+| [**AgentDock-0.1.22.exe**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.22/AgentDock-0.1.22.exe) | Windows | 绿色便携版 | 构建后确定 |
+| [**AgentDock-0.1.22.dmg**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.22/AgentDock-0.1.22.dmg) | macOS | 磁盘映像 | 构建后确定 |
+| [**AgentDock-0.1.22.app.tar.gz**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.22/AgentDock-0.1.22.app.tar.gz) | macOS | `.app` 压缩包 | 构建后确定 |
+| [**AgentDock-0.1.22.AppImage**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.22/AgentDock-0.1.22.AppImage) | Linux | 免安装可执行 | 构建后确定 |
+| [**AgentDock-0.1.22.deb**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.22/AgentDock-0.1.22.deb) | Linux | Debian / Ubuntu | 构建后确定 |
 
 <p align="center">
-  <a href="https://github.com/aodaokai52545856/agent-dock/releases/tag/v0.1.21"><b>→ 打开 Releases · v0.1.21</b></a>
+  <a href="https://github.com/aodaokai52545856/agent-dock/releases/tag/v0.1.22"><b>→ 打开 Releases · v0.1.22</b></a>
 </p>
 
 **运行前提**
@@ -311,7 +322,7 @@
 | **CLI** | `opencode` / `grok` / `kimi` / `claude` 等自行安装并登录；Dock **不代登录** |
 | **编排** | 自动开发需 Cursor API Key；Codex 审查需本机已登录 Codex |
 
-> **macOS 提示：** CI 产物暂未 Apple 公证。若提示「已损坏」，终端执行 `xattr -cr ~/Downloads/AgentDock-0.1.21.dmg`，或对 app **右键 → 打开**。
+> **macOS 提示：** CI 产物暂未 Apple 公证。若提示「已损坏」，终端执行 `xattr -cr ~/Downloads/AgentDock-0.1.22.dmg`，或对 app **右键 → 打开**。
 
 ---
 
@@ -381,7 +392,7 @@ npm run tauri:dev
 
 **必须在对应系统上打包**，不能从 Windows 打出 `.dmg` / `.AppImage`。产物把界面打进二进制，不再监听开发端口，落到 `release/`。
 
-版本号读 `package.json` 的 `version`。当前 `0.1.21` 会打出 `AgentDock-0.1.21-Setup.exe` 等文件名。
+版本号读 `package.json` 的 `version`。当前 `0.1.22` 会打出 `AgentDock-0.1.22-Setup.exe` 等文件名。
 
 ```bash
 npm run pack          # 当前系统

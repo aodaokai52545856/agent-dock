@@ -405,20 +405,20 @@ export async function listLivePtys(): Promise<LivePtyInfo[]> {
 }
 
 export async function appVersion(): Promise<string> {
-  if (!isTauri) return '0.1.20'
+  if (!isTauri) return '0.1.22'
   return invoke('app_version')
 }
 
 export async function checkAppUpdate(proxyUrl?: string): Promise<AppUpdateInfo> {
   if (!isTauri) {
     return {
-      localVersion: '0.1.20',
-      latestVersion: '0.1.20',
+      localVersion: '0.1.22',
+      latestVersion: '0.1.22',
       compare: '已是最新',
       kind: 'win-setup',
       kindLabel: 'Windows 安装包',
-      assetName: 'AgentDock-0.1.20-Setup.exe',
-      htmlUrl: 'https://github.com/aodaokai52545856/agent-dock/releases/tag/v0.1.20'
+      assetName: 'AgentDock-0.1.22-Setup.exe',
+      htmlUrl: 'https://github.com/aodaokai52545856/agent-dock/releases/tag/v0.1.22'
     }
   }
   return invoke('check_app_update', { proxyUrl: proxyUrl ?? null })

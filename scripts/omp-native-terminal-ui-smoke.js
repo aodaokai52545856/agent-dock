@@ -104,7 +104,8 @@ async page => {
     smoke.write(history)
   })
   await page.waitForFunction(() => window.__nativeSmoke.host.term.buffer.active.baseY > 100)
-  await page.evaluate(() => window.__nativeSmoke.host.term.scrollToTop())
+  await page.mouse.move(500, 300)
+  await page.mouse.wheel(0, -10000)
   await page.waitForTimeout(500)
   if (await page.evaluate(() => window.__nativeSmoke.log.some(item => item.kind === 'resize'))) throw new Error('Recovery interrupted history reading')
   await page.evaluate(() => {
@@ -112,8 +113,8 @@ async page => {
     button.id = 'scroll-fixture-focus'
     document.body.append(button)
     button.focus()
-    window.__nativeSmoke.host.term.scrollToBottom()
   })
+  await page.mouse.wheel(0, 10000)
   await page.waitForFunction(() => {
     const term = window.__nativeSmoke.host.term, buffer = term.buffer.active
     const screen = Array.from({ length: term.rows }, (_, i) => buffer.getLine(buffer.viewportY + i)?.translateToString(true) || '').join('\n')

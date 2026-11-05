@@ -9,7 +9,7 @@ async page=>{
     const snapshot={revision:1,batchId:'',readyVersion:null,readyTools:{},tasks:[]}
     window.__TAURI_INTERNALS__={invoke:async(command,args={})=>{
       calls.push({command,args})
-      if(command==='app_version')return'0.1.20'
+      if(command==='app_version')return'0.1.22'
       if(command==='version_task_state')return structuredClone(snapshot)
       if(command==='list_tool_versions')return[{toolId:args.toolId,name:args.toolId,found:true,path:args.toolId==='omp'?'C:/Users/Example/.bun/bin/omp.exe':'C:/tools/tool.exe',localVersion:'18.15.0',latestVersion:'18.16.0',compare:'可更新',checks:[{name:'安装来源',ok:true,detail:'bun'}]}]
       if(command==='start_version_tasks'){

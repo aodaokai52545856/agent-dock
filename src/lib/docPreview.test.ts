@@ -15,7 +15,7 @@ function test(name: string, fn: () => void) {
 test('default size is wider than the old 880 dialog', () => {
   assert.equal(DOC_PREVIEW_DEFAULT_W >= 1100, true)
   assert.equal(DOC_PREVIEW_DEFAULT_H >= 640, true)
-  const size = clampDocPreviewSize(DOC_PREVIEW_DEFAULT_W, DOC_PREVIEW_DEFAULT_H, 1440, 900)
+  const size = clampDocPreviewSize(DOC_PREVIEW_DEFAULT_W, DOC_PREVIEW_DEFAULT_H, 1600, 1000)
   assert.equal(size.w, DOC_PREVIEW_DEFAULT_W)
   assert.equal(size.h, DOC_PREVIEW_DEFAULT_H)
 })
@@ -34,8 +34,8 @@ test('tiny windows shrink below the usual minimum', () => {
 
 test('parses stored size and ignores junk', () => {
   assert.equal(parseDocPreviewSize('{"w":980,"h":640}', 1400, 900).w, 980)
-  assert.equal(parseDocPreviewSize('nope', 1400, 900).w, DOC_PREVIEW_DEFAULT_W)
-  assert.equal(parseDocPreviewSize(null, 1400, 900).h, DOC_PREVIEW_DEFAULT_H)
+  assert.equal(parseDocPreviewSize('nope', 1600, 1000).w, DOC_PREVIEW_DEFAULT_W)
+  assert.equal(parseDocPreviewSize(null, 1600, 1000).h, DOC_PREVIEW_DEFAULT_H)
 })
 
 test('se and w edges grow and shrink from the drag delta', () => {

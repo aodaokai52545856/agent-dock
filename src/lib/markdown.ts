@@ -99,9 +99,13 @@ const defaultCode = renderer.code.bind(renderer)
 renderer.code = (token: Tokens.Code) => {
   if (isDiagramLang(token.lang)) {
     const source = mermaidSource(token.lang, token.text)
-    return `<pre class="ad-mermaid" data-source="${encodeURIComponent(source)}">${escapeHtml(source)}</pre>\n`
+    return `<figure class="ad-mermaid" data-source="${encodeURIComponent(source)}"><pre class="ad-diagram-source">${escapeHtml(source)}</pre></figure>\n`
   }
   return defaultCode(token)
+}
+const defaultTable = renderer.table
+renderer.table = function (token: Tokens.Table) {
+  return `<div class="ad-table-scroll" role="region" aria-label="表格，可横向滚动" tabindex="0">${defaultTable.call(this, token)}</div>\n`
 }
 marked.use({ renderer })
 
