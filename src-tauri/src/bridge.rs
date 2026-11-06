@@ -148,7 +148,8 @@ impl AppServer {
         cmd.arg("app-server")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+            // No consumer reads stderr; a pipe here eventually blocks the peer.
+            .stderr(Stdio::null());
         platform::prepare_command(&mut cmd);
         platform::apply_no_window(&mut cmd);
         let mut child = cmd
@@ -162,7 +163,9 @@ impl AppServer {
             .stdout
             .take()
             .ok_or_else(|| "Codex App Server 没有 stdout".to_string())?;
-        let (tx, rx) = mpsc::channel();
+        // Apply backpressure while the bridge is idle instead of retaining an
+        // unlimited stream of server notifications.
+        let (tx, rx) = mpsc::sync_channel(128);
         thread::spawn(move || {
             let reader = BufReader::new(stdout);
             for line in reader.lines() {
