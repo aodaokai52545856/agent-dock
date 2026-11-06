@@ -15,6 +15,10 @@ use tauri::AppHandle;
 const INIT_TIMEOUT: Duration = Duration::from_secs(20);
 const LIST_TIMEOUT: Duration = Duration::from_secs(30);
 const REVIEW_TIMEOUT: Duration = Duration::from_secs(8 * 60);
+// Current Codex only accepts kebab-case, older releases only camelCase. A
+// review never falls back to a writable sandbox.
+const READ_ONLY_SANDBOXES: [&str; 2] = ["read-only", "readOnly"];
+const REVIEWER_FAILED: &str = "Reviewer failed to output a response.";
 
 pub struct BridgeHub {
     server: Mutex<Option<AppServer>>,
@@ -84,7 +88,7 @@ impl BridgeHub {
                 cwd_matched: matched.len(),
                 threads: matched,
                 writer_safe: true,
-                note: "已调用 thread/list，没有 thread/resume。审查走 review/start delivery=detached，不抢桌面 writer。".into(),
+                note: "已调用 thread/list，没有 thread/resume。审查在新开线程或 fork 上进行，不占用已有线程的 writer。".into(),
             })
         }) {
             Ok(probe) => probe,
@@ -145,13 +149,15 @@ impl AppServer {
     fn spawn(settings: &AppSettings) -> Result<Self, String> {
         let binary = resolve_codex(settings)?;
         let mut cmd = Command::new(&binary);
+        platform::prepare_command(&mut cmd);
+        // Must run before the stdio setup: it nulls stdin, and the JSON-RPC
+        // channel needs that pipe.
+        platform::apply_no_window(&mut cmd);
         cmd.arg("app-server")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             // No consumer reads stderr; a pipe here eventually blocks the peer.
             .stderr(Stdio::null());
-        platform::prepare_command(&mut cmd);
-        platform::apply_no_window(&mut cmd);
         let mut child = cmd
             .spawn()
             .map_err(|err| format!("无法启动 Codex App Server（{}）：{err}", binary.display()))?;
@@ -341,50 +347,70 @@ impl AppServer {
     fn start_reviews(&mut self, cwd: &str, req: &ReviewRequest) -> Result<ReviewStartResult, String> {
         let mut thread_ids = req.thread_ids.clone();
         thread_ids.retain(|id| !id.trim().is_empty());
-        if thread_ids.is_empty() {
-            let started = self.request(
-                "thread/start",
-                json!({
-                    "cwd": cwd,
-                    "approvalPolicy": "never",
-                    "sandbox": "readOnly"
-                }),
-                LIST_TIMEOUT,
-            );
-            let started = match started {
-                Ok(value) => value,
-                Err(_) => self.request(
-                    "thread/start",
-                    json!({
-                        "cwd": cwd,
-                        "approvalPolicy": "never",
-                        "sandbox": "workspaceWrite"
-                    }),
-                    LIST_TIMEOUT,
-                )?,
-            };
-            let id = started
-                .pointer("/thread/id")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| "Codex 没有返回新线程 id".to_string())?;
-            thread_ids.push(id.to_string());
-        }
-
         let target = review_target(req);
         let mut reviews = Vec::new();
+        if thread_ids.is_empty() {
+            // A thread opened just for this review has no writer to protect.
+            let thread_id = self.open_read_only(
+                "thread/start",
+                json!({ "cwd": cwd, "approvalPolicy": "never" }),
+            )?;
+            reviews.push(self.review_one(&thread_id, &thread_id, "inline", &target)?);
+        }
         for thread_id in thread_ids {
-            reviews.push(self.review_one(&thread_id, &target)?);
+            reviews.push(self.review_existing(&thread_id, &target)?);
         }
         let verdict = combine_verdicts(reviews.iter().map(|item| item.verdict.as_str()));
         Ok(ReviewStartResult { reviews, verdict })
     }
 
-    fn review_one(&mut self, thread_id: &str, target: &Value) -> Result<BridgeReview, String> {
+    fn open_read_only(&mut self, method: &str, params: Value) -> Result<String, String> {
+        let mut last = String::new();
+        for sandbox in READ_ONLY_SANDBOXES {
+            let mut attempt = params.clone();
+            attempt["sandbox"] = json!(sandbox);
+            match self.request(method, attempt, LIST_TIMEOUT) {
+                Ok(value) => {
+                    return value
+                        .pointer("/thread/id")
+                        .and_then(|v| v.as_str())
+                        .map(str::to_string)
+                        .ok_or_else(|| "Codex 没有返回新线程 id".to_string());
+                }
+                Err(error) if error.contains("unknown variant") => last = error,
+                Err(error) => return Err(error),
+            }
+        }
+        Err(last)
+    }
+
+    // Reviewing inline on a user's thread would take its writer slot, so when
+    // detached delivery is unavailable the review runs on a fork instead.
+    fn review_existing(&mut self, thread_id: &str, target: &Value) -> Result<BridgeReview, String> {
+        match self.review_one(thread_id, thread_id, "detached", target) {
+            Err(error) if error.contains("do not support detached review") => {
+                let fork = self.open_read_only(
+                    "thread/fork",
+                    json!({ "threadId": thread_id, "approvalPolicy": "never" }),
+                )?;
+                self.review_one(thread_id, &fork, "inline", target)
+            }
+            other => other,
+        }
+    }
+
+    fn review_one(
+        &mut self,
+        source_thread_id: &str,
+        thread_id: &str,
+        delivery: &str,
+        target: &Value,
+    ) -> Result<BridgeReview, String> {
         let (result, notes) = self.request_collect(
             "review/start",
             json!({
                 "threadId": thread_id,
-                "delivery": "detached",
+                "delivery": delivery,
                 "target": target
             }),
             REVIEW_TIMEOUT,
@@ -396,15 +422,21 @@ impl AppServer {
                     )
             },
         )?;
+        if let Some(failure) = review_failure(&notes) {
+            return Err(failure);
+        }
         let review_thread_id = result
             .get("reviewThreadId")
             .and_then(|v| v.as_str())
             .unwrap_or(thread_id)
             .to_string();
         let text = extract_review_text(&notes, &result);
+        if text.trim() == REVIEWER_FAILED {
+            return Err("Codex 审查失败：审查器没有返回结果".into());
+        }
         let verdict = parse_review_verdict(&text);
         Ok(BridgeReview {
-            source_thread_id: thread_id.to_string(),
+            source_thread_id: source_thread_id.to_string(),
             review_thread_id,
             text,
             verdict,
@@ -599,28 +631,67 @@ fn json_ts(value: &Value, keys: &[&str]) -> i64 {
     0
 }
 
+// Every target goes through `custom`: it is the only kind that carries
+// instructions, and without them the reviewer never sees the task, the role
+// contract or the VERDICT ticket the gate depends on.
 fn review_target(req: &ReviewRequest) -> Value {
-    let ticket = "\n\n结束时单独一行写 VERDICT: PASS 或 VERDICT: FAIL。";
-    match req.target_kind.as_str() {
-        "commit" => json!({
-            "type": "commit",
-            "sha": req.commit_sha.clone().unwrap_or_default()
-        }),
-        "baseBranch" => json!({
-            "type": "baseBranch",
-            "branch": req.base_branch.clone().unwrap_or_else(|| "main".into())
-        }),
-        "custom" => json!({
-            "type": "custom",
-            "instructions": format!(
-                "{}{ticket}",
-                req.custom_instructions
-                    .as_deref()
-                    .unwrap_or("Review the current working tree.")
-            )
-        }),
-        _ => json!({ "type": "uncommittedChanges" }),
-    }
+    let scope = match req.target_kind.as_str() {
+        "commit" => format!(
+            "审查范围：commit {} 引入的改动。",
+            req.commit_sha.as_deref().unwrap_or_default()
+        ),
+        "baseBranch" => format!(
+            "审查范围：当前分支相对 {} 的改动。",
+            req.base_branch.as_deref().unwrap_or("main")
+        ),
+        "custom" => String::new(),
+        _ => "审查范围：工作区未提交的改动，包括已暂存、未暂存和未跟踪的文件。".to_string(),
+    };
+    let instructions = req
+        .custom_instructions
+        .as_deref()
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .unwrap_or("Review the current working tree.");
+    let body = [scope.as_str(), instructions]
+        .into_iter()
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    json!({
+        "type": "custom",
+        "instructions": format!("{body}\n\n结束时单独一行写 VERDICT: PASS 或 VERDICT: FAIL。")
+    })
+}
+
+fn review_failure(notes: &[Value]) -> Option<String> {
+    notes.iter().find_map(|note| {
+        let method = note.get("method").and_then(|v| v.as_str()).unwrap_or("");
+        let message = match method {
+            "error" if note.pointer("/params/willRetry") != Some(&json!(true)) => {
+                note.pointer("/params/error/message")
+            }
+            "turn/completed" if note.pointer("/params/turn/status") == Some(&json!("failed")) => {
+                note.pointer("/params/turn/error/message")
+            }
+            _ => return None,
+        }?;
+        let message = message.as_str()?;
+        Some(format!("Codex 审查失败：{}", codex_error_text(message)))
+    })
+}
+
+// Upstream errors arrive as a JSON document stringified into `message`.
+fn codex_error_text(message: &str) -> String {
+    serde_json::from_str::<Value>(message)
+        .ok()
+        .and_then(|value| {
+            value
+                .pointer("/error/message")
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+        })
+        .unwrap_or_else(|| message.to_string())
 }
 
 fn is_review_done(note: &Value) -> bool {
@@ -843,13 +914,80 @@ mod tests {
     }
 
     #[test]
-    fn review_start_payload_is_detached() {
-        let payload = json!({
-            "threadId": "thr_123",
-            "delivery": "detached",
-            "target": { "type": "uncommittedChanges" }
-        });
-        assert_eq!(payload["delivery"], "detached");
-        assert_ne!(payload["delivery"], "inline");
+    fn app_server_spawn_keeps_its_stdin_pipe() {
+        let mut settings = AppSettings::default();
+        // The test binary itself: `app-server` is a test filter matching nothing.
+        settings.codex_path = std::env::current_exe().unwrap().display().to_string();
+        assert!(AppServer::spawn(&settings).is_ok());
+    }
+
+    fn review_request(target_kind: &str, instructions: Option<&str>) -> ReviewRequest {
+        ReviewRequest {
+            project_id: "p".into(),
+            thread_ids: Vec::new(),
+            target_kind: target_kind.into(),
+            commit_sha: Some("abc123".into()),
+            base_branch: Some("dev".into()),
+            custom_instructions: instructions.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn every_review_target_carries_instructions_and_ticket() {
+        for (kind, scope) in [
+            ("uncommittedChanges", "未提交"),
+            ("commit", "abc123"),
+            ("baseBranch", "dev"),
+            ("custom", ""),
+        ] {
+            let target = review_target(&review_request(kind, Some("本轮任务：修闸门")));
+            let text = target["instructions"].as_str().unwrap();
+            assert_eq!(target["type"], "custom");
+            assert!(text.contains(scope), "{kind}: {text}");
+            assert!(text.contains("本轮任务：修闸门"), "{kind}: {text}");
+            assert!(text.contains("VERDICT: PASS"), "{kind}: {text}");
+        }
+    }
+
+    #[test]
+    fn review_target_has_a_default_instruction() {
+        let target = review_target(&review_request("custom", Some("   ")));
+        assert!(target["instructions"]
+            .as_str()
+            .unwrap()
+            .starts_with("Review the current working tree."));
+    }
+
+    #[test]
+    fn review_failure_reads_the_upstream_message() {
+        let notes = vec![json!({
+            "method": "error",
+            "params": {
+                "willRetry": false,
+                "error": { "message": "{\"error\":{\"message\":\"model is not supported\"}}" }
+            }
+        })];
+        assert_eq!(
+            review_failure(&notes).as_deref(),
+            Some("Codex 审查失败：model is not supported")
+        );
+    }
+
+    #[test]
+    fn review_failure_reads_a_failed_turn() {
+        let notes = vec![json!({
+            "method": "turn/completed",
+            "params": { "turn": { "status": "failed", "error": { "message": "boom" } } }
+        })];
+        assert_eq!(review_failure(&notes).as_deref(), Some("Codex 审查失败：boom"));
+    }
+
+    #[test]
+    fn review_failure_ignores_retries_and_success() {
+        let notes = vec![
+            json!({ "method": "error", "params": { "willRetry": true, "error": { "message": "x" } } }),
+            json!({ "method": "turn/completed", "params": { "turn": { "status": "completed" } } }),
+        ];
+        assert_eq!(review_failure(&notes), None);
     }
 }

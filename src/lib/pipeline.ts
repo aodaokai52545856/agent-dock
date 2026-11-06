@@ -58,7 +58,7 @@ export async function probeCodex() {
       cwdMatched: PREVIEW_THREADS.length,
       threads: PREVIEW_THREADS,
       writerSafe: true,
-      note: '浏览器预览：未连接本机 Codex。切到桌面端后会走 thread/list，审查用 detached。'
+      note: '浏览器预览：未连接本机 Codex。切到桌面端后会走 thread/list，审查在新开线程或 fork 上进行。'
     }
     return
   }
