@@ -53,6 +53,7 @@ const hosts = new Map<string, Host>()
 let unlistenData: UnlistenFn | undefined
 let unlistenExit: UnlistenFn | undefined
 let observer: ResizeObserver | undefined
+let mounted = false
 const workspaceEl = ref<HTMLElement | null>(null)
 const menu = ref<{ x: number; y: number; hasSelection: boolean } | null>(null)
 const MENU_WIDTH = 200
@@ -553,6 +554,11 @@ watch(() => store.live.map(item => `${item.ptyId}:${item.toolId}:${item.kind}`),
   hosts.forEach((host, id) => configureOmpHost(id, host))
 })
 
+// A list refresh can observe an exit before the backend monitor emits it.
+watch(() => store.live.map(item => item.ptyId), (ids, previous) => {
+  for (const id of previous) if (!ids.includes(id)) disposeHost(id)
+})
+
 watch(() => store.appMode, mode => {
   if (mode === 'console') void nextTick(() => resumeActiveViewport())
   else suspendViewports()
@@ -589,20 +595,30 @@ watch(windowMoving, (moving, was) => {
 })
 
 onMounted(async () => {
+  mounted = true
   if (api.isTauri) {
-    unlistenData = await listen<{ ptyId: string; data: string }>('pty-data', (event) => {
+    unlistenData = await listen<{ ptyId: string; data: string; bytes?: number }>('pty-data', (event) => {
+      const acknowledge = () => {
+        if (event.payload.bytes) void api.ptyAck(event.payload.ptyId, event.payload.bytes).catch(() => {})
+      }
+      if (!mounted) { acknowledge(); return }
       const host = ensureHost(event.payload.ptyId)
       if (host) {
         if (store.appMode !== 'console' || store.activePtyId !== event.payload.ptyId || document.hidden || !document.hasFocus()) host.unseenOutput = true
-        host.stream.write(event.payload.data)
+        host.stream.write(event.payload.data, acknowledge)
         host.recovery?.noteOutput(event.payload.data)
-      }
+      } else acknowledge()
       if (isSignificantPtyChunk(event.payload.data)) notePtyData(event.payload.ptyId)
     })
+    if (!mounted) { unlistenData(); return }
     unlistenExit = await listen<{ ptyId: string }>('pty-exit', (event) => {
       disposeHost(event.payload.ptyId)
       markPtyExit(event.payload.ptyId)
     })
+    if (!mounted) { unlistenExit(); return }
+    // A reloaded webview cannot acknowledge frames delivered to the old page.
+    await api.ptyResetOutput()
+    if (!mounted) return
   }
   const target = workspaceEl.value ?? document.getElementById('term-mount')
   if (target) {
@@ -645,6 +661,7 @@ function suspendViewports() {
 }
 
 onUnmounted(() => {
+  mounted = false
   window.removeEventListener('ad-appearance', applyTermChrome)
   window.removeEventListener('click', closeTermMenu)
   window.removeEventListener('blur', closeTermMenu)

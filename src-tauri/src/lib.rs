@@ -896,28 +896,49 @@ async fn pty_open(
 }
 
 #[tauri::command]
-fn pty_write(hub: State<Arc<PtyHub>>, pty_id: String, data: String) -> Result<(), String> {
-    hub.write(&pty_id, &data)
+async fn pty_write(hub: State<'_, Arc<PtyHub>>, pty_id: String, data: String) -> Result<(), String> {
+    let hub = hub.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || hub.write(&pty_id, &data))
+        .await.map_err(|err| err.to_string())?
 }
 
 #[tauri::command]
-fn pty_resize(hub: State<Arc<PtyHub>>, pty_id: String, cols: u16, rows: u16) -> Result<(), String> {
-    hub.resize(&pty_id, cols, rows)
+async fn pty_resize(hub: State<'_, Arc<PtyHub>>, pty_id: String, cols: u16, rows: u16) -> Result<(), String> {
+    let hub = hub.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || hub.resize(&pty_id, cols, rows))
+        .await.map_err(|err| err.to_string())?
 }
 
 #[tauri::command]
-fn pty_kill(
+fn pty_ack(hub: State<Arc<PtyHub>>, pty_id: String, bytes: usize) {
+    hub.acknowledge(&pty_id, bytes);
+}
+
+#[tauri::command]
+fn pty_reset_output(hub: State<Arc<PtyHub>>) {
+    hub.reset_output();
+}
+
+#[tauri::command]
+async fn pty_kill(
     app: AppHandle,
-    hub: State<Arc<PtyHub>>,
-    web: State<Arc<dsh_web::Hub>>,
+    hub: State<'_, Arc<PtyHub>>,
+    web: State<'_, Arc<dsh_web::Hub>>,
     pty_id: String,
 ) -> Result<(), String> {
-    if web.kill(&pty_id)? {
+    let hub = hub.inner().clone();
+    let web = web.inner().clone();
+    let web_killed = tauri::async_runtime::spawn_blocking(move || {
+        if web.kill(&pty_id)? { return Ok(true); }
+        if pty_id.starts_with("omp-") { omp_rpc::global().close(&pty_id)?; }
+        else { hub.kill(&pty_id)?; }
+        Ok::<_, String>(false)
+    }).await.map_err(|err| err.to_string())??;
+    if web_killed {
         let _ = dsh_embed::close(&app);
         return Ok(());
     }
-    if pty_id.starts_with("omp-") { return omp_rpc::global().close(&pty_id); }
-    hub.kill(&pty_id)
+    Ok(())
 }
 
 #[tauri::command]
@@ -951,25 +972,33 @@ async fn dsh_embed_apply_theme(app: AppHandle, script: String) -> Result<(), Str
 }
 
 #[tauri::command]
-fn pty_bind_session(
-    hub: State<Arc<PtyHub>>,
-    web: State<Arc<dsh_web::Hub>>,
+async fn pty_bind_session(
+    hub: State<'_, Arc<PtyHub>>,
+    web: State<'_, Arc<dsh_web::Hub>>,
     pty_id: String,
     session_id: String,
     title: Option<String>,
 ) -> Result<LivePtyInfo, String> {
-    if let Some(info) = web.bind_session(&pty_id, &session_id, title.clone())? {
-        return Ok(info);
-    }
-    hub.bind_session(&pty_id, &session_id, title)
+    let hub = hub.inner().clone();
+    let web = web.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        if let Some(info) = web.bind_session(&pty_id, &session_id, title.clone())? {
+            return Ok(info);
+        }
+        hub.bind_session(&pty_id, &session_id, title)
+    }).await.map_err(|err| err.to_string())?
 }
 
 #[tauri::command]
-fn list_live_ptys(hub: State<Arc<PtyHub>>, web: State<Arc<dsh_web::Hub>>) -> Vec<LivePtyInfo> {
-    let mut live = hub.list();
-    live.extend(web.list());
-    live.extend(omp_rpc::global().list());
-    live
+async fn list_live_ptys(hub: State<'_, Arc<PtyHub>>, web: State<'_, Arc<dsh_web::Hub>>) -> Result<Vec<LivePtyInfo>, String> {
+    let hub = hub.inner().clone();
+    let web = web.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut live = hub.list();
+        live.extend(web.list());
+        live.extend(omp_rpc::global().list());
+        live
+    }).await.map_err(|err| err.to_string())
 }
 
 #[tauri::command]
@@ -1213,6 +1242,8 @@ pub fn run() {
             delete_session,
             pty_open,
             pty_write,
+            pty_ack,
+            pty_reset_output,
             pty_resize,
             pty_kill,
             dsh_embed_open,
@@ -1236,6 +1267,7 @@ pub fn run() {
                 tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
             ) {
                 omp_rpc::global().close_all();
+                app.state::<Arc<PtyHub>>().close_all();
                 dsh_web::shutdown_app(app);
             }
         });

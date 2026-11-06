@@ -203,6 +203,7 @@ impl Hub {
         let event_session = Arc::downgrade(&session);
         let event_app = app.clone();
         let event_id = id.clone();
+        let event_hub = Arc::downgrade(self);
         std::thread::spawn(move || {
             for event in events {
                 let value = match event {
@@ -234,8 +235,13 @@ impl Hub {
                 snap.seq += 1;
                 let _ = event_app.emit(
                     "omp-event",
-                    json!({"runtimeId":event_id,"seq":snap.seq,"event":{"type":"disconnected"}}),
+                    json!({"runtimeId":event_id,"seq":snap.seq,"event":{"type":"disconnected","snapshot":&*snap}}),
                 );
+            }
+            // EOF must release history, client handles and the child as well.
+            // list() filters closed clients, so close_all() cannot find them.
+            if let Some(hub) = event_hub.upgrade() {
+                let _ = hub.close(&event_id);
             }
         });
         let init_hub = self.clone();
@@ -440,8 +446,8 @@ impl Hub {
             .sessions
             .lock()
             .map_err(fail)?
-            .remove(id)
-            .ok_or("OMP 已关闭")?;
+            .remove(id);
+        let Some(s) = s else { return Ok(()) };
         s.client.disconnect();
         #[cfg(windows)]
         if let Some(pid) = s.client.pid() {
@@ -453,12 +459,8 @@ impl Hub {
         Ok(())
     }
     pub fn close_all(&self) {
-        for id in self
-            .list()
-            .iter()
-            .map(|s| s.pty_id.clone())
-            .collect::<Vec<_>>()
-        {
+        let ids = self.sessions.lock().unwrap().keys().cloned().collect::<Vec<_>>();
+        for id in ids {
             let _ = self.close(&id);
         }
     }

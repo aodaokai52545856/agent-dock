@@ -121,6 +121,7 @@ const removingProject = computed(() => store.projects.find((item) => item.id ===
 onMounted(() => {
   void boot()
   if(api.isTauri) void startOmpService(s=>{
+    if(!s.info.alive){markPtyExit(s.runtimeId);if(s.error)showToast(s.error);return}
     const i=store.live.findIndex(l=>l.ptyId===s.runtimeId);
     const previous=i>=0?store.live[i]:undefined;
     const live={...s.info,runtimeId:s.runtimeId,profileId:s.profileId,busy:!s.settled};

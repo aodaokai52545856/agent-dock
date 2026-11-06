@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { applyOmpEvent, ompState, messageText, type OmpSnapshot } from './omp.ts'
+import { applyOmpEvent, forgetOmpSession, ompSnapshot, ompState, messageText, type OmpSnapshot } from './omp.ts'
 import { preferredOmpMode,rememberOmpMode } from './ompMode.ts'
 import { parseOmpLaunchMode } from './types.ts'
 
@@ -41,3 +41,28 @@ assert.equal(preferredOmpMode('other','session','wrapped',storage),'wrapped')
 rememberOmpMode({toolId:'omp',projectId:'project',sessionId:'session',kind:'ompRpc'} as any,storage)
 assert.equal(preferredOmpMode('project','session','native',storage),'wrapped')
 console.log('ok OMP launch mode preserves old defaults and remembers each project/session choice')
+
+let requests = 0
+let finish: (value: OmpSnapshot) => void = () => {}
+;(globalThis as any).window = { __TAURI_INTERNALS__: { invoke: () => {
+  requests++
+  return new Promise<OmpSnapshot>(resolve => { finish = resolve })
+} } }
+const original = { ...ompState.sessions['omp-test'], runtimeId:'omp-retired' } as OmpSnapshot
+const first = ompSnapshot('omp-retired')
+const second = ompSnapshot('omp-retired')
+assert.equal(requests, 1)
+ompState.drafts['omp-retired'] = 'large unsent draft'
+forgetOmpSession('omp-retired')
+finish(original)
+await assert.rejects(first, /已关闭/)
+await assert.rejects(second, /已关闭/)
+assert.equal(ompState.sessions['omp-retired'], undefined)
+assert.equal(ompState.drafts['omp-retired'], undefined)
+const reopened = ompSnapshot('omp-retired')
+assert.equal(requests, 2)
+finish(original)
+await reopened
+forgetOmpSession('omp-retired')
+assert.equal(ompState.sessions['omp-retired'], undefined)
+console.log('ok OMP coalesces concurrent snapshots and cannot resurrect a closed session from an in-flight response')

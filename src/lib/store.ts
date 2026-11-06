@@ -1,6 +1,7 @@
 import { computed, reactive } from 'vue'
 import * as api from './api'
 import { rememberOmpMode } from './ompMode'
+import { forgetOmpSession } from './omp'
 import { DSH_FIXED_SESSION_ID, DSH_FIXED_SESSION_TITLE } from './dsh'
 import { canPhysicallyDeleteSession } from './sessionBatch'
 import { compareSessionRecency } from './sessionGroups'
@@ -1042,6 +1043,11 @@ export async function refreshLive() {
   const previousProject = store.live.find((item) => item.ptyId === previous)?.projectId ?? store.selectedProjectId
   const local = store.live.slice()
   store.live = mergeLiveFromServer(await api.listLivePtys(), local)
+  for (const item of local) if (!store.live.some(live => live.ptyId === item.ptyId)) {
+    forgetOmpSession(item.ptyId)
+    stopPendingWatch(item.ptyId)
+    delete store.ptyDataAt[item.ptyId]
+  }
   reconcileOmpBindings()
   prunePtyDone(store.live)
   if (previous && !store.live.some((item) => item.ptyId === previous)) {
@@ -1070,6 +1076,7 @@ export function notePtyData(ptyId: string, at = Date.now()) {
 }
 
 export function markPtyExit(ptyId: string, opts?: { userClosed?: boolean; skipRefresh?: boolean }) {
+  forgetOmpSession(ptyId)
   stopPendingWatch(ptyId)
   clearPtyDone(ptyId)
   delete store.ptyDataAt[ptyId]

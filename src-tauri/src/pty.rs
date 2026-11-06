@@ -7,7 +7,8 @@ use serde::Serialize;
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter};
@@ -34,6 +35,40 @@ pub struct PtyOpened {
 pub struct PtyChunk {
     pub pty_id: String,
     pub data: String,
+    pub bytes: usize,
+}
+
+// Bound output in transit to the webview, including xterm's parse queue.
+// The reader waits here rather than dropping terminal control sequences.
+const OUTPUT_WINDOW: usize = 256 * 1024;
+#[derive(Default)]
+struct OutputFlow {
+    state: Mutex<(usize, bool)>,
+    ready: Condvar,
+}
+impl OutputFlow {
+    fn reset(&self) {
+        self.state.lock().unwrap().0 = 0;
+        self.ready.notify_all();
+    }
+    fn reserve(&self, bytes: usize) -> bool {
+        let mut state = self.state.lock().unwrap();
+        while !state.1 && state.0 + bytes > OUTPUT_WINDOW {
+            state = self.ready.wait(state).unwrap();
+        }
+        if state.1 { return false; }
+        state.0 += bytes;
+        true
+    }
+    fn acknowledge(&self, bytes: usize) {
+        let mut state = self.state.lock().unwrap();
+        state.0 = state.0.saturating_sub(bytes);
+        self.ready.notify_all();
+    }
+    fn stop(&self) {
+        self.state.lock().unwrap().1 = true;
+        self.ready.notify_all();
+    }
 }
 
 #[derive(Clone, Serialize)]
@@ -69,49 +104,63 @@ struct LivePty {
     session_id: Option<String>,
     title: String,
     opened_at: i64,
-    master: Box<dyn portable_pty::MasterPty + Send>,
-    writer: Box<dyn Write + Send>,
+    master: Arc<Mutex<Box<dyn portable_pty::MasterPty + Send>>>,
+    writer: Arc<Mutex<Box<dyn Write + Send>>>,
     child: Box<dyn portable_pty::Child + Send + Sync>,
+    output: Arc<OutputFlow>,
+}
+
+impl Drop for LivePty {
+    fn drop(&mut self) { self.output.stop(); }
 }
 
 pub struct PtyHub {
     sessions: Mutex<HashMap<String, LivePty>>,
+    stopped: AtomicBool,
 }
 
 impl PtyHub {
     pub fn claude_account_running(&self, id: &str) -> bool {
-        let mut sessions = self.sessions.lock().expect("pty lock");
-        reap_dead(&mut sessions);
+        self.reap_dead();
+        let sessions = self.sessions.lock().expect("pty lock");
         sessions.values().any(|pty| pty.account.as_ref().is_some_and(|a| a.id == id))
     }
 
     pub fn stop_claude_account(&self, app: &AppHandle, account_id: &str) -> Result<(), String> {
-        let mut sessions = self.sessions.lock().map_err(|_| "终端状态不可用，请重启应用。")?;
-        let ids: Vec<_> = sessions.values().filter(|p| p.account.as_ref().is_some_and(|a| a.id == account_id))
+        let ids: Vec<_> = self.sessions.lock().map_err(|_| "终端状态不可用，请重启应用。")?
+            .values().filter(|p| p.account.as_ref().is_some_and(|a| a.id == account_id))
             .map(|p| p.id.clone()).collect();
         for id in ids {
-            let pty = sessions.get_mut(&id).expect("selected terminal");
-            if pty.child.try_wait().map_err(|_| "无法检查此账号终端，请先手动关闭。")?.is_none() {
-                #[cfg(windows)]
-                {
-                    let pid = pty.child.process_id().ok_or("无法定位此账号终端进程。")?;
-                    let mut cmd = std::process::Command::new("taskkill.exe");
-                    cmd.args(["/PID", &pid.to_string(), "/T", "/F"]);
-                    platform::apply_no_window(&mut cmd);
-                    let output = cmd.output().map_err(|_| "无法关闭此账号终端进程树，请先手动关闭。")?;
-                    if !output.status.success() && pty.child.try_wait().ok().flatten().is_none() {
-                        return Err("此账号终端尚未退出，已取消操作。".into());
+            let removed = self.sessions.lock().map_err(|_| "终端状态不可用")?.remove(&id);
+            let Some(mut pty) = removed else { continue };
+            let result = (|| -> Result<(), String> {
+                if pty.child.try_wait().map_err(|_| "无法检查此账号终端，请先手动关闭。")?.is_none() {
+                    #[cfg(windows)]
+                    {
+                        let pid = pty.child.process_id().ok_or("无法定位此账号终端进程。")?;
+                        let mut cmd = std::process::Command::new("taskkill.exe");
+                        cmd.args(["/PID", &pid.to_string(), "/T", "/F"]);
+                        platform::apply_no_window(&mut cmd);
+                        let output = cmd.output().map_err(|_| "无法关闭此账号终端进程树，请先手动关闭。")?;
+                        if !output.status.success() && pty.child.try_wait().ok().flatten().is_none() {
+                            return Err("此账号终端尚未退出，已取消操作。".into());
+                        }
+                    }
+                    #[cfg(not(windows))]
+                    pty.child.kill().map_err(|_| "无法关闭此账号终端，已取消操作。")?;
+                    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+                    while pty.child.try_wait().map_err(|_| "无法确认此账号终端已退出。")?.is_none() {
+                        if std::time::Instant::now() >= deadline { return Err("等待此账号终端退出超时，已取消操作。".into()); }
+                        thread::sleep(Duration::from_millis(25));
                     }
                 }
-                #[cfg(not(windows))]
-                pty.child.kill().map_err(|_| "无法关闭此账号终端，已取消操作。")?;
-                let deadline = std::time::Instant::now() + Duration::from_secs(5);
-                while pty.child.try_wait().map_err(|_| "无法确认此账号终端已退出。")?.is_none() {
-                    if std::time::Instant::now() >= deadline { return Err("等待此账号终端退出超时，已取消操作。".into()); }
-                    thread::sleep(Duration::from_millis(25));
-                }
+                Ok(())
+            })();
+            if let Err(error) = result {
+                self.sessions.lock().map_err(|_| "终端状态不可用")?.insert(id, pty);
+                return Err(error);
             }
-            sessions.remove(&id);
+            drop(pty);
             let _ = app.emit("pty-exit", PtyExit { pty_id: id });
         }
         Ok(())
@@ -119,14 +168,18 @@ impl PtyHub {
     pub fn new() -> Arc<Self> {
         Arc::new(Self {
             sessions: Mutex::new(HashMap::new()),
+            stopped: AtomicBool::new(false),
         })
     }
 
     pub fn start_monitor(self: &Arc<Self>, app: AppHandle) {
-        let hub = Arc::clone(self);
+        let hub = Arc::downgrade(self);
         thread::spawn(move || loop {
             thread::sleep(Duration::from_millis(400));
+            let Some(hub) = hub.upgrade() else { break };
+            if hub.stopped.load(Ordering::Acquire) { break; }
             let mut dead = Vec::new();
+            let mut retired = Vec::new();
             if let Ok(mut sessions) = hub.sessions.lock() {
                 for (id, pty) in sessions.iter_mut() {
                     if let Ok(Some(_)) = pty.child.try_wait() {
@@ -134,9 +187,10 @@ impl PtyHub {
                     }
                 }
                 for id in &dead {
-                    sessions.remove(id);
+                    retired.extend(sessions.remove(id));
                 }
             }
+            drop(retired);
             for id in dead {
                 let _ = app.emit("pty-exit", PtyExit { pty_id: id });
             }
@@ -144,29 +198,31 @@ impl PtyHub {
     }
 
     pub fn list(&self) -> Vec<LivePtyInfo> {
-        let mut sessions = self.sessions.lock().expect("pty lock");
-        reap_dead(&mut sessions);
+        self.reap_dead();
+        let sessions = self.sessions.lock().expect("pty lock");
         sessions.values().map(live_info).collect()
     }
 
     pub fn write(&self, pty_id: &str, data: &str) -> Result<(), String> {
-        let mut sessions = self.sessions.lock().expect("pty lock");
-        let pty = sessions
-            .get_mut(pty_id)
-            .ok_or_else(|| "这个终端已经关闭，请重新打开 session".to_string())?;
-        pty.writer
+        let writer = {
+            let sessions = self.sessions.lock().expect("pty lock");
+            sessions.get(pty_id).ok_or("这个终端已经关闭，请重新打开 session")?.writer.clone()
+        };
+        let mut writer = writer.lock().map_err(|_| "终端输入不可用")?;
+        writer
             .write_all(data.as_bytes())
-            .and_then(|_| pty.writer.flush())
+            .and_then(|_| writer.flush())
             .map_err(|err| format!("写入终端失败：{err}"))
     }
 
     pub fn resize(&self, pty_id: &str, cols: u16, rows: u16) -> Result<(), String> {
-        let sessions = self.sessions.lock().expect("pty lock");
-        let pty = sessions
-            .get(pty_id)
-            .ok_or_else(|| "这个终端已经关闭，无法调整大小".to_string())?;
+        let master = {
+            let sessions = self.sessions.lock().expect("pty lock");
+            sessions.get(pty_id).ok_or("这个终端已经关闭，无法调整大小")?.master.clone()
+        };
         let (cols, rows) = clamp_pty_size(cols, rows);
-        pty.master
+        let master = master.lock().map_err(|_| "终端尺寸不可用")?;
+        master
             .resize(PtySize {
                 rows,
                 cols,
@@ -177,10 +233,11 @@ impl PtyHub {
     }
 
     pub fn kill(&self, pty_id: &str) -> Result<(), String> {
-        let mut sessions = self.sessions.lock().expect("pty lock");
-        if let Some(mut pty) = sessions.remove(pty_id) {
+        let removed = self.sessions.lock().expect("pty lock").remove(pty_id);
+        if let Some(mut pty) = removed {
+            pty.output.stop();
             #[cfg(windows)]
-            if pty.tool_id == ToolId::Omp {
+            if pty.child.try_wait().ok().flatten().is_none() {
                 if let Some(pid)=pty.child.process_id() {
                     let mut command=std::process::Command::new("taskkill.exe");
                     command.args(["/PID",&pid.to_string(),"/T","/F"]);
@@ -189,8 +246,27 @@ impl PtyHub {
                 }
             }
             let _ = pty.child.kill();
+            let _ = pty.child.wait();
         }
         Ok(())
+    }
+
+    pub fn acknowledge(&self, pty_id: &str, bytes: usize) {
+        if let Some(pty) = self.sessions.lock().expect("pty lock").get(pty_id) {
+            pty.output.acknowledge(bytes);
+        }
+    }
+
+    pub fn reset_output(&self) {
+        for pty in self.sessions.lock().expect("pty lock").values() {
+            pty.output.reset();
+        }
+    }
+
+    pub fn close_all(&self) {
+        self.stopped.store(true, Ordering::Release);
+        let ids: Vec<_> = self.sessions.lock().expect("pty lock").keys().cloned().collect();
+        for id in ids { let _ = self.kill(&id); }
     }
 
     pub fn open(
@@ -211,8 +287,8 @@ impl PtyHub {
             None => format!("{}|{}|new:{}", project_id, tool_id.as_str(), Uuid::new_v4()),
         };
         {
-            let mut sessions = self.sessions.lock().expect("pty lock");
-            reap_dead(&mut sessions);
+            self.reap_dead();
+            let sessions = self.sessions.lock().expect("pty lock");
             if let Some(existing) = sessions.values().find(|pty| pty.key == key) {
                 return Ok(PtyOpened {
                     account: existing.account.clone(),
@@ -319,10 +395,7 @@ impl PtyHub {
             for (key, value) in &context.set { cmd.env(key, value); }
         }
 
-        let child = pair
-            .slave
-            .spawn_command(cmd)
-            .map_err(|err| format!("无法启动终端：{err}"))?;
+        // Acquire fallible I/O handles before spawning, so failures cannot orphan a child.
         let mut reader = pair
             .master
             .try_clone_reader()
@@ -331,6 +404,9 @@ impl PtyHub {
             .master
             .take_writer()
             .map_err(|err| format!("无法写入终端：{err}"))?;
+        let child = pair.slave.spawn_command(cmd)
+            .map_err(|err| format!("无法启动终端：{err}"))?;
+        let output = Arc::new(OutputFlow::default());
 
         let pty_id = Uuid::new_v4().to_string();
         let resolved_session = session_id.clone();
@@ -360,9 +436,10 @@ impl PtyHub {
                     session_id: resolved_session.clone(),
                     title: display_title.clone(),
                     opened_at,
-                    master: pair.master,
-                    writer,
+                    master: Arc::new(Mutex::new(pair.master)),
+                    writer: Arc::new(Mutex::new(writer)),
                     child,
+                    output: output.clone(),
                 },
             );
         }
@@ -379,13 +456,18 @@ impl PtyHub {
                         if data.is_empty() {
                             continue;
                         }
-                        let _ = app.emit(
+                        let bytes = data.len();
+                        // On close, keep draining ConPTY until EOF so closing its
+                        // master cannot deadlock waiting for its output pipe.
+                        if !output.reserve(bytes) { continue; }
+                        if app.emit(
                             "pty-data",
                             PtyChunk {
                                 pty_id: emit_id.clone(),
                                 data,
+                                bytes,
                             },
-                        );
+                        ).is_err() { output.acknowledge(bytes); }
                     }
                     Err(_) => break,
                 }
@@ -415,8 +497,8 @@ impl PtyHub {
         if session_id.is_empty() {
             return Err("会话还没有编号，稍后再试".into());
         }
+        self.reap_dead();
         let mut sessions = self.sessions.lock().expect("pty lock");
-        reap_dead(&mut sessions);
         let (project_id, tool_id) = {
             let pty = sessions
                 .get(pty_id)
@@ -447,6 +529,18 @@ impl PtyHub {
             }
         }
         Ok(live_info(pty))
+    }
+
+    fn reap_dead(&self) {
+        let retired = {
+            let mut sessions = self.sessions.lock().expect("pty lock");
+            let dead: Vec<_> = sessions.iter_mut()
+                .filter_map(|(id, pty)| matches!(pty.child.try_wait(), Ok(Some(_))).then(|| id.clone()))
+                .collect();
+            dead.into_iter().filter_map(|id| sessions.remove(&id)).collect::<Vec<_>>()
+        };
+        // Closing a ConPTY master can wait on its output drain.
+        drop(retired);
     }
 }
 
@@ -484,18 +578,6 @@ fn native_omp_command(tool_id: ToolId, exe: &Path) -> bool {
         exe.extension().and_then(|ext| ext.to_str()).map(str::to_ascii_lowercase).as_deref(),
         Some("cmd" | "bat" | "ps1")
     )
-}
-
-fn reap_dead(sessions: &mut HashMap<String, LivePty>) {
-    let mut dead = Vec::new();
-    for (id, pty) in sessions.iter_mut() {
-        if let Ok(Some(_)) = pty.child.try_wait() {
-            dead.push(id.clone());
-        }
-    }
-    for id in dead {
-        sessions.remove(&id);
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -942,5 +1024,58 @@ mod tests {
         let second = decode_utf8_stream(&mut pending, &[0xAD]);
         assert_eq!(second, "中");
         assert!(pending.is_empty());
+    }
+
+    #[test]
+    fn output_flow_bounds_bursts_until_the_parser_acknowledges() {
+        use std::sync::mpsc;
+        let flow = Arc::new(OutputFlow::default());
+        assert!(flow.reserve(OUTPUT_WINDOW));
+        let producer = flow.clone();
+        let (tx, rx) = mpsc::channel();
+        let worker = thread::spawn(move || { tx.send(producer.reserve(8192)).unwrap(); });
+        assert!(rx.recv_timeout(Duration::from_millis(30)).is_err());
+        flow.acknowledge(8192);
+        assert!(rx.recv_timeout(Duration::from_secs(2)).unwrap());
+        worker.join().unwrap();
+        assert_eq!(flow.state.lock().unwrap().0, OUTPUT_WINDOW);
+        flow.acknowledge(usize::MAX);
+        assert_eq!(flow.state.lock().unwrap().0, 0);
+    }
+
+    #[test]
+    fn output_flow_close_releases_a_blocked_reader() {
+        use std::sync::mpsc;
+        let flow = Arc::new(OutputFlow::default());
+        assert!(flow.reserve(OUTPUT_WINDOW));
+        let producer = flow.clone();
+        let (tx, rx) = mpsc::channel();
+        let worker = thread::spawn(move || { tx.send(producer.reserve(1)).unwrap(); });
+        assert!(rx.recv_timeout(Duration::from_millis(30)).is_err());
+        flow.stop();
+        assert!(!rx.recv_timeout(Duration::from_secs(2)).unwrap());
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn output_flow_reload_releases_credits_from_the_previous_webview() {
+        let flow = OutputFlow::default();
+        assert!(flow.reserve(OUTPUT_WINDOW));
+        flow.reset();
+        assert!(flow.reserve(OUTPUT_WINDOW));
+        flow.stop();
+        flow.reset();
+        assert!(!flow.reserve(1)); // A reload cannot resurrect a closed terminal.
+    }
+
+    #[test]
+    fn output_flow_survives_repeated_large_bursts_without_retaining_credits() {
+        let flow = OutputFlow::default();
+        for _ in 0..1_000 {
+            for _ in 0..32 { assert!(flow.reserve(8192)); }
+            assert_eq!(flow.state.lock().unwrap().0, OUTPUT_WINDOW);
+            for _ in 0..32 { flow.acknowledge(8192); }
+            assert_eq!(flow.state.lock().unwrap().0, 0);
+        }
     }
 }

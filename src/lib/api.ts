@@ -333,6 +333,16 @@ export async function ptyWrite(ptyId: string, data: string): Promise<void> {
   return invoke('pty_write', { ptyId, data })
 }
 
+export async function ptyAck(ptyId: string, bytes: number): Promise<void> {
+  if (!isTauri) return
+  return invoke('pty_ack', { ptyId, bytes })
+}
+
+export async function ptyResetOutput(): Promise<void> {
+  if (!isTauri) return
+  return invoke('pty_reset_output')
+}
+
 export async function ptyResize(ptyId: string, cols: number, rows: number): Promise<void> {
   if (!isTauri) return
   if (isOmpRuntime(ptyId)) return

@@ -27,11 +27,20 @@ export type OmpSnapshot = {
 export const ompState = reactive({ sessions:{} as Record<string,OmpSnapshot>, drafts:{} as Record<string,string> })
 let snapshotObserver:((snapshot:OmpSnapshot)=>void)|undefined
 export const isOmpRuntime = (id?:string|null) => Boolean(id?.startsWith('omp-'))
+const snapshotRequests = new Map<string, { runtimeId:string; cancelled:boolean; promise:Promise<OmpSnapshot> }>()
 export async function ompSnapshot(runtimeId:string,refresh=false) {
-  const value=await invoke<OmpSnapshot>('omp_snapshot',{runtimeId,refresh})
-  const old=ompState.sessions[runtimeId]
-  if(!old || value.seq>=old.seq) {ompState.sessions[runtimeId]=value;snapshotObserver?.(value)}
-  return value
+  const key=`${runtimeId}:${refresh}`
+  const pending=snapshotRequests.get(key)
+  if(pending)return pending.promise
+  const request={runtimeId,cancelled:false,promise:undefined as unknown as Promise<OmpSnapshot>}
+  request.promise=invoke<OmpSnapshot>('omp_snapshot',{runtimeId,refresh}).then(value=>{
+    if(request.cancelled)throw new Error('OMP 会话已关闭')
+    const old=ompState.sessions[runtimeId]
+    if(!old || value.seq>=old.seq) {ompState.sessions[runtimeId]=value;snapshotObserver?.(value)}
+    return value
+  }).finally(()=>{if(snapshotRequests.get(key)===request)snapshotRequests.delete(key)})
+  snapshotRequests.set(key,request)
+  return request.promise
 }
 export async function ompCommand(runtimeId:string,command:OmpCommand):Promise<any>{
   const response=await invoke<{id:string;data:any}>('omp_command',{runtimeId,command})
@@ -49,6 +58,14 @@ export function ompDraft(runtimeId:string,text:string){ompState.drafts[runtimeId
 let stop:UnlistenFn|undefined
 const timers=new Map<string,ReturnType<typeof setTimeout>>()
 const settledEvents=new Set<string>()
+export function forgetOmpSession(runtimeId:string){
+  const timer=timers.get(runtimeId)
+  if(timer!==undefined)clearTimeout(timer)
+  timers.delete(runtimeId);settledEvents.delete(runtimeId)
+  for(const [key,request] of snapshotRequests)if(request.runtimeId===runtimeId){request.cancelled=true;snapshotRequests.delete(key)}
+  delete ompState.sessions[runtimeId]
+  delete ompState.drafts[runtimeId]
+}
 /** Apply frequent stream frames locally; history snapshots are reserved for boundaries. */
 export function applyOmpEvent(runtimeId:string,seq:number,event:Record<string,any>,at=Date.now()):boolean {
   const s=ompState.sessions[runtimeId]
@@ -87,10 +104,20 @@ export function applyOmpEvent(runtimeId:string,seq:number,event:Record<string,an
   if(event.type==='session_settled'){s.settled=true;snapshotObserver?.(s)}
   return false
 }
+let serviceGeneration=0
 export async function startOmpService(onSnapshot:(snapshot:OmpSnapshot)=>void,onSettled:(id:string)=>void){
+  const generation=++serviceGeneration
   stop?.()
   snapshotObserver=onSnapshot
-  stop=await listen<{runtimeId:string;seq?:number;event:Record<string,any>}>('omp-event',({payload:p})=>{
+  const unlisten=await listen<{runtimeId:string;seq?:number;event:Record<string,any>}>('omp-event',({payload:p})=>{
+    if(generation!==serviceGeneration)return
+    if(p.event.type==='disconnected'){
+      const snapshot=p.event.snapshot as OmpSnapshot|undefined
+      forgetOmpSession(p.runtimeId)
+      // The process is already gone; do not fetch (and retain) its history again.
+      if(snapshot)onSnapshot(snapshot)
+      return
+    }
     if(p.event.type==='session_settled') settledEvents.add(p.runtimeId)
     if(p.event.type==='extension_ui_request' && p.event.method==='set_editor_text') ompState.drafts[p.runtimeId]=p.event.text||''
     if(p.seq!==undefined && applyOmpEvent(p.runtimeId,p.seq,p.event) && p.event.type!=='session_settled')return
@@ -100,8 +127,14 @@ export async function startOmpService(onSnapshot:(snapshot:OmpSnapshot)=>void,on
       void ompSnapshot(p.runtimeId).then(s=>{if(s.settled && settledEvents.delete(p.runtimeId)) onSettled(p.runtimeId)}).catch(()=>{})
     },100))
   })
+  if(generation!==serviceGeneration)unlisten();else stop=unlisten
 }
-export function stopOmpService(){stop?.();stop=undefined;snapshotObserver=undefined;for(const t of timers.values())clearTimeout(t);timers.clear();settledEvents.clear()}
+export function stopOmpService(){
+  ++serviceGeneration;stop?.();stop=undefined;snapshotObserver=undefined
+  for(const request of snapshotRequests.values())request.cancelled=true
+  snapshotRequests.clear()
+  for(const id of new Set([...Object.keys(ompState.sessions),...Object.keys(ompState.drafts),...timers.keys()]))forgetOmpSession(id)
+}
 
 /** Used by automatic orchestration: correlate this prompt, then wait for quiescence. */
 export async function runOmpPrompt(runtimeId:string,message:string,isCurrent:()=>boolean,timeoutMs=8*60*1000,onInputRequired?:(required:boolean)=>void){
