@@ -805,6 +805,24 @@ export async function startCodexReview(payload: {
   return invoke('start_codex_review', payload)
 }
 
+export type DockFile = { text: string; sha256: string }
+
+export async function dockFileRead(projectId: string, path: string): Promise<DockFile | null> {
+  return invoke('dock_file_read', { projectId, path })
+}
+
+export async function dockFileWrite(projectId: string, path: string, text: string): Promise<string> {
+  return invoke('dock_file_write', { projectId, path, text })
+}
+
+export async function dockFileList(projectId: string, dir: string): Promise<string[]> {
+  return invoke('dock_file_list', { projectId, dir })
+}
+
+export async function dockFileRemove(projectId: string, path: string): Promise<void> {
+  return invoke('dock_file_remove', { projectId, path })
+}
+
 export async function cursorDevRun(payload: {
   projectId: string
   prompt: string

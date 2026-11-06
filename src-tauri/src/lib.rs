@@ -3,6 +3,7 @@ mod bridge;
 mod clipboard;
 mod ccswitch;
 mod cursor_dev;
+mod dock_files;
 mod dsh_balance;
 mod dsh_credentials;
 mod dsh_embed;
@@ -1283,7 +1284,11 @@ pub fn run() {
             list_codex_threads,
             git_snapshot,
             start_codex_review,
-            cursor_dev_run
+            cursor_dev_run,
+            dock_files::dock_file_read,
+            dock_files::dock_file_write,
+            dock_files::dock_file_list,
+            dock_files::dock_file_remove
         ])
         .build(tauri::generate_context!())
         .expect("error while building Agent Dock")
