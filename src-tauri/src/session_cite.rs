@@ -135,8 +135,8 @@ fn list_session_turns_for(
             let dir = tools::find_grok_session_dir(&project.path, session_id).ok_or_else(|| {
                 "没有找到这个 Grok 会话的本地目录，无法读取对话。".to_string()
             })?;
-            let text = read_text_capped(&dir.join("chat_history.jsonl"), JSONL_BYTE_CAP).unwrap_or_default();
-            Ok(parse_grok_turns(&text))
+            let (text, offset) = read_tail_at(&dir.join("chat_history.jsonl"), JSONL_BYTE_CAP).unwrap_or_default();
+            Ok(parse_grok_turns_at(&text, offset))
         }
         ToolId::Kimi => {
             let dir = tools::find_kimi_session_dir(session_id)
@@ -665,14 +665,24 @@ fn take_claude_content(
 
 // Flows compare turn ids across polls, so they must survive the window sliding
 // and the newest turns must always be in it.
-fn push_claude_turn(turns: &mut Vec<SessionTurn>, record: &Value, role: &str, text: String) {
+fn push_stable_turn(turns: &mut Vec<SessionTurn>, id: Option<String>, role: &str, text: String) {
     if turns.len() >= MAX_TURNS {
         turns.remove(0);
     }
     push_turn(turns, role, text);
-    if let (Some(turn), Some(uuid)) = (turns.last_mut(), record.get("uuid").and_then(|v| v.as_str())) {
-        turn.id = uuid.to_string();
+    if let (Some(turn), Some(id)) = (turns.last_mut(), id) {
+        turn.id = id;
     }
+}
+
+fn mark_assistant_working(turns: &mut [SessionTurn], working: bool) {
+    if let Some(last) = turns.last_mut().filter(|turn| turn.role == "assistant") {
+        last.working = working;
+    }
+}
+
+fn claude_record_id(record: &Value) -> Option<String> {
+    record.get("uuid").and_then(|v| v.as_str()).map(str::to_string)
 }
 
 pub(crate) fn parse_claude_turns(text: &str) -> Vec<SessionTurn> {
@@ -691,35 +701,40 @@ pub(crate) fn parse_claude_turns(text: &str) -> Vec<SessionTurn> {
         if kind == "user" {
             if let Some(body) = claude_plain_text(message.get("content").unwrap_or(&Value::Null)) {
                 if let Some(text) = clean_user_text(&body) {
-                    push_claude_turn(&mut turns, &value, "user", text);
+                    push_stable_turn(&mut turns, claude_record_id(&value), "user", text);
                 }
             }
         } else if kind == "assistant" {
             if let Some(body) = claude_plain_text(message.get("content").unwrap_or(&Value::Null)) {
-                push_claude_turn(&mut turns, &value, "assistant", body);
+                push_stable_turn(&mut turns, claude_record_id(&value), "assistant", body);
             }
             // Records without text still say whether the turn went on.
-            if let Some(last) = turns.last_mut().filter(|turn| turn.role == "assistant") {
-                last.working = message.get("stop_reason").and_then(|v| v.as_str()) == Some("tool_use");
-            }
+            let more = message.get("stop_reason").and_then(|v| v.as_str()) == Some("tool_use");
+            mark_assistant_working(&mut turns, more);
         }
     }
     turns
 }
 
 fn read_text_capped_tail(path: &Path, max_bytes: u64) -> Option<String> {
+    read_tail_at(path, max_bytes).map(|(text, _)| text)
+}
+
+// Also returns where the text starts in the file, skipping any cut first line.
+fn read_tail_at(path: &Path, max_bytes: u64) -> Option<(String, u64)> {
     let mut file = fs::File::open(path).ok()?;
     let len = file.metadata().ok()?.len();
     if len <= max_bytes {
         let mut text = String::new();
         file.read_to_string(&mut text).ok()?;
-        return Some(text);
+        return Some((text, 0));
     }
-    file.seek(SeekFrom::End(-(max_bytes as i64))).ok()?;
+    let start = len - max_bytes;
+    file.seek(SeekFrom::Start(start)).ok()?;
     let mut buf = vec![0u8; max_bytes as usize];
     let n = file.read(&mut buf).ok()?;
-    let raw = String::from_utf8_lossy(&buf[..n]);
-    Some(raw.split_once('\n').map(|(_, rest)| rest.to_string()).unwrap_or_else(|| raw.into_owned()))
+    let skip = buf[..n].iter().position(|byte| *byte == b'\n').map_or(0, |at| at + 1);
+    Some((String::from_utf8_lossy(&buf[skip..n]).into_owned(), start + skip as u64))
 }
 
 fn read_text_capped(path: &Path, max_bytes: u64) -> Option<String> {
@@ -737,9 +752,17 @@ fn read_text_capped(path: &Path, max_bytes: u64) -> Option<String> {
 }
 
 pub(crate) fn parse_grok_turns(text: &str) -> Vec<SessionTurn> {
+    parse_grok_turns_at(text, 0)
+}
+
+// Grok records carry no id. The file is append-only, so a line's offset is one.
+fn parse_grok_turns_at(text: &str, base: u64) -> Vec<SessionTurn> {
     let mut turns = Vec::new();
-    for line in text.lines() {
-        let line = line.trim();
+    let mut next = base;
+    for raw in text.split_inclusive('\n') {
+        let offset = next;
+        next += raw.len() as u64;
+        let line = raw.trim();
         if line.is_empty() {
             continue;
         }
@@ -756,24 +779,18 @@ pub(crate) fn parse_grok_turns(text: &str) -> Vec<SessionTurn> {
             "assistant" => "assistant",
             _ => continue,
         };
-        let Some(body) = json_text(value.get("content").unwrap_or(&Value::Null)) else {
-            continue;
-        };
+        let body = json_text(value.get("content").unwrap_or(&Value::Null));
         let text = if role == "user" {
-            match clean_user_text(&body) {
-                Some(t) => t,
-                None => continue,
-            }
+            body.and_then(|body| clean_user_text(&body))
         } else {
-            let trimmed = body.trim();
-            if trimmed.is_empty() {
-                continue;
-            }
-            trimmed.to_string()
+            body.map(|body| body.trim().to_string()).filter(|body| !body.is_empty())
         };
-        push_turn(&mut turns, role, text);
-        if turns.len() >= MAX_TURNS {
-            break;
+        if let Some(text) = text {
+            push_stable_turn(&mut turns, Some(format!("b-{offset}")), role, text);
+        }
+        if role == "assistant" {
+            let more = value.get("tool_calls").and_then(Value::as_array).is_some_and(|calls| !calls.is_empty());
+            mark_assistant_working(&mut turns, more);
         }
     }
     turns
@@ -1020,6 +1037,51 @@ mod tests {
         assert_eq!(turns.len(), MAX_TURNS);
         assert_eq!(turns[0].id, "u-5");
         assert_eq!(turns.last().unwrap().id, format!("u-{}", MAX_TURNS + 4));
+    }
+
+    #[test]
+    fn grok_text_before_a_tool_call_is_not_the_end_of_the_turn() {
+        use serde_json::json;
+
+        let calling = |text: &str| json!({ "type": "assistant", "content": text, "tool_calls": [{ "id": "c1" }] }).to_string();
+        let done = |text: &str| json!({ "type": "assistant", "content": text }).to_string();
+        let result = json!({ "type": "tool_result", "content": "ok", "tool_call_id": "c1" }).to_string();
+
+        let working = parse_grok_turns(&format!("{}\n{result}\n{}", calling("我先看看"), calling("")));
+        assert_eq!(working.len(), 1);
+        assert!(working[0].working);
+
+        let finished = parse_grok_turns(&format!("{}\n{result}\n{}", calling("我先看看"), done("写好了")));
+        assert_eq!(finished.iter().map(|turn| turn.working).collect::<Vec<_>>(), vec![true, false]);
+
+        let silent = parse_grok_turns(&format!("{}\n{}", calling("我先看看"), done("")));
+        assert!(!silent[0].working);
+    }
+
+    #[test]
+    fn grok_turn_ids_stay_stable_and_the_newest_turns_are_kept() {
+        use serde_json::json;
+
+        let lines: Vec<String> = (0..MAX_TURNS + 5)
+            .map(|i| json!({ "type": "assistant", "content": "同样的回复" }).to_string().replace("回复", &format!("回复{i}")))
+            .collect();
+        let early = parse_grok_turns(&lines[..MAX_TURNS].join("\n"));
+        let later = parse_grok_turns(&lines.join("\n"));
+        assert_eq!(later.len(), MAX_TURNS);
+        assert_eq!(later[0].id, early[5].id);
+        assert!(later.last().unwrap().text.ends_with(&format!("回复{}", MAX_TURNS + 4)));
+        assert!(!early.iter().any(|turn| turn.id == later.last().unwrap().id));
+    }
+
+    #[test]
+    fn tail_reads_report_where_the_kept_text_starts() {
+        let path = std::env::temp_dir().join(format!("session-tail-{}.jsonl", std::process::id()));
+        fs::write(&path, "第一行很长很长\n第二行\n第三行\n").unwrap();
+        let (text, offset) = read_tail_at(&path, 25).unwrap();
+        let whole = fs::read(&path).unwrap();
+        let _ = fs::remove_file(&path);
+        assert_eq!(text, "第二行\n第三行\n");
+        assert_eq!(&whole[offset as usize..], text.as_bytes());
     }
 
     #[test]
