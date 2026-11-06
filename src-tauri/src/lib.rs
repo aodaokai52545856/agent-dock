@@ -30,6 +30,7 @@ mod version_tasks;
 mod omp_rpc;
 mod omp_startup;
 mod omp_usage;
+mod posttool;
 
 use chrono::Utc;
 use path_norm::folder_name;
@@ -1170,6 +1171,31 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            posttool::posttool_request,
+            posttool::streams::posttool_stream_connect,
+            posttool::streams::posttool_stream_send,
+            posttool::streams::posttool_stream_close,
+            posttool::streams::posttool_stream_poll,
+            posttool::streams::posttool_stream_release,
+            posttool::grpc::posttool_proto_load,
+            posttool::grpc::posttool_grpc_reflect,
+            posttool::oauth::posttool_oauth_start,
+            posttool::oauth::posttool_oauth_poll,
+            posttool::oauth::posttool_oauth_close,
+            posttool::posttool_cancel,
+            posttool::posttool_resources,
+            posttool::posttool_release,
+            posttool::posttool_response_slice,
+            posttool::posttool_response_save,
+            posttool::storage::posttool_document_list,
+            posttool::storage::posttool_document_get,
+            posttool::storage::posttool_document_put,
+            posttool::storage::posttool_document_import,
+            posttool::storage::posttool_document_delete,
+            posttool::storage::posttool_history_clear,
+            posttool::storage::posttool_file_read,
+            posttool::storage::posttool_parse_definition,
+            posttool::storage::posttool_file_write,
             load_app_state,
             save_settings,
             add_project,
@@ -1267,6 +1293,7 @@ pub fn run() {
                 tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
             ) {
                 omp_rpc::global().close_all();
+                posttool::shutdown();
                 app.state::<Arc<PtyHub>>().close_all();
                 dsh_web::shutdown_app(app);
             }
