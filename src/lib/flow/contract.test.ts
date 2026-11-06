@@ -60,6 +60,7 @@ test('contract validation rejects bad declarations', () => {
   assert.match(validateContract(flowWith({ inputs: [{ ref: 'a.md' }] })) || '', /输入写法不对/)
   assert.match(validateContract(flowWith({ outputs: [{ path: 'project:memory/a.md' }] })) || '', /只能写到 task:/)
   assert.match(validateContract(flowWith({ channel: { kind: 'human' }, outputs: [{ path: 'task:a.md' }] })) || '', /人工节点/)
+  assert.match(validateContract(flowWith({ channel: { ...pty, toolId: 'pi' }, outputs: [{ path: 'task:a.md' }] })) || '', /不能确认一轮是否结束/)
 })
 
 test('task directory names are readable and safe', () => {

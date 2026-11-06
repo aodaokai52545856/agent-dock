@@ -10,7 +10,7 @@ import {
 } from '../lib/flow/runtime.ts'
 import { FLOW_TEMPLATES } from '../lib/flow/templates.ts'
 import { inspectPty } from '../lib/flow/channels.ts'
-import { isAwaitingHuman } from '../lib/flow/engine.ts'
+import { isAwaitingHuman, isAwaitingLessons } from '../lib/flow/engine.ts'
 import { currentFlow, currentRun, ensurePipeline, store } from '../lib/store'
 
 defineProps<{
@@ -88,6 +88,7 @@ const runHint = computed(() => {
   const run = currentRun.value
   if (!run) return ''
   if (run.status === 'running') return '运行中'
+  if (isAwaitingLessons(run)) return '待审批经验'
   if (run.status === 'waiting') return isAwaitingHuman(currentFlow.value, run) ? '待审批' : '待桥接'
   if (run.status === 'failed') return '失败'
   if (run.status === 'canceled') return '已停止'

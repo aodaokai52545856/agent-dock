@@ -3,6 +3,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import FlowChart from './FlowChart.vue'
 import FlowNodeCard from './FlowNodeCard.vue'
 import HandoffPanel from './HandoffPanel.vue'
+import LessonPanel from './LessonPanel.vue'
 import {
   addRoleNode,
   advanceSlice,
@@ -22,7 +23,7 @@ import {
   syncProjectFlows
 } from '../lib/flow/runtime.ts'
 import { describeChannel } from '../lib/flow/channels.ts'
-import { isAwaitingHuman } from '../lib/flow/engine.ts'
+import { isAwaitingHuman, isAwaitingLessons } from '../lib/flow/engine.ts'
 import { flowInspectorKind, flowInspectorTitle } from '../lib/flow/inspector.ts'
 import { allRoles, roleLabel } from '../lib/flow/roles.ts'
 import { FLOW_END, FLOW_START, type RunStep } from '../lib/flow/types.ts'
@@ -40,6 +41,7 @@ import { GATE_LABEL } from '../lib/types'
 const busy = computed(() => currentRun.value?.status === 'running')
 const waiting = computed(() => currentRun.value?.status === 'waiting')
 const awaitingHuman = computed(() => isAwaitingHuman(currentFlow.value, currentRun.value))
+const awaitingLessons = computed(() => isAwaitingLessons(currentRun.value))
 const nextLocked = computed(() => currentPipeline.value?.gate !== 'passed')
 const editing = computed(() => store.bridgePaneMode === 'edit')
 const selectedNode = computed(
@@ -53,7 +55,7 @@ const activeNode = computed(
 )
 const failedNodeId = computed(() => {
   const steps = currentRun.value?.steps || []
-  return [...steps].reverse().find((step) => step.status === 'failed')?.nodeId || ''
+  return [...steps].reverse().find((step) => step.status === 'failed' && step.purpose !== 'lesson')?.nodeId || ''
 })
 
 const newRole = ref('')
@@ -70,6 +72,7 @@ const stageHint = computed(() => {
   const run = currentRun.value
   if (run?.status === 'running') return '正在执行当前节点，图上高亮的是正在跑的角色。'
   if (awaitingHuman.value) return '等待人工审批：看完后标记通过或未通过。'
+  if (awaitingLessons.value) return '流程已通过：勾选要留下的经验，写入后本片才算走完。'
   if (run?.status === 'waiting') return '停在人工干预：改信封后再写入下一窗口。'
   if (run?.status === 'completed') return '本片已走完，可进入下一片。'
   if (run?.status === 'failed') return '未通过或失败，可标记结论或回到编排改图。'
@@ -291,9 +294,10 @@ onUnmounted(() => window.removeEventListener('keydown', onKey))
             </label>
 
             <HandoffPanel />
+            <LessonPanel />
 
             <div class="actions">
-              <button type="button" class="btn btn-primary" :disabled="busy" @click="startSelectedFlow()">
+              <button type="button" class="btn btn-primary" :disabled="busy || awaitingLessons" @click="startSelectedFlow()">
                 {{ busy ? '运行中…' : '运行流程' }}
               </button>
               <button
@@ -305,8 +309,8 @@ onUnmounted(() => window.removeEventListener('keydown', onKey))
               >
                 从失败节点重跑
               </button>
-              <button type="button" class="soft-btn" :disabled="busy" @click="markVerdict('pass')">标记通过</button>
-              <button type="button" class="soft-btn" :disabled="busy" @click="markVerdict('fail')">标记未通过</button>
+              <button type="button" class="soft-btn" :disabled="busy || awaitingLessons" @click="markVerdict('pass')">标记通过</button>
+              <button type="button" class="soft-btn" :disabled="busy || awaitingLessons" @click="markVerdict('fail')">标记未通过</button>
               <button type="button" class="soft-btn" :disabled="nextLocked || busy || waiting" @click="advanceSlice">
                 进入下一片
               </button>
@@ -326,7 +330,7 @@ onUnmounted(() => window.removeEventListener('keydown', onKey))
               <ol v-if="currentRun.steps.length" class="steps">
                 <li v-for="step in currentRun.steps" :key="step.id" :data-status="step.status">
                   <div class="step-head">
-                    <strong>{{ nodeTitle(step.nodeId) }}</strong>
+                    <strong>{{ nodeTitle(step.nodeId) }}{{ step.purpose === 'lesson' ? ' · 补写经验' : '' }}</strong>
                     <span>{{ stepStatus(step) }} · {{ stepDuration(step) }}</span>
                   </div>
                   <pre v-if="step.envelope?.done" class="review-text">{{ step.envelope.done }}</pre>

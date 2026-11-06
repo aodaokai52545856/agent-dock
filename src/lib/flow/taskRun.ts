@@ -9,6 +9,7 @@ import {
   type InputBlock,
   type OutputBlock
 } from './contract.ts'
+import { validateLessonText } from './lessons.ts'
 import type { AdapterOutcome, FlowNode, FlowRun, StepFile } from './types.ts'
 
 export type DockFs = {
@@ -24,7 +25,16 @@ export type PreparedStep = {
 }
 
 export function attemptOf(run: FlowRun, nodeId: string) {
-  return run.steps.filter((step) => step.nodeId === nodeId).length
+  const own = run.steps.filter((step) => step.nodeId === nodeId && step.purpose !== 'lesson').length
+  return (run.priorAttempts?.[nodeId] ?? 0) + own
+}
+
+export function attemptCounts(run: FlowRun) {
+  const counts: Record<string, number> = {}
+  for (const nodeId of new Set([...Object.keys(run.priorAttempts ?? {}), ...run.steps.map((step) => step.nodeId)])) {
+    counts[nodeId] = attemptOf(run, nodeId)
+  }
+  return counts
 }
 
 export function taskOf(run: FlowRun) {
@@ -122,7 +132,9 @@ export async function finishStep(
       const row = await collectOutput(fs, node, run, prepared, outcome, index)
       if ('error' in row) return failed(row.error ?? '')
       outputs.push({ ref: (node.outputs ?? [])[index].path, sha256: row.sha256 })
+      const output = (node.outputs ?? [])[index]
       const problem = validateOutputText(row.path, row.text, row.sections)
+        || (output.lesson ? validateLessonText(row.path, row.text, output.lesson) : null)
       if (problem) return failed(problem)
       if (gated) verdict = verdictFromDocument(row.text) ?? verdict
     }
@@ -133,7 +145,7 @@ export async function finishStep(
 }
 
 export function runRecord(run: FlowRun) {
-  const attempts = new Map<string, number>()
+  const attempts = new Map(Object.entries(run.priorAttempts ?? {}))
   return {
     id: run.id,
     flowId: run.flowId,
@@ -141,12 +153,14 @@ export function runRecord(run: FlowRun) {
     status: run.status,
     error: run.lastError || undefined,
     createdAt: run.createdAt,
+    lessons: run.lessons,
     steps: run.steps.map((step) => {
-      const attempt = (attempts.get(step.nodeId) ?? 0) + 1
+      const attempt = (attempts.get(step.nodeId) ?? 0) + (step.purpose === 'lesson' ? 0 : 1)
       attempts.set(step.nodeId, attempt)
       return {
         nodeId: step.nodeId,
         attempt,
+        purpose: step.purpose,
         status: step.status,
         startedAt: step.startedAt,
         endedAt: step.endedAt,

@@ -1,5 +1,6 @@
 import { parseReviewVerdict } from '../reviewVerdict.ts'
 import type { ReviewVerdict } from '../types.ts'
+import { channelSupportsAuto, ptyToolLabel } from './channels.ts'
 import type { ChannelBinding, FlowDef, FlowNode, NodeOutput } from './types.ts'
 
 export const DOCK_DIR = '.agentDock'
@@ -35,7 +36,7 @@ export function nodeHasContract(node: FlowNode) {
 }
 
 export function flowHasContract(flow: FlowDef) {
-  return flow.nodes.some(nodeHasContract)
+  return Boolean(flow.experience) || flow.nodes.some(nodeHasContract)
 }
 
 // Unverified channels get file contents inlined and their reply captured, so a
@@ -57,6 +58,9 @@ export function validateContract(flow: FlowDef): string | null {
   for (const node of flow.nodes) {
     if (node.channel.kind === 'human' && nodeHasContract(node)) {
       return `节点「${node.title}」是人工节点，不能声明输入输出`
+    }
+    if (node.outputs?.length && node.channel.kind === 'pty' && !channelSupportsAuto(node.channel)) {
+      return `节点「${node.title}」用的 ${ptyToolLabel(node.channel.toolId)} 还不能确认一轮是否结束，不能声明输出`
     }
     for (const input of node.inputs ?? []) {
       if (!resolveRef(input.ref, 'task')) return `节点「${node.title}」的输入写法不对：${input.ref}`
@@ -103,7 +107,7 @@ export function renderContractBlock(inputs: InputBlock[], outputs: OutputBlock[]
   return lines.join('\n')
 }
 
-function sectionBody(text: string, heading: string) {
+export function sectionBody(text: string, heading: string) {
   const lines = text.split(/\r?\n/)
   const level = /^#+/.exec(heading)?.[0].length ?? 0
   const start = lines.findIndex((line) => line.trim() === heading)

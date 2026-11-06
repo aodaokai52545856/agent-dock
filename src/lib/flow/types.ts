@@ -52,11 +52,15 @@ export interface NodeInput {
   read?: 'index-first'
 }
 
+export type LessonRule = 'entries' | 'entries-or-na'
+
 export interface NodeOutput {
   path: string
   capture?: 'file' | 'reply'
   template?: string
   sections?: string[]
+  // Set by Dock for a single step; flow files cannot declare it.
+  lesson?: LessonRule
 }
 
 export interface FlowNode {
@@ -84,12 +88,22 @@ export interface FlowEdge {
 
 export type FlowTemplateId = 'dev-review' | 'codex-grok' | 'blank'
 
+export type ExperiencePolicy = 'attempts' | 'always' | 'model'
+
+export interface FlowExperience {
+  policy: ExperiencePolicy
+  minAttempts?: number
+  authors: string[]
+  judge?: string
+}
+
 export interface FlowDef {
   id: string
   name: string
   templateId?: FlowTemplateId
   nodes: FlowNode[]
   edges: FlowEdge[]
+  experience?: FlowExperience
   maxRetries: number
   maxSteps: number
   slice: number
@@ -141,6 +155,25 @@ export interface RunStep {
   envelope?: Envelope
   inputs?: StepFile[]
   outputs?: StepFile[]
+  // A turn that only fills in a lesson: it is not an attempt at the node's work.
+  purpose?: 'lesson'
+}
+
+export interface LessonDraft {
+  id: string
+  file: string
+  title: string
+  scope: string
+  body: string
+  missingSections: string[]
+  missingPaths: string[]
+}
+
+export interface LessonRecord {
+  title: string
+  scope: string
+  // Empty when the reviewer left the lesson out.
+  entry?: string
 }
 
 export type RunStatus = 'idle' | 'running' | 'waiting' | 'failed' | 'completed' | 'canceled'
@@ -163,6 +196,11 @@ export interface FlowRun {
   git: GitSnapshot | null
   createdAt: number
   taskDir?: string
+  // Attempts made by earlier runs of the same task, kept across a rerun.
+  priorAttempts?: Record<string, number>
+  lessonWanted?: string
+  pendingLessons?: LessonDraft[]
+  lessons?: LessonRecord[]
 }
 
 export interface ProjectFlows {
@@ -184,6 +222,7 @@ export type EngineEvent =
   | { type: 'execute'; nodeId: string; envelope: Envelope; send: boolean; verbatim?: boolean }
   | { type: 'waitManual'; envelope: Envelope }
   | { type: 'waitHuman'; nodeId: string }
+  | { type: 'waitLessons' }
   | { type: 'complete' }
   | { type: 'fail'; error: string }
 

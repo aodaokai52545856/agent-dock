@@ -4,7 +4,7 @@ import { makeId } from './ids.ts'
 import { roleContract, roleLabel } from './roles.ts'
 import { defaultNodePoint } from './chartLayout.ts'
 import { createDevReviewFlow } from './templates.ts'
-import { ARTIFACT_CHAR_CAP, FLOW_END, FLOW_START, type FlowDef, type FlowEdge, type FlowNode, type FlowRun, type NodeInput, type NodeOutput, type ProjectFlows } from './types.ts'
+import { ARTIFACT_CHAR_CAP, FLOW_END, FLOW_START, type FlowDef, type FlowEdge, type FlowExperience, type FlowNode, type FlowRun, type NodeInput, type NodeOutput, type ProjectFlows } from './types.ts'
 
 export const FLOW_STORAGE_KEY = 'ad-bridge-flows'
 export const RUN_STORAGE_KEY = 'ad-bridge-runs'
@@ -110,6 +110,16 @@ function repairPassFailEdges(nodes: FlowNode[], edges: FlowEdge[]): FlowEdge[] {
   return next
 }
 
+function normalizeExperience(row: FlowExperience | undefined): FlowExperience | undefined {
+  if (row?.policy !== 'attempts' && row?.policy !== 'always' && row?.policy !== 'model') return undefined
+  return {
+    policy: row.policy,
+    minAttempts: row.policy === 'attempts' ? Math.max(1, Math.floor(Number(row.minAttempts)) || 2) : undefined,
+    authors: Array.isArray(row.authors) ? row.authors.filter((id) => typeof id === 'string' && id.trim()) : [],
+    judge: row.policy === 'model' && typeof row.judge === 'string' && row.judge.trim() ? row.judge.trim() : undefined
+  }
+}
+
 export function normalizeFlow(row: FlowDef): FlowDef | null {
   if (!row || !row.id || !Array.isArray(row.nodes) || !Array.isArray(row.edges)) return null
   return {
@@ -132,6 +142,7 @@ export function normalizeFlow(row: FlowDef): FlowDef | null {
           : undefined
       }))
     ),
+    experience: normalizeExperience(row.experience),
     maxRetries: row.maxRetries ?? 2,
     maxSteps: row.maxSteps ?? 12,
     slice: row.slice || 1,

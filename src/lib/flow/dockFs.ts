@@ -4,6 +4,7 @@ import type { DockFs } from './taskRun.ts'
 export type ProjectDockFs = DockFs & {
   list(dir: string): Promise<string[]>
   remove(rel: string): Promise<void>
+  missing(paths: string[]): Promise<string[]>
 }
 
 const preview = new Map<string, string>()
@@ -25,6 +26,9 @@ function previewFs(projectId: string): ProjectDockFs {
     },
     async remove(rel) {
       preview.delete(key(rel))
+    },
+    async missing() {
+      return []
     }
   }
 }
@@ -35,6 +39,7 @@ export function dockFs(projectId: string): ProjectDockFs {
     read: (rel) => api.dockFileRead(projectId, rel),
     write: (rel, text) => api.dockFileWrite(projectId, rel, text),
     list: (dir) => api.dockFileList(projectId, dir),
-    remove: (rel) => api.dockFileRemove(projectId, rel)
+    remove: (rel) => api.dockFileRemove(projectId, rel),
+    missing: (paths) => (paths.length ? api.dockPathsMissing(projectId, paths) : Promise.resolve([]))
   }
 }

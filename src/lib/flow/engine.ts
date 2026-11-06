@@ -1,4 +1,4 @@
-import { envelopeFromOutcome, initialEnvelope, transformEnvelope } from './envelope.ts'
+import { emptyEnvelope, envelopeFromOutcome, initialEnvelope, transformEnvelope } from './envelope.ts'
 import { makeId } from './ids.ts'
 import {
   FLOW_END,
@@ -9,6 +9,8 @@ import {
   type FlowDef,
   type FlowEdge,
   type FlowRun,
+  type LessonDraft,
+  type LessonRecord,
   type RunStep
 } from './types.ts'
 
@@ -192,6 +194,7 @@ export function afterOutcome(flow: FlowDef, run: FlowRun, outcome: AdapterOutcom
   if (!node) return fail(next, '当前节点不存在')
 
   if (outcome.cursorAgentId) next.cursorAgentId = outcome.cursorAgentId
+  if (step?.purpose === 'lesson') return finishLessonTurn(next, step, outcome)
 
   if (!outcome.ok) {
     if (step) {
@@ -266,6 +269,53 @@ export function applyManualVerdict(flow: FlowDef, run: FlowRun, verdict: 'pass' 
   return followEdge(flow, next, next.lastEnvelope)
 }
 
+// The work already passed, so a lesson that could not be written does not undo it.
+function finishLessonTurn(run: FlowRun, step: RunStep, outcome: AdapterOutcome): EngineResult {
+  step.status = outcome.ok ? 'completed' : 'failed'
+  step.error = outcome.ok ? undefined : outcome.error || '补写经验失败'
+  step.endedAt = Date.now()
+  if (outcome.ok && step.envelope) step.envelope = { ...step.envelope, done: outcome.text, artifacts: [] }
+  return complete(run)
+}
+
+export function startLessonTurn(flow: FlowDef, run: FlowRun, nodeId: string): EngineResult {
+  const next = cloneRun(run)
+  const node = findNode(flow, nodeId)
+  if (!node) return fail(next, '找不到经验作者节点')
+  const envelope = emptyEnvelope({
+    runId: next.id,
+    causationId: next.lastEnvelope?.id,
+    toNode: nodeId,
+    toRole: node.role,
+    task: `补写这次任务的可复用经验，不改代码。原任务：${next.task}`,
+    done: `判定节点认为值得沉淀：${next.lessonWanted || ''}`
+  })
+  next.lessonWanted = undefined
+  next.currentNodeId = nodeId
+  next.status = 'running'
+  next.lastEnvelope = envelope
+  markWorking(next, nodeId, envelope).purpose = 'lesson'
+  return { run: next, event: { type: 'execute', nodeId, envelope, send: true, verbatim: false } }
+}
+
+export function awaitLessons(run: FlowRun, lessons: LessonDraft[]): EngineResult {
+  const next = cloneRun(run)
+  next.status = 'waiting'
+  next.pendingLessons = lessons
+  return { run: next, event: { type: 'waitLessons' } }
+}
+
+export function isAwaitingLessons(run: FlowRun | null | undefined) {
+  return run?.status === 'waiting' && Boolean(run.pendingLessons?.length)
+}
+
+export function finishLessons(run: FlowRun, records: LessonRecord[]): FlowRun {
+  const { run: done } = complete(cloneRun(run))
+  done.pendingLessons = undefined
+  done.lessons = records
+  return done
+}
+
 export function isRunBusy(run: FlowRun | null | undefined) {
   return run?.status === 'running'
 }
@@ -275,6 +325,7 @@ export function cancelRun(run: FlowRun): FlowRun {
   next.status = 'canceled'
   next.lastError = '已停止'
   next.pendingHandoff = null
+  next.pendingLessons = undefined
   const current = next.steps[next.steps.length - 1]
   if (current && (current.status === 'working' || current.status === 'input-required')) {
     current.status = 'canceled'

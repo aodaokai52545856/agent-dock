@@ -6,8 +6,22 @@ import { defaultChannel, firstCodexNode, validateFlowPtyBindings } from './chann
 import { connectForward, deleteEdge, placeNode, placeTerminal, withNodePoints } from './chartLayout.ts'
 import { flowHasContract, nodeHasContract, taskDirName, validateContract } from './contract.ts'
 import { dockFs } from './dockFs.ts'
-import { afterOutcome, applyManualVerdict, awaitHuman, cancelRun, expectsVerdict, isRunBusy, resumeManual, startRun } from './engine.ts'
+import {
+  afterOutcome,
+  applyManualVerdict,
+  awaitHuman,
+  awaitLessons,
+  cancelRun,
+  expectsVerdict,
+  finishLessons,
+  isAwaitingLessons,
+  isRunBusy,
+  resumeManual,
+  startLessonTurn,
+  startRun
+} from './engine.ts'
 import { renderEnvelope, withVerdictTicket } from './envelope.ts'
+import { collectLessons, harvestLessons, lessonTurnAuthor, noteLessonRequest, planStep, validateExperience } from './experience.ts'
 import { FLOWS_DIR, flowFilePath, flowFileText, mergeRepoFlows, parseFlowFile } from './flowFiles.ts'
 import {
   appendNode,
@@ -20,7 +34,7 @@ import {
   ensureProjectFlows as ensureBundle
 } from './model.ts'
 import { addCustomRole as pushCustomRole, roleContract, roleLabel } from './roles.ts'
-import { finishStep, prepareStep, runRecord, type PreparedStep } from './taskRun.ts'
+import { attemptCounts, finishStep, prepareStep, runRecord, type PreparedStep } from './taskRun.ts'
 import { flowFromTemplate } from './templates.ts'
 import type {
   EngineEvent,
@@ -36,6 +50,7 @@ import type {
 const FLOW_WRITE_DELAY_MS = 400
 
 let runSeq = 0
+let harvesting = false
 let traceQueue: Promise<void> = Promise.resolve()
 // Canonical text of each flow file as last read or written.
 const flowTexts = new Map<string, string>()
@@ -81,8 +96,9 @@ function traceRun(run: FlowRun) {
     .catch((err) => showToast(`运行记录写入失败：${err instanceof Error ? err.message : String(err)}`))
 }
 
+// A run keeps going after the user switches project, so it files under its own.
 function setRun(run: FlowRun | null) {
-  const id = store.selectedProjectId
+  const id = run?.projectId || store.selectedProjectId
   if (!id) return
   store.runs[id] = run
   persistRuns()
@@ -178,6 +194,18 @@ function patchFlow(flow: FlowDef) {
   if (!before || flowFileText(before) !== flowFileText(flow)) scheduleFlowWrite(id, flow)
 }
 
+function lessonsToast() {
+  if (!isAwaitingLessons(currentRun())) return false
+  showToast('先审批这一片的经验，或者全部跳过')
+  return true
+}
+
+function localDate(at: number) {
+  const date = new Date(at)
+  const pad = (value: number) => String(value).padStart(2, '0')
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
+}
+
 function busyToast() {
   const run = currentRun()
   if (isRunBusy(run)) {
@@ -185,6 +213,20 @@ function busyToast() {
     return true
   }
   return false
+}
+
+async function settleExperience(flow: FlowDef, run: FlowRun): Promise<EngineResult | null> {
+  if (!flow.experience || !run.taskDir) return null
+  try {
+    const fs = dockFs(run.projectId)
+    const author = await lessonTurnAuthor(fs, flow, run)
+    if (author) return startLessonTurn(flow, run, author)
+    const lessons = await collectLessons(fs, run)
+    return lessons.length ? awaitLessons(run, lessons) : null
+  } catch (err) {
+    showToast(`读取经验草稿失败：${err instanceof Error ? err.message : String(err)}`)
+    return null
+  }
 }
 
 async function drive(flow: FlowDef, result: EngineResult) {
@@ -214,11 +256,12 @@ async function drive(flow: FlowDef, result: EngineResult) {
       setRun(run)
       break
     }
-    const gated = expectsVerdict(flow, node.id)
     const step = run.steps[run.steps.length - 1]
+    const gated = step?.purpose !== 'lesson' && expectsVerdict(flow, node.id)
+    const plan = planStep(flow, node, run, step)
     let prepared: PreparedStep | null = null
-    if (run.taskDir && nodeHasContract(node)) {
-      const result = await prepareStep(dockFs(run.projectId), node, run)
+    if (run.taskDir && nodeHasContract(plan.node)) {
+      const result = await prepareStep(dockFs(run.projectId), plan.node, run)
       if (seq !== runSeq) return
       if ('error' in result) {
         const failed = afterOutcome(flow, run, { ok: false, text: '', error: result.error })
@@ -231,8 +274,8 @@ async function drive(flow: FlowDef, result: EngineResult) {
       if (step) step.inputs = result.inputs
       setRun(run)
     }
-    const contract = [node.roleContract, prepared?.block].filter(Boolean).join('\n\n')
-    const contracted = { ...node, roleContract: gated ? withVerdictTicket(contract) : contract }
+    const contract = [node.roleContract, prepared?.block, plan.note].filter(Boolean).join('\n\n')
+    const contracted = { ...plan.node, roleContract: gated ? withVerdictTicket(contract) : contract }
     let outcome = await runChannel(contracted, execute.envelope, {
       projectId: run.projectId,
       send: execute.send,
@@ -256,11 +299,12 @@ async function drive(flow: FlowDef, result: EngineResult) {
       patchFlow({ ...flow, nodes: flow.nodes.map((item) => (item.id === node.id ? node : item)) })
     }
     if (prepared) {
-      const finished = await finishStep(dockFs(run.projectId), node, run, prepared, outcome, gated)
+      const finished = await finishStep(dockFs(run.projectId), plan.node, run, prepared, outcome, gated)
       if (seq !== runSeq) return
       outcome = finished.outcome
       if (step) step.outputs = finished.outputs
     }
+    noteLessonRequest(flow, node, run, outcome)
     const next = afterOutcome(flow, run, outcome)
     run = next.run
     event = next.event
@@ -276,6 +320,17 @@ async function drive(flow: FlowDef, result: EngineResult) {
     return
   }
   if (event.type === 'complete') {
+    const settled = await settleExperience(flow, run)
+    if (seq !== runSeq) return
+    if (settled?.event.type === 'execute') {
+      await drive(flow, settled)
+      return
+    }
+    if (settled) {
+      setRun(settled.run)
+      showToast('流程已通过：审批经验后本片才算走完')
+      return
+    }
     showToast('本片流程已走完')
     return
   }
@@ -291,10 +346,11 @@ export async function startSelectedFlow(nodeId?: string) {
     return
   }
   if (busyToast()) return
+  if (lessonsToast()) return
   await syncProjectFlows(projectId)
   const flow = currentFlow()
   if (!flow) return
-  const bindError = validateFlowPtyBindings(flow, store.live, projectId) || validateContract(flow)
+  const bindError = validateFlowPtyBindings(flow, store.live, projectId) || validateContract(flow) || validateExperience(flow)
   if (bindError) {
     showToast(bindError)
     return
@@ -307,6 +363,7 @@ export async function startSelectedFlow(nodeId?: string) {
     // Rerunning from a failed node continues the same task's documents.
     const resumed = nodeId && previous?.flowId === flow.id ? previous.taskDir : ''
     result.run.taskDir = resumed || taskDirName(result.run.task, result.run.createdAt, result.run.id)
+    if (resumed && previous) result.run.priorAttempts = attemptCounts(previous)
   }
   await drive(flow, result)
 }
@@ -348,8 +405,23 @@ export function markVerdict(verdict: 'pass' | 'fail') {
   const flow = currentFlow()
   const run = currentRun()
   if (!flow || !run) return
-  if (busyToast()) return
+  if (busyToast() || lessonsToast()) return
   void drive(flow, applyManualVerdict(flow, run, verdict))
+}
+
+export async function approveLessons(ids: string[]) {
+  const run = currentRun()
+  if (!run?.pendingLessons?.length || harvesting) return
+  harvesting = true
+  try {
+    const records = await harvestLessons(dockFs(run.projectId), run, ids, localDate(Date.now()))
+    setRun(finishLessons(run, records))
+    showToast(ids.length ? `已写入 ${ids.length} 条经验` : '已跳过经验，本片走完')
+  } catch (err) {
+    showToast(`经验写入失败：${err instanceof Error ? err.message : String(err)}`)
+  } finally {
+    harvesting = false
+  }
 }
 
 export function advanceSlice() {
@@ -376,6 +448,7 @@ export function selectFlow(flowId: string) {
     showToast('这一片还在跑，先等它结束再换流程')
     return
   }
+  if (lessonsToast()) return
   row.selectedFlowId = flowId
   store.bridgeSelectedNodeId = flow.nodes[0]?.id || ''
   store.bridgeSelectedEdgeId = ''
@@ -417,6 +490,7 @@ export function createFlowFromTemplate(templateId: FlowTemplateId) {
     showToast('这一片还在跑，先等它结束再新建')
     return
   }
+  if (lessonsToast()) return
   const flow = flowFromTemplate(templateId)
   const count = row.flows.filter((item) => item.templateId === templateId).length
   if (count) flow.name = `${flow.name} ${count + 1}`
@@ -459,6 +533,7 @@ export function deleteFlow(flowId: string) {
     showToast('这一片还在跑，不能删流程')
     return
   }
+  if (lessonsToast()) return
   if (row.flows.length <= 1) {
     showToast('至少留一条流程')
     return
@@ -613,7 +688,8 @@ export async function openWindowForNode(nodeId: string) {
       alive: true,
       openedAt: opened.openedAt ?? Date.now(),
       kind: opened.kind ?? 'pty',
-      url: opened.url ?? null
+      url: opened.url ?? null,
+      account: opened.account
     })
     if (!opened.sessionId) watchPendingSession(opened.ptyId)
     updateNode(nodeId, {
