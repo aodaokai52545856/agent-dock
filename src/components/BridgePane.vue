@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import FlowChart from './FlowChart.vue'
 import FlowNodeCard from './FlowNodeCard.vue'
 import HandoffPanel from './HandoffPanel.vue'
@@ -18,7 +18,8 @@ import {
   setEdgeMode,
   setPaneMode,
   startSelectedFlow,
-  stopSelectedFlow
+  stopSelectedFlow,
+  syncProjectFlows
 } from '../lib/flow/runtime.ts'
 import { describeChannel } from '../lib/flow/channels.ts'
 import { isAwaitingHuman } from '../lib/flow/engine.ts'
@@ -156,6 +157,7 @@ function onKey(event: KeyboardEvent) {
 }
 
 onMounted(() => window.addEventListener('keydown', onKey))
+watch(() => store.selectedProjectId, (id) => void syncProjectFlows(id), { immediate: true })
 onUnmounted(() => window.removeEventListener('keydown', onKey))
 </script>
 

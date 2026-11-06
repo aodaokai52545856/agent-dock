@@ -35,7 +35,7 @@ export async function runChannel(node: FlowNode, envelope: Envelope, ctx: Adapte
     if(!live) return {ok:false,text:'',error:'请先绑定已打开的 OMP 会话'}
     const text=renderEnvelope(envelope,{transform:ctx.verbatim?'verbatim':'roleWrap',contract:node.roleContract})
     try {
-      if(!ctx.send){await api.writeSessionText(live.ptyId,text);return {ok:true,text:'已写入 OMP 草稿，未发送'}}
+      if(!ctx.send){await api.writeSessionText(live.ptyId,text);return {ok:true,text:'已写入 OMP 草稿，未发送',unconfirmed:true}}
       return {ok:true,text:await runOmpPrompt(live.ptyId,text,ctx.isCurrent,undefined,ctx.onInputRequired)}
     } catch(e){return {ok:false,text:'',error:String(e)}}
   }
@@ -129,10 +129,10 @@ async function runPty(node: FlowNode, envelope: Envelope, ctx: AdapterContext): 
     return { ok: false, text: '', error: err instanceof Error ? err.message : String(err) }
   }
   if (!waitForTurn || !sessionId) {
-    return { ok: true, text: ctx.send ? '已写入并发送' : '已写入目标终端，未发送' }
+    return { ok: true, text: ctx.send ? '已写入并发送' : '已写入目标终端，未发送', unconfirmed: true }
   }
   if (!channelSupportsAuto(node.channel) && ctx.send) {
-    return { ok: true, text: '已发送。该通道还不能自动读回合，请在窗口里确认。' }
+    return { ok: true, text: '已发送。该通道还不能自动读回合，请在窗口里确认。', unconfirmed: true }
   }
   const deadline = now() + PTY_WAIT_MS_DEFAULT
   const wait = ctx.sleep ?? sleep

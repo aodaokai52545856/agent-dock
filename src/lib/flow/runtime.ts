@@ -4,8 +4,11 @@ import { jumpToLive, rememberOpened, showToast, store, watchPendingSession } fro
 import { runChannel } from './adapters.ts'
 import { defaultChannel, firstCodexNode, validateFlowPtyBindings } from './channels.ts'
 import { connectForward, deleteEdge, placeNode, placeTerminal, withNodePoints } from './chartLayout.ts'
+import { flowHasContract, nodeHasContract, taskDirName, validateContract } from './contract.ts'
+import { dockFs } from './dockFs.ts'
 import { afterOutcome, applyManualVerdict, awaitHuman, cancelRun, expectsVerdict, isRunBusy, resumeManual, startRun } from './engine.ts'
 import { renderEnvelope, withVerdictTicket } from './envelope.ts'
+import { FLOWS_DIR, flowFilePath, flowFileText, mergeRepoFlows, parseFlowFile } from './flowFiles.ts'
 import {
   appendNode,
   createCustomNode,
@@ -17,6 +20,7 @@ import {
   ensureProjectFlows as ensureBundle
 } from './model.ts'
 import { addCustomRole as pushCustomRole, roleContract, roleLabel } from './roles.ts'
+import { finishStep, prepareStep, runRecord, type PreparedStep } from './taskRun.ts'
 import { flowFromTemplate } from './templates.ts'
 import type {
   EngineEvent,
@@ -29,7 +33,13 @@ import type {
   RoleId
 } from './types.ts'
 
+const FLOW_WRITE_DELAY_MS = 400
+
 let runSeq = 0
+let traceQueue: Promise<void> = Promise.resolve()
+// Canonical text of each flow file as last read or written.
+const flowTexts = new Map<string, string>()
+const pendingFlowWrites = new Map<string, { timer: ReturnType<typeof setTimeout>; write: () => Promise<void> }>()
 
 function bundle() {
   const id = store.selectedProjectId
@@ -60,18 +70,112 @@ export function persistCurrent() {
   persistRuns()
 }
 
+function traceRun(run: FlowRun) {
+  if (!run.taskDir) return
+  const path = `tasks/${run.taskDir}/run.json`
+  const text = `${JSON.stringify(runRecord(run), null, 2)}\n`
+  traceQueue = traceQueue
+    .then(async () => {
+      await dockFs(run.projectId).write(path, text)
+    })
+    .catch((err) => showToast(`运行记录写入失败：${err instanceof Error ? err.message : String(err)}`))
+}
+
 function setRun(run: FlowRun | null) {
   const id = store.selectedProjectId
   if (!id) return
   store.runs[id] = run
   persistRuns()
+  if (run) traceRun(run)
 }
 
+function flowKey(projectId: string, flowId: string) {
+  return `${projectId}/${flowId}`
+}
+
+async function writeFlowFile(projectId: string, flow: FlowDef) {
+  const key = flowKey(projectId, flow.id)
+  const text = flowFileText(flow)
+  if (flowTexts.get(key) === text) return
+  try {
+    await dockFs(projectId).write(flowFilePath(flow.id), text)
+    flowTexts.set(key, text)
+  } catch (err) {
+    showToast(`流程文件写入失败：${err instanceof Error ? err.message : String(err)}`)
+  }
+}
+
+function scheduleFlowWrite(projectId: string, flow: FlowDef) {
+  const key = flowKey(projectId, flow.id)
+  const pending = pendingFlowWrites.get(key)
+  if (pending) clearTimeout(pending.timer)
+  const write = () => {
+    pendingFlowWrites.delete(key)
+    return writeFlowFile(projectId, flow)
+  }
+  pendingFlowWrites.set(key, { timer: setTimeout(write, FLOW_WRITE_DELAY_MS), write })
+}
+
+async function flushFlowWrites() {
+  for (const pending of [...pendingFlowWrites.values()]) {
+    clearTimeout(pending.timer)
+    await pending.write()
+  }
+}
+
+async function removeFlowFile(projectId: string, flowId: string) {
+  const key = flowKey(projectId, flowId)
+  const pending = pendingFlowWrites.get(key)
+  if (pending) clearTimeout(pending.timer)
+  pendingFlowWrites.delete(key)
+  flowTexts.delete(key)
+  try {
+    await dockFs(projectId).remove(flowFilePath(flowId))
+  } catch (err) {
+    showToast(`流程文件删除失败：${err instanceof Error ? err.message : String(err)}`)
+  }
+}
+
+async function readRepoFlows(projectId: string) {
+  const fs = dockFs(projectId)
+  const flows: FlowDef[] = []
+  for (const name of await fs.list(FLOWS_DIR)) {
+    if (!name.endsWith('.json')) continue
+    const file = await fs.read(`${FLOWS_DIR}/${name}`)
+    const flow = file ? parseFlowFile(name, file.text) : null
+    if (!flow) {
+      showToast(`流程文件格式不对：${name}`)
+      continue
+    }
+    flowTexts.set(flowKey(projectId, flow.id), flowFileText(flow))
+    flows.push(flow)
+  }
+  return flows
+}
+
+export async function syncProjectFlows(projectId = store.selectedProjectId) {
+  if (!projectId || isRunBusy(store.runs[projectId])) return
+  try {
+    await flushFlowWrites()
+    const repo = await readRepoFlows(projectId)
+    if (!repo.length || isRunBusy(store.runs[projectId])) return
+    const row = ensureBundle(store.projectFlows, projectId)
+    store.projectFlows[projectId] = { ...row, flows: mergeRepoFlows(row.flows, repo) }
+    persistFlows()
+  } catch (err) {
+    showToast(`读取流程文件失败：${err instanceof Error ? err.message : String(err)}`)
+  }
+}
+
+// Binding changes stay local, so running a flow never touches the repository.
 function patchFlow(flow: FlowDef) {
   const id = store.selectedProjectId
   if (!id) return
-  store.projectFlows[id] = replaceFlow(ensureBundle(store.projectFlows, id), flow)
+  const row = ensureBundle(store.projectFlows, id)
+  const before = row.flows.find((item) => item.id === flow.id)
+  store.projectFlows[id] = replaceFlow(row, flow)
   persistFlows()
+  if (!before || flowFileText(before) !== flowFileText(flow)) scheduleFlowWrite(id, flow)
 }
 
 function busyToast() {
@@ -111,11 +215,29 @@ async function drive(flow: FlowDef, result: EngineResult) {
       break
     }
     const gated = expectsVerdict(flow, node.id)
-    const contracted = gated ? { ...node, roleContract: withVerdictTicket(node.roleContract) } : node
-    const outcome = await runChannel(contracted, execute.envelope, {
+    const step = run.steps[run.steps.length - 1]
+    let prepared: PreparedStep | null = null
+    if (run.taskDir && nodeHasContract(node)) {
+      const result = await prepareStep(dockFs(run.projectId), node, run)
+      if (seq !== runSeq) return
+      if ('error' in result) {
+        const failed = afterOutcome(flow, run, { ok: false, text: '', error: result.error })
+        run = failed.run
+        event = failed.event
+        setRun(run)
+        continue
+      }
+      prepared = result
+      if (step) step.inputs = result.inputs
+      setRun(run)
+    }
+    const contract = [node.roleContract, prepared?.block].filter(Boolean).join('\n\n')
+    const contracted = { ...node, roleContract: gated ? withVerdictTicket(contract) : contract }
+    let outcome = await runChannel(contracted, execute.envelope, {
       projectId: run.projectId,
       send: execute.send,
-      verbatim: execute.verbatim,
+      // Verbatim text would drop the input list and the output requirements.
+      verbatim: execute.verbatim && !prepared,
       live: store.live,
       ptyDataAt: store.ptyDataAt,
       cursorApiKey: store.settings.cursorApiKey,
@@ -132,6 +254,12 @@ async function drive(flow: FlowDef, result: EngineResult) {
     if (outcome.cursorAgentId && node.channel.kind === 'cursorSdk') {
       node.channel.agentId = outcome.cursorAgentId
       patchFlow({ ...flow, nodes: flow.nodes.map((item) => (item.id === node.id ? node : item)) })
+    }
+    if (prepared) {
+      const finished = await finishStep(dockFs(run.projectId), node, run, prepared, outcome, gated)
+      if (seq !== runSeq) return
+      outcome = finished.outcome
+      if (step) step.outputs = finished.outputs
     }
     const next = afterOutcome(flow, run, outcome)
     run = next.run
@@ -157,21 +285,29 @@ async function drive(flow: FlowDef, result: EngineResult) {
 }
 
 export async function startSelectedFlow(nodeId?: string) {
-  const flow = currentFlow()
   const projectId = store.selectedProjectId
-  if (!flow || !projectId) {
+  if (!currentFlow() || !projectId) {
     showToast('先选一个项目')
     return
   }
   if (busyToast()) return
-  const bindError = validateFlowPtyBindings(flow, store.live, projectId)
+  await syncProjectFlows(projectId)
+  const flow = currentFlow()
+  if (!flow) return
+  const bindError = validateFlowPtyBindings(flow, store.live, projectId) || validateContract(flow)
   if (bindError) {
     showToast(bindError)
     return
   }
+  const previous = currentRun()
   store.bridgePaneMode = 'run'
   await refreshGit()
   const result = startRun(flow, projectId, flow.draftTask, nodeId)
+  if (flowHasContract(flow)) {
+    // Rerunning from a failed node continues the same task's documents.
+    const resumed = nodeId && previous?.flowId === flow.id ? previous.taskDir : ''
+    result.run.taskDir = resumed || taskDirName(result.run.task, result.run.createdAt, result.run.id)
+  }
   await drive(flow, result)
 }
 
@@ -290,6 +426,7 @@ export function createFlowFromTemplate(templateId: FlowTemplateId) {
   store.bridgeSelectedNodeId = flow.nodes[0]?.id || ''
   store.bridgeSelectedEdgeId = ''
   persistFlows()
+  scheduleFlowWrite(store.selectedProjectId, flow)
   setRun(null)
 }
 
@@ -312,6 +449,7 @@ export function renameFlow(flowId: string, name: string) {
   if (!next) return
   flow.name = next
   persistFlows()
+  scheduleFlowWrite(store.selectedProjectId, flow)
 }
 
 export function deleteFlow(flowId: string) {
@@ -331,6 +469,7 @@ export function deleteFlow(flowId: string) {
     store.bridgeSelectedNodeId = row.flows[0].nodes[0]?.id || ''
   }
   persistFlows()
+  void removeFlowFile(store.selectedProjectId, flowId)
   setRun(null)
 }
 

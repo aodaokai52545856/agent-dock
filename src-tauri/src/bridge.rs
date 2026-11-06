@@ -645,7 +645,8 @@ fn review_target(req: &ReviewRequest) -> Value {
             req.base_branch.as_deref().unwrap_or("main")
         ),
         "custom" => String::new(),
-        _ => "审查范围：工作区未提交的改动，包括已暂存、未暂存和未跟踪的文件。".to_string(),
+        _ => "审查范围：工作区未提交的改动，包括已暂存、未暂存和未跟踪的文件，不包括 .agentDock 目录。"
+            .to_string(),
     };
     let instructions = req
         .custom_instructions

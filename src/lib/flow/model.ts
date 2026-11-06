@@ -4,7 +4,7 @@ import { makeId } from './ids.ts'
 import { roleContract, roleLabel } from './roles.ts'
 import { defaultNodePoint } from './chartLayout.ts'
 import { createDevReviewFlow } from './templates.ts'
-import { ARTIFACT_CHAR_CAP, FLOW_END, FLOW_START, type FlowDef, type FlowEdge, type FlowNode, type FlowRun, type ProjectFlows } from './types.ts'
+import { ARTIFACT_CHAR_CAP, FLOW_END, FLOW_START, type FlowDef, type FlowEdge, type FlowNode, type FlowRun, type NodeInput, type NodeOutput, type ProjectFlows } from './types.ts'
 
 export const FLOW_STORAGE_KEY = 'ad-bridge-flows'
 export const RUN_STORAGE_KEY = 'ad-bridge-runs'
@@ -110,7 +110,7 @@ function repairPassFailEdges(nodes: FlowNode[], edges: FlowEdge[]): FlowEdge[] {
   return next
 }
 
-function normalizeFlow(row: FlowDef): FlowDef | null {
+export function normalizeFlow(row: FlowDef): FlowDef | null {
   if (!row || !row.id || !Array.isArray(row.nodes) || !Array.isArray(row.edges)) return null
   return {
     id: row.id,
@@ -143,6 +143,28 @@ function normalizeFlow(row: FlowDef): FlowDef | null {
   }
 }
 
+function normalizeInputs(rows: NodeInput[] | undefined): NodeInput[] | undefined {
+  if (!Array.isArray(rows)) return undefined
+  const inputs = rows.filter((row) => typeof row?.ref === 'string' && row.ref.trim()).map((row) => ({
+    ref: row.ref.trim(),
+    required: row.required === true ? true : undefined,
+    when: row.when === 'reworked' ? 'reworked' as const : undefined,
+    read: row.read === 'index-first' ? 'index-first' as const : undefined
+  }))
+  return inputs.length ? inputs : undefined
+}
+
+function normalizeOutputs(rows: NodeOutput[] | undefined): NodeOutput[] | undefined {
+  if (!Array.isArray(rows)) return undefined
+  const outputs = rows.filter((row) => typeof row?.path === 'string' && row.path.trim()).map((row) => ({
+    path: row.path.trim(),
+    capture: row.capture === 'file' || row.capture === 'reply' ? row.capture : undefined,
+    template: typeof row.template === 'string' && row.template.trim() ? row.template.trim() : undefined,
+    sections: Array.isArray(row.sections) ? row.sections.filter((item) => typeof item === 'string' && item.trim()) : undefined
+  }))
+  return outputs.length ? outputs : undefined
+}
+
 function normalizeNode(node: FlowNode): FlowNode {
   const channel = node.channel
   return {
@@ -171,7 +193,9 @@ function normalizeNode(node: FlowNode): FlowNode {
           }
         : channel?.kind === 'cursorSdk'
           ? { kind: 'cursorSdk', agentId: channel.agentId || '' }
-          : { kind: 'human' }
+          : { kind: 'human' },
+    inputs: normalizeInputs(node.inputs),
+    outputs: normalizeOutputs(node.outputs)
   }
 }
 

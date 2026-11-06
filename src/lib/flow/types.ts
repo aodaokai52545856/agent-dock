@@ -45,12 +45,28 @@ export type EdgeMode = 'auto' | 'manual'
 export type EdgeTransform = 'roleWrap' | 'verbatim'
 export type EdgeGate = 'none' | 'passFail' | 'loop'
 
+export interface NodeInput {
+  ref: string
+  required?: boolean
+  when?: 'reworked'
+  read?: 'index-first'
+}
+
+export interface NodeOutput {
+  path: string
+  capture?: 'file' | 'reply'
+  template?: string
+  sections?: string[]
+}
+
 export interface FlowNode {
   id: string
   title: string
   role: RoleId
   roleContract: string
   channel: ChannelBinding
+  inputs?: NodeInput[]
+  outputs?: NodeOutput[]
   x?: number
   y?: number
 }
@@ -110,6 +126,11 @@ export interface Envelope {
 
 export type TaskStatus = 'submitted' | 'working' | 'input-required' | 'completed' | 'failed' | 'canceled'
 
+export interface StepFile {
+  ref: string
+  sha256: string | null
+}
+
 export interface RunStep {
   id: string
   nodeId: string
@@ -118,6 +139,8 @@ export interface RunStep {
   endedAt?: number
   error?: string
   envelope?: Envelope
+  inputs?: StepFile[]
+  outputs?: StepFile[]
 }
 
 export type RunStatus = 'idle' | 'running' | 'waiting' | 'failed' | 'completed' | 'canceled'
@@ -139,6 +162,7 @@ export interface FlowRun {
   cursorAgentId: string
   git: GitSnapshot | null
   createdAt: number
+  taskDir?: string
 }
 
 export interface ProjectFlows {
@@ -153,6 +177,7 @@ export type AdapterOutcome = {
   verdict?: ReviewVerdict
   cursorAgentId?: string
   error?: string
+  unconfirmed?: boolean
 }
 
 export type EngineEvent =
