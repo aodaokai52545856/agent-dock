@@ -10,7 +10,7 @@ export const CHANNEL_LABEL: Record<ChannelKind, string> = {
   human: '人工'
 }
 
-export const AUTO_PTY_TOOLS: ToolId[] = ['grokbuild', 'kimi']
+export const AUTO_PTY_TOOLS: ToolId[] = ['grokbuild', 'kimi', 'claude']
 
 export function channelKindLabel(kind: ChannelKind) {
   return CHANNEL_LABEL[kind]

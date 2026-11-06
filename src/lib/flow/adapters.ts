@@ -6,7 +6,7 @@ import { combineVerdicts } from '../reviewVerdict.ts'
 import type { LivePtyInfo, SessionTurn, ToolId } from '../types.ts'
 import { channelSupportsAuto, preparePtyRun, ptyWaitTimeoutError } from './channels.ts'
 import { codexInstructions, promptFromEnvelope, renderEnvelope } from './envelope.ts'
-import { detectNewAssistantTurn, turnIds } from './ptyWait.ts'
+import { detectNewAssistantTurn, extendDeadline, turnIds } from './ptyWait.ts'
 import { PTY_WAIT_MS_DEFAULT, type AdapterOutcome, type Envelope, type FlowNode } from './types.ts'
 
 export type AdapterContext = {
@@ -134,7 +134,7 @@ async function runPty(node: FlowNode, envelope: Envelope, ctx: AdapterContext): 
   if (!channelSupportsAuto(node.channel) && ctx.send) {
     return { ok: true, text: '已发送。该通道还不能自动读回合，请在窗口里确认。', unconfirmed: true }
   }
-  const deadline = now() + PTY_WAIT_MS_DEFAULT
+  let deadline = now() + PTY_WAIT_MS_DEFAULT
   const wait = ctx.sleep ?? sleep
   while (now() < deadline) {
     if (!ctx.isCurrent()) return { ok: false, text: '', error: '已取消' }
@@ -149,6 +149,7 @@ async function runPty(node: FlowNode, envelope: Envelope, ctx: AdapterContext): 
     } catch {
       /* keep polling */
     }
+    deadline = extendDeadline(deadline, ctx.ptyDataAt[live.ptyId], PTY_WAIT_MS_DEFAULT)
   }
   return { ok: false, text: '', error: ptyWaitTimeoutError(live) }
 }

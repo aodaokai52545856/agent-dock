@@ -153,6 +153,7 @@ export interface SessionTurn {
   role: 'user' | 'assistant' | string
   excerpt: string
   text: string
+  working?: boolean
 }
 
 export interface FocusedSession {

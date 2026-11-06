@@ -50,6 +50,9 @@ pub struct SessionTurn {
     pub role: String,
     pub excerpt: String,
     pub text: String,
+    // The assistant is mid-turn: this text is followed by tool calls.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub working: bool,
 }
 
 pub fn list_session_docs(
@@ -120,7 +123,7 @@ fn list_session_turns_for(
         return Err("请先打开会话".into());
     }
     match tool_id {
-        ToolId::Omp => crate::tools::omp::find_session_file(&project.path, session_id).map(|p| { crate::tools::omp::branch(&crate::tools::omp::entries(&p)).into_iter().filter_map(|v| { let m=&v["message"]; let role=m["role"].as_str()?; if !matches!(role,"user"|"assistant") { return None; } let text=crate::tools::omp::text(&m["content"]); if text.is_empty(){return None;} Some(SessionTurn{id:v["id"].as_str().unwrap_or("").into(),role:role.into(),excerpt:tools::truncate_title(&text,120),text}) }).collect() }).ok_or("OMP 会话文件不存在".into()),
+        ToolId::Omp => crate::tools::omp::find_session_file(&project.path, session_id).map(|p| { crate::tools::omp::branch(&crate::tools::omp::entries(&p)).into_iter().filter_map(|v| { let m=&v["message"]; let role=m["role"].as_str()?; if !matches!(role,"user"|"assistant") { return None; } let text=crate::tools::omp::text(&m["content"]); if text.is_empty(){return None;} Some(SessionTurn{id:v["id"].as_str().unwrap_or("").into(),role:role.into(),excerpt:tools::truncate_title(&text,120),text,working:false}) }).collect() }).ok_or("OMP 会话文件不存在".into()),
         ToolId::Opencode | ToolId::Pi | ToolId::Dsh => Ok(Vec::new()),
         ToolId::Claude => {
             let path = tools::find_claude_session_file(&project.path, session_id)
@@ -660,6 +663,18 @@ fn take_claude_content(
     }
 }
 
+// Flows compare turn ids across polls, so they must survive the window sliding
+// and the newest turns must always be in it.
+fn push_claude_turn(turns: &mut Vec<SessionTurn>, record: &Value, role: &str, text: String) {
+    if turns.len() >= MAX_TURNS {
+        turns.remove(0);
+    }
+    push_turn(turns, role, text);
+    if let (Some(turn), Some(uuid)) = (turns.last_mut(), record.get("uuid").and_then(|v| v.as_str())) {
+        turn.id = uuid.to_string();
+    }
+}
+
 pub(crate) fn parse_claude_turns(text: &str) -> Vec<SessionTurn> {
     let mut turns = Vec::new();
     for line in text.lines() {
@@ -676,16 +691,17 @@ pub(crate) fn parse_claude_turns(text: &str) -> Vec<SessionTurn> {
         if kind == "user" {
             if let Some(body) = claude_plain_text(message.get("content").unwrap_or(&Value::Null)) {
                 if let Some(text) = clean_user_text(&body) {
-                    push_turn(&mut turns, "user", text);
+                    push_claude_turn(&mut turns, &value, "user", text);
                 }
             }
         } else if kind == "assistant" {
             if let Some(body) = claude_plain_text(message.get("content").unwrap_or(&Value::Null)) {
-                push_turn(&mut turns, "assistant", body);
+                push_claude_turn(&mut turns, &value, "assistant", body);
             }
-        }
-        if turns.len() >= MAX_TURNS {
-            break;
+            // Records without text still say whether the turn went on.
+            if let Some(last) = turns.last_mut().filter(|turn| turn.role == "assistant") {
+                last.working = message.get("stop_reason").and_then(|v| v.as_str()) == Some("tool_use");
+            }
         }
     }
     turns
@@ -867,6 +883,7 @@ fn push_turn(turns: &mut Vec<SessionTurn>, role: &str, text: String) {
         role: role.to_string(),
         excerpt,
         text,
+        working: false,
     });
 }
 
@@ -961,6 +978,48 @@ mod tests {
             proxy_url: String::new(),
             created_at: String::new(),
         }
+    }
+
+    #[test]
+    fn claude_text_before_a_tool_call_is_not_the_end_of_the_turn() {
+        use serde_json::json;
+
+        let assistant = |content: Value, stop: &str| {
+            json!({ "type": "assistant", "message": { "content": content, "stop_reason": stop } }).to_string()
+        };
+        let text = |body: &str| json!([{ "type": "text", "text": body }]);
+        let tool = json!([{ "type": "tool_use", "name": "Write", "input": {} }]);
+        let opening = assistant(text("我先写文件"), "tool_use");
+        let call = assistant(tool, "tool_use");
+        let working = parse_claude_turns(&format!("{opening}\n{call}"));
+        assert_eq!(working.len(), 1);
+        assert!(working[0].working);
+
+        let done = parse_claude_turns(&format!("{opening}\n{call}\n{}", assistant(text("写好了"), "end_turn")));
+        assert_eq!(done.iter().map(|turn| turn.working).collect::<Vec<_>>(), vec![true, false]);
+
+        let silent = parse_claude_turns(&format!("{opening}\n{}", assistant(json!([]), "end_turn")));
+        assert!(!silent[0].working);
+    }
+
+    #[test]
+    fn claude_turn_ids_stay_stable_and_the_newest_turns_are_kept() {
+        use serde_json::json;
+
+        let lines: Vec<String> = (0..MAX_TURNS + 5)
+            .map(|i| {
+                json!({
+                    "type": "assistant",
+                    "uuid": format!("u-{i}"),
+                    "message": { "content": [{ "type": "text", "text": format!("第 {i} 条") }], "stop_reason": "end_turn" }
+                })
+                .to_string()
+            })
+            .collect();
+        let turns = parse_claude_turns(&lines.join("\n"));
+        assert_eq!(turns.len(), MAX_TURNS);
+        assert_eq!(turns[0].id, "u-5");
+        assert_eq!(turns.last().unwrap().id, format!("u-{}", MAX_TURNS + 4));
     }
 
     #[test]
