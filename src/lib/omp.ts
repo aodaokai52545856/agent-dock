@@ -137,16 +137,22 @@ export function stopOmpService(){
 }
 
 /** Used by automatic orchestration: correlate this prompt, then wait for quiescence. */
+// Only silence counts: long turns report progress and a dialog is waiting on a person.
+export function ompDeadline(deadline:number,snapshot:Pick<OmpSnapshot,'activity'|'dialogs'>,now:number,patience:number){
+  const progress=(snapshot.activity?.lastProgressAt??0)+patience
+  return Math.max(deadline,progress,snapshot.dialogs.length?now+patience:0)
+}
 export async function runOmpPrompt(runtimeId:string,message:string,isCurrent:()=>boolean,timeoutMs=8*60*1000,onInputRequired?:(required:boolean)=>void){
   if(!(await ompSnapshot(runtimeId)).settled) throw new Error('OMP 会话仍在运行，请完成或停止后重试')
   const id=`dock-${crypto.randomUUID()}`
   const ack=await ompCommand(runtimeId,{type:'prompt',id,message})
   if(ack.data?.agentInvoked===false) return ''
-  const deadline=Date.now()+timeoutMs
+  let deadline=Date.now()+timeoutMs
   while(Date.now()<deadline){
     if(!isCurrent()){await ompCommand(runtimeId,{type:'abort'});throw new Error('已取消')}
     const s=await ompSnapshot(runtimeId)
     onInputRequired?.(s.dialogs.length>0)
+    deadline=ompDeadline(deadline,s,Date.now(),timeoutMs)
     if(!s.info.alive) throw new Error(s.error||'OMP 进程已退出')
     const result=s.promptResults[id]
     if(result?.status==='error') throw new Error(result.error?.message||'OMP 执行失败')

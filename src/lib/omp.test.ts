@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { applyOmpEvent, forgetOmpSession, ompSnapshot, ompState, messageText, type OmpSnapshot } from './omp.ts'
+import { applyOmpEvent, forgetOmpSession, ompDeadline, ompSnapshot, ompState, messageText, type OmpSnapshot } from './omp.ts'
 import { preferredOmpMode,rememberOmpMode } from './ompMode.ts'
 import { parseOmpLaunchMode } from './types.ts'
 
@@ -66,3 +66,9 @@ await reopened
 forgetOmpSession('omp-retired')
 assert.equal(ompState.sessions['omp-retired'], undefined)
 console.log('ok OMP coalesces concurrent snapshots and cannot resurrect a closed session from an in-flight response')
+
+assert.equal(ompDeadline(100,{activity:{phase:'tool',lastProgressAt:90},dialogs:[]},95,50),140)
+assert.equal(ompDeadline(100,{activity:{phase:'tool',lastProgressAt:10},dialogs:[]},95,50),100)
+assert.equal(ompDeadline(100,{dialogs:[]},95,50),100)
+assert.equal(ompDeadline(100,{dialogs:[{}]},95,50),145)
+console.log('ok OMP keeps waiting while there is progress or a dialog, and stops on silence')
