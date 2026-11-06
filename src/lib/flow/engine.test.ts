@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { afterOutcome, applyManualVerdict, cancelRun, resumeManual, startRun } from './engine.ts'
+import { afterOutcome, applyManualVerdict, awaitHuman, cancelRun, expectsVerdict, isAwaitingHuman, resumeManual, startRun } from './engine.ts'
 import { ROLE_CONTRACTS } from './roles.ts'
 import { FLOW_END, FLOW_START, type FlowDef } from './types.ts'
 
@@ -348,4 +348,89 @@ test('cancelRun stops a working step', () => {
   assert.equal(stopped.status, 'canceled')
   assert.equal(stopped.steps[0]?.status, 'canceled')
   assert.match(stopped.lastError, /停止/)
+})
+
+function humanGate(gate: 'none' | 'passFail'): FlowDef {
+  const base = chain('auto')
+  const [dev] = base.nodes
+  const human = { id: 'n-h', title: '审批', role: 'pm', roleContract: '', channel: { kind: 'human' as const } }
+  const after = { ...base.nodes[1], id: 'n-after' }
+  return {
+    ...base,
+    nodes: [dev, human, after],
+    edges: [
+      { id: 'e1', from: dev.id, to: human.id, mode: 'auto', transform: 'roleWrap', gate: 'none' },
+      { id: 'e2', from: human.id, to: after.id, mode: 'auto', transform: 'roleWrap', gate, backTo: gate === 'passFail' ? dev.id : undefined },
+      { id: 'e3', from: after.id, to: FLOW_END, mode: 'auto', transform: 'roleWrap', gate: 'none' }
+    ]
+  }
+}
+
+function atHuman(flow: FlowDef) {
+  const started = startRun(flow, 'proj', '修闸门')
+  const reached = afterOutcome(flow, started.run, { ok: true, text: '开发完成', verdict: 'pass' })
+  assert.equal(reached.event.type, 'execute')
+  return awaitHuman(reached.run, 'n-h')
+}
+
+test('human node pauses instead of passing through', () => {
+  const flow = humanGate('none')
+  const paused = atHuman(flow)
+  assert.equal(paused.event.type, 'waitHuman')
+  assert.equal(paused.run.status, 'waiting')
+  assert.equal(paused.run.currentNodeId, 'n-h')
+  assert.equal(paused.run.steps.at(-1)?.status, 'input-required')
+  assert.equal(isAwaitingHuman(flow, paused.run), true)
+})
+
+test('human approval advances and keeps the upstream content', () => {
+  const flow = humanGate('none')
+  const marked = applyManualVerdict(flow, atHuman(flow).run, 'pass')
+  assert.equal(marked.event.type, 'execute')
+  assert.equal(marked.run.currentNodeId, 'n-after')
+  assert.match(marked.run.lastEnvelope?.done || '', /开发完成/)
+  assert.equal(marked.run.steps.find((step) => step.nodeId === 'n-h')?.status, 'completed')
+})
+
+test('human rejection on an ungated edge stops the run', () => {
+  const flow = humanGate('none')
+  const marked = applyManualVerdict(flow, atHuman(flow).run, 'fail')
+  assert.equal(marked.event.type, 'fail')
+  assert.equal(marked.run.status, 'failed')
+  assert.match(marked.run.lastError, /人工审批未通过/)
+  assert.equal(marked.run.steps.at(-1)?.status, 'failed')
+})
+
+test('human rejection on a gated edge returns to backTo', () => {
+  const flow = humanGate('passFail')
+  const marked = applyManualVerdict(flow, atHuman(flow).run, 'fail')
+  assert.equal(marked.event.type, 'execute')
+  assert.equal(marked.run.currentNodeId, 'n-a')
+})
+
+test('a manual handoff is not mistaken for a human approval', () => {
+  const flow = humanGate('none')
+  const paused = atHuman(flow).run
+  assert.equal(isAwaitingHuman(flow, { ...paused, pendingHandoff: paused.lastEnvelope }), false)
+})
+
+test('any node with a passFail exit yields a verdict', () => {
+  const flow: FlowDef = {
+    ...chain('auto'),
+    nodes: [{ ...chain('auto').nodes[0], role: 'role-custom', channel: { kind: 'pty', toolId: 'kimi', sessionId: 's', ptyId: 'p' } }],
+    edges: [{ id: 'e-end', from: 'n-a', to: FLOW_END, mode: 'auto', transform: 'roleWrap', gate: 'passFail' }]
+  }
+  assert.equal(expectsVerdict(flow, 'n-a'), true)
+  const started = startRun(flow, 'proj', '测试')
+  const next = afterOutcome(flow, started.run, { ok: true, text: '全部用例通过\nVERDICT: PASS' })
+  assert.equal(next.event.type, 'complete')
+})
+
+test('an ungated node never picks a verdict out of its prose', () => {
+  const flow = chain('auto')
+  const custom = { ...flow, nodes: flow.nodes.map((node) => ({ ...node, role: 'developer' })) }
+  assert.equal(expectsVerdict(custom, 'n-a'), false)
+  const started = startRun(custom, 'proj', '修闸门')
+  const next = afterOutcome(custom, started.run, { ok: true, text: '1 test FAILED, fixed it' })
+  assert.equal(next.run.lastEnvelope?.verdict, undefined)
 })

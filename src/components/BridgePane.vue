@@ -21,6 +21,7 @@ import {
   stopSelectedFlow
 } from '../lib/flow/runtime.ts'
 import { describeChannel } from '../lib/flow/channels.ts'
+import { isAwaitingHuman } from '../lib/flow/engine.ts'
 import { flowInspectorKind, flowInspectorTitle } from '../lib/flow/inspector.ts'
 import { allRoles, roleLabel } from '../lib/flow/roles.ts'
 import { FLOW_END, FLOW_START, type RunStep } from '../lib/flow/types.ts'
@@ -37,6 +38,7 @@ import { GATE_LABEL } from '../lib/types'
 
 const busy = computed(() => currentRun.value?.status === 'running')
 const waiting = computed(() => currentRun.value?.status === 'waiting')
+const awaitingHuman = computed(() => isAwaitingHuman(currentFlow.value, currentRun.value))
 const nextLocked = computed(() => currentPipeline.value?.gate !== 'passed')
 const editing = computed(() => store.bridgePaneMode === 'edit')
 const selectedNode = computed(
@@ -66,6 +68,7 @@ const stageHint = computed(() => {
   }
   const run = currentRun.value
   if (run?.status === 'running') return '正在执行当前节点，图上高亮的是正在跑的角色。'
+  if (awaitingHuman.value) return '等待人工审批：看完后标记通过或未通过。'
   if (run?.status === 'waiting') return '停在人工干预：改信封后再写入下一窗口。'
   if (run?.status === 'completed') return '本片已走完，可进入下一片。'
   if (run?.status === 'failed') return '未通过或失败，可标记结论或回到编排改图。'
@@ -83,7 +86,7 @@ function stepStatus(step: RunStep) {
   if (step.status === 'completed') return '完成'
   if (step.status === 'failed') return '失败'
   if (step.status === 'canceled') return '已停止'
-  if (step.status === 'input-required') return '待桥接'
+  if (step.status === 'input-required') return awaitingHuman.value ? '待审批' : '待桥接'
   return step.status
 }
 

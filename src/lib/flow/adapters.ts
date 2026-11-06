@@ -5,7 +5,7 @@ import { wrapBracketedPaste } from '../sessionCite.ts'
 import { combineVerdicts } from '../reviewVerdict.ts'
 import type { LivePtyInfo, SessionTurn, ToolId } from '../types.ts'
 import { channelSupportsAuto, preparePtyRun, ptyWaitTimeoutError } from './channels.ts'
-import { promptFromEnvelope, renderEnvelope } from './envelope.ts'
+import { codexInstructions, promptFromEnvelope, renderEnvelope } from './envelope.ts'
 import { detectNewAssistantTurn, turnIds } from './ptyWait.ts'
 import { PTY_WAIT_MS_DEFAULT, type AdapterOutcome, type Envelope, type FlowNode } from './types.ts'
 
@@ -26,10 +26,7 @@ export type AdapterContext = {
 const sleep = (ms: number) => new Promise<void>((resolve) => window.setTimeout(resolve, ms))
 
 export async function runChannel(node: FlowNode, envelope: Envelope, ctx: AdapterContext): Promise<AdapterOutcome> {
-  if (node.channel.kind === 'human') {
-    const text = envelope.done.trim() || envelope.task.trim() || '已确认'
-    return { ok: true, text }
-  }
+  if (node.channel.kind === 'human') return { ok: false, text: '', error: '人工节点由审批推进，不走通道' }
   if (node.channel.kind === 'cursorSdk') return runCursor(node, envelope, ctx)
   if (node.channel.kind === 'codexApp') return runCodex(node, envelope, ctx)
   if (node.channel.kind === 'ompRpc' || node.channel.kind === 'pty' && node.channel.toolId === 'omp') {
@@ -72,7 +69,7 @@ async function runCursor(node: FlowNode, envelope: Envelope, ctx: AdapterContext
 
 async function runCodex(node: FlowNode, envelope: Envelope, ctx: AdapterContext): Promise<AdapterOutcome> {
   if (node.channel.kind !== 'codexApp') return { ok: false, text: '', error: '不是 Codex 节点' }
-  const extra = [node.channel.customInstructions, envelope.task, envelope.done].filter((item) => item?.trim()).join('\n\n')
+  const extra = codexInstructions(node, envelope)
   if (!api.isTauri) {
     await (ctx.sleep ?? sleep)(400)
     const fail = extra.includes('故意失败')

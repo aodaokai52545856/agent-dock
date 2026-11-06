@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { emptyEnvelope, promptFromEnvelope, renderEnvelope, transformEnvelope } from './envelope.ts'
+import { codexInstructions, emptyEnvelope, promptFromEnvelope, renderEnvelope, transformEnvelope, withVerdictTicket } from './envelope.ts'
 import { ROLE_CONTRACTS } from './roles.ts'
 import { FLOW_END, type FlowDef, type FlowNode } from './types.ts'
 
@@ -117,4 +117,28 @@ test('developer prompt includes the slice task and prior notes', () => {
 
 test('FLOW_END is the terminal token', () => {
   assert.equal(FLOW_END, '__end__')
+})
+
+test('codex instructions carry the contract, task and upstream notes', () => {
+  const env = emptyEnvelope({ runId: 'r1', toNode: 'n-rev', toRole: 'reviewer', task: '修闸门', done: '已改 engine' })
+  const custom: FlowNode = {
+    ...reviewer,
+    channel: { ...(reviewer.channel as Extract<FlowNode['channel'], { kind: 'codexApp' }>), customInstructions: '重点看回退' }
+  }
+  const text = codexInstructions(custom, env)
+  assert.match(text, /VERDICT: PASS/)
+  assert.match(text, /重点看回退/)
+  assert.match(text, /本轮任务：修闸门/)
+  assert.match(text, /上一节点做了：已改 engine/)
+})
+
+test('codex instructions skip upstream notes that only repeat the task', () => {
+  const env = emptyEnvelope({ runId: 'r1', toNode: 'n-rev', toRole: 'reviewer', task: '修闸门', done: '修闸门' })
+  assert.doesNotMatch(codexInstructions(reviewer, env), /上一节点做了/)
+})
+
+test('verdict ticket is added once', () => {
+  assert.match(withVerdictTicket('你是测试工程师。'), /你是测试工程师。\n.*VERDICT: PASS/)
+  assert.equal(withVerdictTicket(ROLE_CONTRACTS.reviewer), ROLE_CONTRACTS.reviewer)
+  assert.match(withVerdictTicket(''), /^结束时/)
 })

@@ -4,8 +4,8 @@ import { jumpToLive, rememberOpened, showToast, store, watchPendingSession } fro
 import { runChannel } from './adapters.ts'
 import { defaultChannel, firstCodexNode, validateFlowPtyBindings } from './channels.ts'
 import { connectForward, deleteEdge, placeNode, placeTerminal, withNodePoints } from './chartLayout.ts'
-import { afterOutcome, applyManualVerdict, cancelRun, isRunBusy, resumeManual, startRun } from './engine.ts'
-import { renderEnvelope } from './envelope.ts'
+import { afterOutcome, applyManualVerdict, awaitHuman, cancelRun, expectsVerdict, isRunBusy, resumeManual, startRun } from './engine.ts'
+import { renderEnvelope, withVerdictTicket } from './envelope.ts'
 import {
   appendNode,
   createCustomNode,
@@ -103,7 +103,16 @@ async function drive(flow: FlowDef, result: EngineResult) {
       node.channel.agentId = run.cursorAgentId
       patchFlow({ ...flow })
     }
-    const outcome = await runChannel(node, execute.envelope, {
+    if (node.channel.kind === 'human') {
+      const paused = awaitHuman(run, node.id)
+      run = paused.run
+      event = paused.event
+      setRun(run)
+      break
+    }
+    const gated = expectsVerdict(flow, node.id)
+    const contracted = gated ? { ...node, roleContract: withVerdictTicket(node.roleContract) } : node
+    const outcome = await runChannel(contracted, execute.envelope, {
       projectId: run.projectId,
       send: execute.send,
       verbatim: execute.verbatim,
@@ -132,6 +141,10 @@ async function drive(flow: FlowDef, result: EngineResult) {
 
   if (event.type === 'waitManual') {
     showToast('等待手动桥接：可改信封后再写入下一窗口')
+    return
+  }
+  if (event.type === 'waitHuman') {
+    showToast('等待人工审批：看完后标记通过或未通过')
     return
   }
   if (event.type === 'complete') {

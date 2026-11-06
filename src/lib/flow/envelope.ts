@@ -12,6 +12,8 @@ import {
   type RoleId
 } from './types.ts'
 
+const VERDICT_TICKET = '结束时单独一行写 VERDICT: PASS 或 VERDICT: FAIL。'
+
 function cap(text: string) {
   if (text.length <= ARTIFACT_CHAR_CAP) return text
   return text.slice(0, ARTIFACT_CHAR_CAP)
@@ -47,9 +49,9 @@ export function initialEnvelope(run: FlowRun, first: FlowNode): Envelope {
   })
 }
 
-export function envelopeFromOutcome(run: FlowRun, node: FlowNode, outcome: AdapterOutcome): Envelope {
+export function envelopeFromOutcome(run: FlowRun, node: FlowNode, outcome: AdapterOutcome, gated = false): Envelope {
   const text = cap(outcome.text || '')
-  const verdict = outcome.verdict ?? (node.role === 'reviewer' ? parseReviewVerdict(text) : undefined)
+  const verdict = outcome.verdict ?? (gated || node.role === 'reviewer' ? parseReviewVerdict(text) : undefined)
   return emptyEnvelope({
     runId: run.id,
     causationId: run.lastEnvelope?.id || '',
@@ -114,6 +116,23 @@ export function renderEnvelope(envelope: Envelope, opts?: { transform?: FlowEdge
     lines.push('---', body)
   }
   return lines.join('\n')
+}
+
+export function withVerdictTicket(contract: string) {
+  if (/VERDICT/.test(contract)) return contract
+  return [contract.trim(), VERDICT_TICKET].filter(Boolean).join('\n')
+}
+
+export function codexInstructions(node: FlowNode, envelope: Envelope) {
+  const custom = node.channel.kind === 'codexApp' ? node.channel.customInstructions : ''
+  const task = envelope.task.trim()
+  const done = envelope.done.trim()
+  return [
+    node.roleContract,
+    custom,
+    task ? `本轮任务：${task}` : '',
+    done && done !== task ? `上一节点做了：${done}` : ''
+  ].filter((item) => item?.trim()).join('\n\n')
 }
 
 export function promptFromEnvelope(node: FlowNode, envelope: Envelope) {

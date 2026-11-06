@@ -158,6 +158,7 @@ export type AdapterOutcome = {
 export type EngineEvent =
   | { type: 'execute'; nodeId: string; envelope: Envelope; send: boolean; verbatim?: boolean }
   | { type: 'waitManual'; envelope: Envelope }
+  | { type: 'waitHuman'; nodeId: string }
   | { type: 'complete' }
   | { type: 'fail'; error: string }
 

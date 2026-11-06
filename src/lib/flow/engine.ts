@@ -26,6 +26,10 @@ function findNode(flow: FlowDef, id: string) {
   return flow.nodes.find((item) => item.id === id) ?? null
 }
 
+export function expectsVerdict(flow: FlowDef, nodeId: string) {
+  return flow.edges.some((edge) => edge.from === nodeId && edge.gate === 'passFail')
+}
+
 export function entryNode(flow: FlowDef, nodeId?: string) {
   if (nodeId) return findNode(flow, nodeId)
   const fromStart = flow.edges.find((edge) => edge.from === FLOW_START)
@@ -198,7 +202,7 @@ export function afterOutcome(flow: FlowDef, run: FlowRun, outcome: AdapterOutcom
     return fail(next, outcome.error || '节点失败')
   }
 
-  const envelope = envelopeFromOutcome(next, node, outcome)
+  const envelope = envelopeFromOutcome(next, node, outcome, expectsVerdict(flow, node.id))
   next.lastEnvelope = envelope
   next.lastError = ''
   if (step) {
@@ -227,8 +231,33 @@ export function resumeManual(flow: FlowDef, run: FlowRun, envelope: Envelope, se
   return { run: next, event: { type: 'execute', nodeId: envelope.toNode, envelope, send, verbatim: true } }
 }
 
+export function awaitHuman(run: FlowRun, nodeId: string): EngineResult {
+  const next = cloneRun(run)
+  next.status = 'waiting'
+  const step = next.steps[next.steps.length - 1]
+  if (step) step.status = 'input-required'
+  return { run: next, event: { type: 'waitHuman', nodeId } }
+}
+
+export function isAwaitingHuman(flow: FlowDef | null | undefined, run: FlowRun | null | undefined) {
+  if (!flow || !run || run.status !== 'waiting' || run.pendingHandoff) return false
+  return findNode(flow, run.currentNodeId)?.channel.kind === 'human'
+}
+
+function decideHuman(flow: FlowDef, run: FlowRun, verdict: 'pass' | 'fail'): EngineResult {
+  if (verdict === 'fail' && !expectsVerdict(flow, run.currentNodeId)) {
+    const step = run.steps[run.steps.length - 1]
+    if (step) step.status = 'working'
+    return fail(run, '人工审批未通过')
+  }
+  const envelope = run.lastEnvelope
+  const text = envelope?.done.trim() || envelope?.task.trim() || run.task || '已确认'
+  return afterOutcome(flow, run, { ok: true, text, verdict })
+}
+
 export function applyManualVerdict(flow: FlowDef, run: FlowRun, verdict: 'pass' | 'fail'): EngineResult {
   const next = cloneRun(run)
+  if (isAwaitingHuman(flow, next)) return decideHuman(flow, next, verdict)
   if (!next.lastEnvelope) return fail(next, '还没有可标记的结论')
   next.lastEnvelope = { ...next.lastEnvelope, verdict }
   const step = next.steps[next.steps.length - 1]
