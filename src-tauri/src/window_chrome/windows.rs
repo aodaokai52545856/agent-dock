@@ -1,5 +1,33 @@
 use tauri::WebviewWindow;
 
+pub fn attach_webview_position_sync(win: &WebviewWindow) {
+    let window = win.as_ref().window();
+    let handle = window.clone();
+    window.on_window_event(move |event| {
+        if matches!(
+            event,
+            tauri::WindowEvent::Moved(_)
+                | tauri::WindowEvent::Resized(_)
+                | tauri::WindowEvent::ScaleFactorChanged { .. }
+        ) {
+            notify_webview_position(&handle);
+        }
+    });
+    notify_webview_position(&window);
+}
+
+fn notify_webview_position(window: &tauri::Window) {
+    // Tauri's `unstable` multi-webview mode builds even the main view as a
+    // child. Wry only forwards parent moves for non-child views, so WebView2
+    // otherwise positions the first native <select> popup using stale screen
+    // coordinates. Notify every child, including views added after startup.
+    for webview in window.webviews() {
+        let _ = webview.with_webview(|platform| unsafe {
+            let _ = platform.controller().NotifyParentWindowPositionChanged();
+        });
+    }
+}
+
 pub fn apply(win: &WebviewWindow) {
     let Ok(hwnd) = win.hwnd() else {
         return;
