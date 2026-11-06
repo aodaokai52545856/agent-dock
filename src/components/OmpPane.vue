@@ -62,6 +62,11 @@ async function load(){
 watch(()=>props.runtimeId,()=>{images.value=[];selectedAgent.value='';agentView.value='';tab.value='chat';void load()},{immediate:true})
 watch(()=>dialog.value?.id,()=>{dialogText.value='';answers.value={};custom.value={}})
 watch(()=>[messages.value,snap.value?.tools],async()=>{const el=scroll.value;if(!el)return;const atBottom=el.scrollHeight-el.scrollTop-el.clientHeight<180;await nextTick();if(atBottom)el.scrollTop=el.scrollHeight},{deep:true})
+async function scrollToBottom(){
+  tab.value='chat'
+  await nextTick()
+  if(scroll.value)scroll.value.scrollTop=scroll.value.scrollHeight
+}
 async function send(){
   if(pending.value || snap.value?.setupRequired || (!draft.value.trim()&&!images.value.length))return
   const message=draft.value,attachments=[...images.value];pending.value=true
@@ -98,6 +103,7 @@ async function cliLogin(){
 }
 function toggleAnswer(q:any,label:string){const old=answers.value[q.id]||[];answers.value[q.id]=q.multi?(old.includes(label)?old.filter(x=>x!==label):[...old,label]):[label]}
 async function submitAsk(){await respond({answers:(dialog.value?.questions||[]).map((q:any)=>({id:q.id,selectedOptions:answers.value[q.id]||[],customInput:custom.value[q.id]||''}))})}
+defineExpose({scrollToBottom})
 </script>
 
 <template>

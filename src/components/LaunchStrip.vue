@@ -6,6 +6,7 @@ import { toolLabel } from '../lib/types'
 const emit = defineEmits<{
   close: []
   redraw: []
+  scrollBottom: []
 }>()
 
 const props = defineProps<{
@@ -40,6 +41,14 @@ const live = computed(() => Boolean(activeLive.value))
       <span class="title" :title="title">{{ title }}</span>
     </span>
     <div class="tools">
+      <button
+        v-if="activeLive?.toolId === 'omp'"
+        type="button"
+        class="tool"
+        :disabled="loading"
+        title="滚动到最新内容，并继续跟随输出"
+        @click="emit('scrollBottom')"
+      >滚动到底部</button>
       <button
         v-if="activeLive?.toolId === 'omp' && activeLive.kind === 'pty'"
         type="button"

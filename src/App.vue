@@ -102,7 +102,8 @@ watch(renamingId, (id, prev) => {
 })
 const projectDialog = ref<{ stopSave: () => void } | null>(null)
 const settingsDialog = ref<{ stopSave: () => void } | null>(null)
-const termRef = ref<{ dispose: (id: string) => void; fitActive: (force?: boolean) => void; redrawActive: () => Promise<void> } | null>(null)
+const termRef = ref<{ dispose: (id: string) => void; fitActive: (force?: boolean) => void; redrawActive: () => Promise<void>; scrollToBottom: () => void } | null>(null)
+const ompRef = ref<{ scrollToBottom: () => Promise<void> } | null>(null)
 const consoleWs = ref<HTMLElement | null>(null)
 const bridgeWs = ref<HTMLElement | null>(null)
 const paneLoading = ref(false)
@@ -469,6 +470,12 @@ async function redrawTerminal() {
   catch (error) { showToast(error instanceof Error ? error.message : String(error)) }
 }
 
+function scrollOmpToBottom() {
+  if (activeLive.value?.toolId !== 'omp') return
+  if (activeLive.value.kind === 'ompRpc') void ompRef.value?.scrollToBottom()
+  else termRef.value?.scrollToBottom()
+}
+
 async function openSession(sessionId?: string, toolId?: ToolId, profileId?: string, ompMode?:OmpLaunchMode) {
   const project = selectedProject.value
   if (!project) {
@@ -754,6 +761,7 @@ const confirmCopy = () => {
             :loading-text="paneLoadingText"
             @close="askClose"
             @redraw="redrawTerminal"
+            @scroll-bottom="scrollOmpToBottom"
           />
           <div class="term-stack">
             <div class="term-under" :class="{ 'is-covered': isDshWeb(activeLive) || activeLive?.kind === 'ompRpc' }">
@@ -765,7 +773,7 @@ const confirmCopy = () => {
                 @start="onEmptyStart"
               />
             </div>
-            <div v-if="activeLive?.kind === 'ompRpc'" class="omp-over" :style="{right:docRailPaneWidth()+'px'}"><OmpPane :runtime-id="activeLive.ptyId" /></div>
+            <div v-if="activeLive?.kind === 'ompRpc'" class="omp-over" :style="{right:docRailPaneWidth()+'px'}"><OmpPane ref="ompRef" :runtime-id="activeLive.ptyId" /></div>
             <div v-if="isDshWeb(activeLive)" class="dsh-over">
               <DshWebPane :url="activeLive?.url || ''" />
             </div>

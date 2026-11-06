@@ -33,6 +33,7 @@ OMP 自己管理配置与凭证。原生面板的“登录与配置”支持 OAu
 
 - 原生模式按顺序处理终端输出与尺寸变化，初始网格与后端保持一致，避免未解析完的画面在错误宽度下换行。官方独立程序直接启动；包管理器的 shell shim 继续使用对应 shell。
 - 原生模式顶部的“重绘终端”会重新同步画面，保留输入草稿和正在执行的任务，不向 OMP 发送聊天内容。
+- OMP 主界面顶部提供“滚动到底部”：原生模式跳到最新输出并恢复跟随，封装模式返回对话页并跳到最新消息，保留输入草稿。
 - 原生 OMP 默认跟随最新输出；主动向上滚动查看历史时暂停跟随，回到底部后恢复。切换会话、切到用量/编排或切出应用后再返回，会同步后台输出的最新位置，保留主动停留的历史位置。
 - 右侧显示终端滚动条，支持拖动查看历史。切出窗口时保留跟随意图和历史行标记；返回时恢复原位置，不将缓冲区重绘触发的选区清理或延迟滚动事件误当成手动滚动。
 - Windows 原生模式在大量输出停稳后自动同步终端视口；从历史回到底部或返回有后台输出的会话时，也可恢复短回答被截住的内容。每批新输出最多恢复一次，已在底部继续滚动或光标刷新不会反复重绘，保留草稿和焦点，不向 OMP 发送聊天内容。
@@ -62,4 +63,4 @@ rtk proxy node scripts/omp-rpc-smoke.mjs <omp-executable>
 
 `omp-rpc-smoke.mjs` 创建临时 profile、测试工作区和本地模拟模型，验证真实 RPC、读取工具、ask 往返、回合结束、原生用量落盘及恢复，不使用真实凭证或付费模型。临时目录会输出以便检查。
 
-`scripts/omp-ui-smoke.js` 与 `scripts/omp-version-ui-smoke.js` 可通过 `playwright-cli run-code` 在 Vite 1423 端口运行，所有 IPC 和模型数据均为合成夹具。`src-tauri/examples/omp_rpc_smoke.rs` 单独验证 Windows 无控制台启动时的协议协商与状态查询。
+`scripts/omp-ui-smoke.js`、`scripts/omp-version-ui-smoke.js` 与 `scripts/omp-scroll-bottom-ui-smoke.js` 可通过 `playwright-cli run-code` 在 Vite 1423 端口运行，所有 IPC 和模型数据均为合成夹具。滚动专项覆盖两种模式的跳转、恢复跟随、保留草稿和重复点击。`src-tauri/examples/omp_rpc_smoke.rs` 单独验证 Windows 无控制台启动时的协议协商与状态查询。

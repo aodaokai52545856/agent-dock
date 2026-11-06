@@ -482,6 +482,19 @@ async function redrawActive() {
   await redrawHost(id, host, true)
 }
 
+function scrollToBottom() {
+  const id = store.activePtyId
+  const host = id ? hosts.get(id) : undefined
+  if (!host || !id || toolForPty(id) !== 'omp') return
+  host.term.clearSelection()
+  host.term.scrollToBottom()
+  host.follow?.resume()
+  host.follow?.userScroll()
+  host.unseenOutput = false
+  host.recovery?.request(true)
+  host.term.focus()
+}
+
 async function redrawHost(id: string, host: Host, focus: boolean) {
   await host.stream.resize(async () => {
     if (hosts.get(id) !== host) return
@@ -676,7 +689,7 @@ onUnmounted(() => {
   hosts.forEach((_, id) => disposeHost(id))
 })
 
-defineExpose({ ensureHost, show, dispose: disposeHost, fitActive, redrawActive })
+defineExpose({ ensureHost, show, dispose: disposeHost, fitActive, redrawActive, scrollToBottom })
 </script>
 
 <template>
