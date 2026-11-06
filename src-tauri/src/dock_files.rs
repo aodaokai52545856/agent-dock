@@ -15,7 +15,9 @@ use tauri::AppHandle;
 
 const ROOT: &str = ".agentDock";
 const READ_ROOTS: [&str; 4] = ["flows", "memory", "roles", "tasks"];
-const WRITE_ROOTS: [&str; 2] = ["flows", "tasks"];
+const WRITE_ROOTS: [&str; 3] = ["flows", "memory", "tasks"];
+// Approved lessons are only ever added; forgetting one stays a git decision.
+const REMOVE_ROOTS: [&str; 2] = ["flows", "tasks"];
 const MAX_FILE_BYTES: usize = 1 << 20;
 // Task documents stay out of "uncommitted changes" reviews. Deleting this line
 // puts them under version control.
@@ -148,11 +150,26 @@ fn list_in(project: &Path, dir: &str) -> Result<Vec<String>, String> {
 }
 
 fn remove_in(project: &Path, rel: &str) -> Result<(), String> {
-    let path = locate(project, rel, &WRITE_ROOTS)?;
+    let path = locate(project, rel, &REMOVE_ROOTS)?;
     match fs::remove_file(&path) {
         Err(err) if err.kind() != ErrorKind::NotFound => Err(format!("删除 {rel} 失败：{err}")),
         _ => Ok(()),
     }
+}
+
+// Lessons name repository files. Only their existence is reported.
+fn exists_in(project: &Path, rel: &str) -> bool {
+    let parts: Vec<&str> = rel
+        .split(['/', '\\'])
+        .filter(|part| !part.is_empty() && *part != ".")
+        .collect();
+    !parts.is_empty()
+        && parts.iter().all(|part| valid_name(part))
+        && fs::symlink_metadata(parts.iter().fold(project.to_path_buf(), |path, part| path.join(part))).is_ok()
+}
+
+fn missing_in(project: &Path, paths: &[String]) -> Vec<String> {
+    paths.iter().filter(|rel| !exists_in(project, rel)).cloned().collect()
 }
 
 fn project_root(app: &AppHandle, project_id: &str) -> Result<PathBuf, String> {
@@ -191,6 +208,15 @@ pub fn dock_file_list(
 #[tauri::command]
 pub fn dock_file_remove(app: AppHandle, project_id: String, path: String) -> Result<(), String> {
     remove_in(&project_root(&app, &project_id)?, &path)
+}
+
+#[tauri::command]
+pub fn dock_paths_missing(
+    app: AppHandle,
+    project_id: String,
+    paths: Vec<String>,
+) -> Result<Vec<String>, String> {
+    Ok(missing_in(&project_root(&app, &project_id)?, &paths))
 }
 
 #[cfg(test)]
@@ -277,10 +303,40 @@ mod tests {
     #[test]
     fn only_dock_owned_folders_are_writable() {
         let project = TempProject::new();
-        assert!(write_in(&project.0, "memory/index.md", "x").is_err());
         assert!(write_in(&project.0, "roles/dev/role.md", "x").is_err());
         assert!(write_in(&project.0, ".gitignore", "x").is_err());
-        assert!(remove_in(&project.0, "memory/index.md").is_err());
+    }
+
+    #[test]
+    fn memory_accepts_new_lessons_but_cannot_lose_them() {
+        let project = TempProject::new();
+        write_in(&project.0, "memory/entries/a.md", "x").unwrap();
+        assert!(remove_in(&project.0, "memory/entries/a.md").is_err());
+        assert!(read_in(&project.0, "memory/entries/a.md").unwrap().is_some());
+    }
+
+    #[test]
+    fn missing_paths_are_reported_without_leaving_the_project() {
+        let project = TempProject::new();
+        let parent = project.0.parent().unwrap().join("dock-files-outside-probe");
+        fs::write(&parent, "x").unwrap();
+        fs::create_dir_all(project.0.join("src")).unwrap();
+        fs::write(project.0.join("src").join("a.ts"), "x").unwrap();
+        let paths: Vec<String> = [
+            "src/a.ts",
+            "./src/a.ts",
+            "src\\a.ts",
+            "src",
+            "src/b.ts",
+            "../dock-files-outside-probe",
+            "C:\\Windows",
+            "",
+        ]
+        .map(String::from)
+        .to_vec();
+        let missing = missing_in(&project.0, &paths);
+        let _ = fs::remove_file(&parent);
+        assert_eq!(missing, vec!["src/b.ts", "../dock-files-outside-probe", "C:\\Windows", ""]);
     }
 
     #[test]

@@ -1288,7 +1288,8 @@ pub fn run() {
             dock_files::dock_file_read,
             dock_files::dock_file_write,
             dock_files::dock_file_list,
-            dock_files::dock_file_remove
+            dock_files::dock_file_remove,
+            dock_files::dock_paths_missing
         ])
         .build(tauri::generate_context!())
         .expect("error while building Agent Dock")

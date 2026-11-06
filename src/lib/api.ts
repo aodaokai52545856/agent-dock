@@ -823,6 +823,10 @@ export async function dockFileRemove(projectId: string, path: string): Promise<v
   return invoke('dock_file_remove', { projectId, path })
 }
 
+export async function dockPathsMissing(projectId: string, paths: string[]): Promise<string[]> {
+  return invoke('dock_paths_missing', { projectId, paths })
+}
+
 export async function cursorDevRun(payload: {
   projectId: string
   prompt: string
