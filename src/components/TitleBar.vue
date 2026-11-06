@@ -226,6 +226,16 @@ onUnmounted(() => {
         >
           使用量
         </button>
+        <button
+          type="button"
+          role="tab"
+          class="mode"
+          :class="{ 'is-on': store.appMode === 'postTool' }"
+          :aria-selected="store.appMode === 'postTool'"
+          @click="setAppMode('postTool')"
+        >
+          postTool
+        </button>
       </div>
     </div>
     <div class="drag" />

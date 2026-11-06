@@ -15,10 +15,10 @@ export interface Project {
 
 export type SessionToolFilter = 'all' | ToolId
 
-export type AppMode = 'console' | 'bridge' | 'usage'
+export type AppMode = 'console' | 'bridge' | 'usage' | 'postTool'
 
 export function parseAppMode(value: unknown): AppMode {
-  if (value === 'bridge' || value === 'usage') return value
+  if (value === 'bridge' || value === 'usage' || value === 'postTool') return value
   return 'console'
 }
 

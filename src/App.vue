@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import CiteTurnDialog from './components/CiteTurnDialog.vue'
 import ConfirmDialog from './components/ConfirmDialog.vue'
 import DocRail from './components/DocRail.vue'
@@ -28,6 +28,8 @@ import { rememberOmpMode } from './lib/ompMode'
 import TerminalPane from './components/TerminalPane.vue'
 import TextConvertFab from './components/TextConvertFab.vue'
 import UsagePane from './components/UsagePane.vue'
+const PostToolPane = defineAsyncComponent(() => import('./components/PostToolPane.vue'))
+const postToolOpened = ref(false)
 import * as api from './lib/api'
 import {
   beginPaneDrag,
@@ -77,6 +79,7 @@ import { appearanceFromSettings, resolvedTheme, systemPrefersLight } from './lib
 import { startVersionService, stopVersionService } from './lib/versionService'
 
 const projectOpen = ref(false)
+watch(() => store.appMode, mode => { if (mode === 'postTool') postToolOpened.value = true }, { immediate: true })
 const editing = ref(false)
 const settingsOpen = ref(false)
 const versionOpen = ref(false)
@@ -819,6 +822,9 @@ const confirmCopy = () => {
       </div>
       <div v-show="store.appMode === 'usage'" class="workspace usage-ws">
         <UsagePane />
+      </div>
+      <div v-if="postToolOpened" v-show="store.appMode === 'postTool'" class="workspace usage-ws">
+        <PostToolPane :active="store.appMode === 'postTool'" />
       </div>
     </div>
     <StatusBar
