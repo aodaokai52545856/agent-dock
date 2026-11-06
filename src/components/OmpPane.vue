@@ -3,7 +3,11 @@ import { computed,ref,watch,nextTick,onMounted,onUnmounted } from 'vue'
 import { ompState,ompSnapshot,ompCommand,ompRespond,ompOpenConfig,ompCliLogin,messageText,type OmpCommand } from '../lib/omp'
 import { store,rememberOpened,showToast } from '../lib/store'
 import * as api from '../lib/api'
-import { renderMarkdown } from '../lib/markdown'
+import { presentOmpMessages } from '../lib/ompPresentation'
+import OmpMarkdown from './OmpMarkdown.vue'
+import OmpCodeBlock from './OmpCodeBlock.vue'
+import OmpToolCall from './OmpToolCall.vue'
+import '../styles/omp-content.css'
 
 const props=defineProps<{runtimeId:string}>()
 const snap=computed(()=>ompState.sessions[props.runtimeId])
@@ -39,6 +43,8 @@ onMounted(()=>{tick=setInterval(()=>{
 onUnmounted(()=>{if(tick)clearInterval(tick)})
 const dialog=computed(()=>snap.value?.dialogs[0])
 const messages=computed(()=>snap.value?.messages||[])
+const transcript=computed(()=>presentOmpMessages(messages.value,snap.value?.tools||{},snap.value?.settled??true))
+const roleLabel=(role:string)=>({user:'你',assistant:'OMP',toolResult:'工具输出',compactionSummary:'上下文摘要',system:'系统提示'} as Record<string,string>)[role]||'会话记录'
 const modelKey=computed(()=>{const m=snap.value?.state.model;return m&&!snap.value?.setupRequired?`${m.provider}/${m.id}`:''})
 const list=(data:any,key:string)=>Array.isArray(data)?data:data?.[key]||[]
 async function command(c:OmpCommand){
@@ -55,7 +61,7 @@ async function load(){
 }
 watch(()=>props.runtimeId,()=>{images.value=[];selectedAgent.value='';agentView.value='';tab.value='chat';void load()},{immediate:true})
 watch(()=>dialog.value?.id,()=>{dialogText.value='';answers.value={};custom.value={}})
-watch(()=>messages.value,async()=>{const el=scroll.value;if(!el)return;const atBottom=el.scrollHeight-el.scrollTop-el.clientHeight<180;await nextTick();if(atBottom)el.scrollTop=el.scrollHeight},{deep:true})
+watch(()=>[messages.value,snap.value?.tools],async()=>{const el=scroll.value;if(!el)return;const atBottom=el.scrollHeight-el.scrollTop-el.clientHeight<180;await nextTick();if(atBottom)el.scrollTop=el.scrollHeight},{deep:true})
 async function send(){
   if(pending.value || snap.value?.setupRequired || (!draft.value.trim()&&!images.value.length))return
   const message=draft.value,attachments=[...images.value];pending.value=true
@@ -100,7 +106,7 @@ async function submitAsk(){await respond({answers:(dialog.value?.questions||[]).
       <strong>OMP <small>{{ snap?.profileId }}</small></strong>
       <select aria-label="模型" :value="modelKey" @change="switchModel"><option value="" disabled>选择模型</option><option v-for="m in models" :key="m.provider+'/'+m.id" :value="m.provider+'/'+m.id">{{ m.name||m.id }} · {{ m.provider }}</option></select>
       <select aria-label="思考强度" :value="snap?.state.thinkingLevel" @change="thinking"><option v-for="l in levels" :key="l" :value="l">{{ l }}</option></select>
-      <span class="run-state" role="status">{{ phaseLabel }}<template v-if="busy"> · 已运行 {{ duration(elapsed) }}</template></span>
+      <span class="run-state" :class="{'is-busy':busy}" role="status"><i aria-hidden="true" />{{ phaseLabel }}<template v-if="busy"> · 已运行 {{ duration(elapsed) }}</template></span>
       <button class="btn btn-ghost btn-small" @click="load">刷新</button>
     </header>
     <nav class="omp-tabs" aria-label="OMP 面板"><button v-for="item in (['chat','agents','tree','login'] as const)" :key="item" :class="{selected:tab===item}" @click="showPanel(item)">{{ {chat:'对话',agents:'子代理',tree:'会话树',login:'登录与配置'}[item] }}</button><button :disabled="busy" @click="command({type:'compact'}).catch(()=>{})">压缩</button><button :disabled="busy" @click="transition('fork')">派生会话</button></nav>
@@ -110,15 +116,16 @@ async function submitAsk(){await respond({answers:(dialog.value?.questions||[]).
     <div v-if="!snap" class="omp-empty">正在连接 OMP…</div>
     <div v-else-if="tab==='chat'" ref="scroll" class="omp-transcript">
       <div v-if="!messages.length" class="omp-empty">发送消息开始 OMP 会话。模型、技能和工具沿用当前 profile 配置。</div>
-      <article v-for="(m,index) in messages" :key="m._dockId||index" class="omp-message" :data-role="m.role">
-        <header>{{ m.role==='user'?'你':m.role==='assistant'?'OMP':m.role }} <small v-if="m.model">{{ m.model }}</small></header>
-        <div v-if="typeof m.content==='string'" class="ad-markdown" v-html="renderMarkdown(m.content)" />
-        <template v-else v-for="(part,i) in m.content||[]" :key="i">
-          <div v-if="part.type==='text'" class="ad-markdown" v-html="renderMarkdown(part.text||'')" />
-          <details v-else-if="part.type==='thinking'" class="omp-thinking"><summary>思考过程</summary><pre>{{ part.thinking||part.text }}</pre></details>
+      <article v-for="(m,index) in transcript" :key="m._dockId||index" class="omp-message" :data-role="m.role">
+        <header><span class="omp-speaker-icon" aria-hidden="true">{{ m.role==='assistant'?'O':m.role==='user'?'你':'≡' }}</span><strong>{{ roleLabel(m.role) }}</strong><small v-if="m.model">{{ m.model }}</small></header>
+        <details v-if="m.role==='compactionSummary'" class="omp-context-summary"><summary>已压缩较早的上下文 · 查看摘要</summary><OmpMarkdown :source="messageText(m.parts)" /></details>
+        <template v-else-if="m.role==='toolResult'"><OmpCodeBlock v-if="messageText(m.content)" :source="messageText(m.content)" label="输出" terminal limit /><template v-for="(part,i) in m.parts" :key="i"><img v-if="part.type==='image'&&part.data" class="omp-image" :src="`data:${part.mimeType};base64,${part.data}`" alt="工具返回图片" /></template></template>
+        <template v-else v-for="(part,i) in m.parts" :key="part.id||i">
+          <OmpMarkdown v-if="part.type==='text'&&part.text" :source="part.text" />
+          <details v-else-if="part.type==='thinking'" class="omp-thinking"><summary><span>思考过程</span><small>展开查看</small></summary><OmpMarkdown :source="part.thinking||part.text||''" /></details>
           <img v-else-if="part.type==='image' && part.data" class="omp-image" :src="`data:${part.mimeType};base64,${part.data}`" alt="会话图片" />
-          <details v-else-if="part.type==='toolCall'" class="omp-tool" :open="snap.tools[part.id]?.type!=='tool_execution_end'"><summary>{{ part.name }} · {{ snap.tools[part.id]?.type==='tool_execution_end' ? (snap.tools[part.id]?.isError?'失败':'完成'):'执行中' }}</summary><pre>{{ JSON.stringify(part.arguments,null,2) }}</pre><pre v-if="snap.tools[part.id]">{{ messageText((snap.tools[part.id].result||snap.tools[part.id].partialResult)?.content) }}</pre></details>
-          <details v-else><summary>{{ part.type||'内容' }}</summary><pre>{{ JSON.stringify(part,null,2) }}</pre></details>
+          <OmpToolCall v-else-if="part.type==='toolCall'" :tool="part.tool" />
+          <details v-else-if="part.type!=='text'" class="omp-extra"><summary>{{ part.type||'内容' }}</summary><OmpCodeBlock :source="JSON.stringify(part,null,2)" language="json" limit /></details>
         </template>
       </article>
       <div v-if="snap.state.queues?.steering?.length || snap.state.queues?.followUp?.length" class="omp-queues"><strong>待处理消息</strong><template v-for="q in (['steering','followUp'] as const)" :key="q"><div v-for="message in snap.state.queues[q]||[]" :key="String(message)"><span>{{ message }}</span><button @click="command({type:'remove_queued_message',message:String(message),queue:q}).catch(()=>{})">移除</button><button @click="command({type:'promote_queued_message',message:String(message)}).catch(()=>{})">提升</button></div></template></div>
@@ -148,5 +155,14 @@ async function submitAsk(){await respond({answers:(dialog.value?.questions||[]).
 .omp-setup{padding:12px 16px;color:var(--ad-muted);background:var(--ad-harbor);border-bottom:1px solid var(--ad-border)}
 .omp-wait{display:flex;align-items:center;gap:12px;padding:8px 16px;color:var(--ad-warning);font-size:12px;border-bottom:1px solid var(--ad-border)}.omp-wait span{flex:1}.omp-wait button{flex-shrink:0}
 .omp-error{white-space:pre-wrap;overflow-wrap:anywhere;max-height:180px;overflow:auto}
-.omp-pane{height:100%;min-height:0;display:flex;flex-direction:column;background:var(--ad-ink);color:var(--ad-text);font-size:14px}.omp-toolbar,.omp-tabs,.composer-actions{display:flex;align-items:center;gap:8px;padding:8px 16px;border-bottom:1px solid var(--ad-border)}.omp-toolbar{flex-wrap:wrap}.omp-toolbar select{max-width:260px;min-width:80px;flex:1}.omp-toolbar small,.run-state{color:var(--ad-muted);font-size:12px}.run-state{margin-left:auto}.omp-tabs{flex-wrap:wrap}.omp-tabs button,.omp-tree-entry button,.omp-panel button,.omp-dialog>button{padding:4px 8px;min-height:28px;border-radius:4px}.selected{background:var(--ad-hover);color:var(--ad-accent)}.omp-transcript,.omp-panel{flex:1;min-height:0;overflow:auto;padding:16px}.omp-message{padding:12px 0;border-bottom:1px solid var(--ad-border)}.omp-message>header{color:var(--ad-muted);font-size:12px;margin-bottom:8px}.omp-message[data-role=user]{padding:12px;background:var(--ad-harbor);border-radius:4px}.omp-message header small{float:right}.omp-tool,.omp-thinking,.omp-tree-entry{border:1px solid var(--ad-border);border-radius:4px;padding:8px;margin:8px 0}.omp-tool summary,.omp-thinking summary{cursor:pointer}.omp-tree-entry{display:flex;gap:8px;align-items:center}.omp-tree-entry>span{flex:1}.omp-image{max-width:100%;max-height:360px}.omp-empty{padding:24px;color:var(--ad-muted)}.omp-error{padding:8px 16px;color:var(--ad-error);border-bottom:1px solid var(--ad-border)}.omp-composer{padding:8px 16px 12px;border-top:1px solid var(--ad-border)}.omp-composer textarea{width:100%;min-height:80px;resize:vertical;max-height:240px;background:var(--ad-harbor);color:var(--ad-text);border:1px solid var(--ad-border);border-radius:4px;padding:8px}.composer-actions{padding:8px 0 0;border:0;justify-content:flex-end}.omp-dialog{padding:16px;max-height:40%;overflow:auto;background:var(--ad-harbor);border-top:2px solid var(--ad-accent)}.omp-dialog input,.omp-dialog textarea{display:block;width:100%;margin:8px 0}.omp-dialog fieldset{border:1px solid var(--ad-border);margin:8px 0;padding:8px}.omp-dialog button small{display:block;color:var(--ad-muted)}.omp-attachments{display:flex;gap:8px}.omp-attachments img{height:48px;display:block}.omp-notices{padding:8px 16px;font-size:12px}.omp-notices>div{display:flex;justify-content:space-between;gap:8px}pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;max-height:400px;overflow:auto}select,input{color:var(--ad-text);background:var(--ad-harbor);border:1px solid var(--ad-border);min-height:32px;border-radius:4px}textarea{font-family:inherit}
+.omp-pane{height:100%;min-height:0;min-width:0;display:flex;flex-direction:column;background:var(--ad-ink);color:var(--ad-text);font-size:14px}
+.omp-toolbar,.omp-tabs,.composer-actions{display:flex;align-items:center;gap:8px;padding:8px 16px;border-bottom:1px solid var(--ad-border)}
+.omp-toolbar{flex-wrap:wrap}.omp-toolbar select{max-width:260px;min-width:80px;flex:1}.omp-toolbar small,.run-state{color:var(--ad-muted);font-size:12px}.run-state{margin-left:auto}
+.omp-tabs{flex-wrap:wrap}.omp-tabs button,.omp-tree-entry button,.omp-panel button,.omp-dialog>button{padding:4px 8px;min-height:28px;border-radius:4px}.selected{background:var(--ad-hover);color:var(--ad-accent)}
+.omp-panel{flex:1;min-height:0;overflow:auto;padding:16px}.omp-tool,.omp-tree-entry{border:1px solid var(--ad-border);border-radius:4px;padding:8px;margin:8px 0}.omp-tree-entry{display:flex;gap:8px;align-items:center}.omp-tree-entry>span{flex:1}
+.omp-empty{padding:24px;color:var(--ad-muted)}.omp-error{padding:8px 16px;color:var(--ad-error);border-bottom:1px solid var(--ad-border)}
+.omp-composer{padding:8px 16px 12px;border-top:1px solid var(--ad-border)}.omp-composer textarea{width:100%;min-height:80px;resize:vertical;max-height:240px;background:var(--ad-harbor);color:var(--ad-text);border:1px solid var(--ad-border);border-radius:4px;padding:8px}.composer-actions{padding:8px 0 0;border:0;justify-content:flex-end}
+.omp-dialog{padding:16px;max-height:40%;overflow:auto;background:var(--ad-harbor);border-top:2px solid var(--ad-accent)}.omp-dialog input,.omp-dialog textarea{display:block;width:100%;margin:8px 0}.omp-dialog fieldset{border:1px solid var(--ad-border);margin:8px 0;padding:8px}.omp-dialog button small{display:block;color:var(--ad-muted)}
+.omp-attachments{display:flex;gap:8px}.omp-attachments img{height:48px;display:block}.omp-notices{padding:8px 16px;font-size:12px}.omp-notices>div{display:flex;justify-content:space-between;gap:8px}
+.omp-panel pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;max-height:400px;overflow:auto}select,input{color:var(--ad-text);background:var(--ad-harbor);border:1px solid var(--ad-border);min-height:32px;border-radius:4px}textarea{font-family:inherit}
 </style>
