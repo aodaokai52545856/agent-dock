@@ -2,17 +2,21 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import FlowChart from './FlowChart.vue'
 import FlowNodeCard from './FlowNodeCard.vue'
+import FlowSettingsCard from './FlowSettingsCard.vue'
 import HandoffPanel from './HandoffPanel.vue'
+import ScriptApprovalPanel from './ScriptApprovalPanel.vue'
 import LessonPanel from './LessonPanel.vue'
 import {
   addRoleNode,
   advanceSlice,
   clearSelection,
   markVerdict,
+  openFlowSettings,
   persistCurrent,
   refreshGit,
   registerCustomRole,
   disconnectEdge,
+  setDraftProfile,
   setEdgeBackTo,
   setEdgeGate,
   setEdgeMaxLoops,
@@ -24,6 +28,10 @@ import {
 } from '../lib/flow/runtime.ts'
 import { describeChannel } from '../lib/flow/channels.ts'
 import { isAwaitingHuman, isAwaitingLessons } from '../lib/flow/engine.ts'
+import { preflight, selectedProfile } from '../lib/flow/preflight.ts'
+import { routesByExits } from '../lib/flow/routing.ts'
+import { startsFresh } from '../lib/flow/session.ts'
+import { channelSupportsFresh } from '../lib/flow/channels.ts'
 import { flowInspectorKind, flowInspectorTitle } from '../lib/flow/inspector.ts'
 import { allRoles, roleLabel } from '../lib/flow/roles.ts'
 import { FLOW_END, FLOW_START, type RunStep } from '../lib/flow/types.ts'
@@ -43,6 +51,8 @@ const waiting = computed(() => currentRun.value?.status === 'waiting')
 const awaitingHuman = computed(() => isAwaitingHuman(currentFlow.value, currentRun.value))
 const awaitingLessons = computed(() => isAwaitingLessons(currentRun.value))
 const nextLocked = computed(() => currentPipeline.value?.gate !== 'passed')
+const profileNames = computed(() => Object.keys(currentFlow.value?.profiles ?? {}))
+const activeProfile = computed(() => (currentFlow.value ? selectedProfile(currentFlow.value) : undefined))
 const editing = computed(() => store.bridgePaneMode === 'edit')
 const selectedNode = computed(
   () => currentFlow.value?.nodes.find((item) => item.id === store.bridgeSelectedNodeId) ?? null
@@ -61,12 +71,26 @@ const failedNodeId = computed(() => {
 const newRole = ref('')
 const roles = computed(() => allRoles(store.customRoles))
 const inspectorKind = computed(() =>
-  flowInspectorKind(store.bridgePaneMode, store.bridgeSelectedNodeId, store.bridgeSelectedEdgeId)
+  flowInspectorKind(store.bridgePaneMode, store.bridgeSelectedNodeId, store.bridgeSelectedEdgeId, store.bridgeFlowSettings)
 )
+// Said before the run, because the run clears the bound windows' conversations.
+const clearing = computed(() => {
+  const flow = currentFlow.value
+  if (!flow) return []
+  const skip = (activeProfile.value && flow.profiles?.[activeProfile.value]?.skip) || []
+  const fresh = { steps: [] } as unknown as Parameters<typeof startsFresh>[1]
+  return flow.nodes
+    .filter((node) => !skip.includes(node.id) && channelSupportsFresh(node.channel) && startsFresh(node, fresh))
+    .map((node) => node.title || roleLabel(node.role))
+})
+// Exits cap each node on its own, so a flow-wide budget would mislead.
+const byExits = computed(() => Boolean(currentFlow.value && routesByExits(currentFlow.value)))
+const plannedProblems = computed(() => (currentFlow.value ? preflight(currentFlow.value, activeProfile.value).problems : []))
 const inspectorTitle = computed(() => flowInspectorTitle(inspectorKind.value))
 
 const stageHint = computed(() => {
   if (editing.value) {
+    if (currentFlow.value && routesByExits(currentFlow.value)) return '拖线加出口，点节点在标签页里改输入、输出和出口。'
     return '开发接到审查，再从审查拉回开发，即成循环。点循环线可改最大次数。'
   }
   const run = currentRun.value
@@ -181,6 +205,15 @@ onUnmounted(() => window.removeEventListener('keydown', onKey))
           <p class="stage-hint">{{ stageHint }}</p>
         </div>
         <button
+          v-if="editing"
+          type="button"
+          class="soft-btn"
+          :class="{ 'is-on': store.bridgeFlowSettings }"
+          @click="openFlowSettings"
+        >
+          流程设置
+        </button>
+        <button
           v-if="!editing && (busy || waiting)"
           type="button"
           class="soft-btn"
@@ -278,6 +311,7 @@ onUnmounted(() => window.removeEventListener('keydown', onKey))
                 v-if="selectedNode"
                 :node="selectedNode"
               />
+              <FlowSettingsCard v-else-if="store.bridgeFlowSettings" />
             </template>
           </template>
 
@@ -293,7 +327,22 @@ onUnmounted(() => window.removeEventListener('keydown', onKey))
               />
             </label>
 
+            <label v-if="profileNames.length" class="field">
+              <span>Profile</span>
+              <select :value="activeProfile" :disabled="busy" @change="setDraftProfile(($event.target as HTMLSelectElement).value)">
+                <option v-for="name in profileNames" :key="name" :value="name">{{ name }}</option>
+              </select>
+            </label>
+
+            <p v-if="clearing.length && !busy && !waiting" class="hint notice">
+              运行时会清空这些窗口的当前对话：{{ clearing.join('、') }}。旧对话保留，可以恢复；不想清空就在节点的“说明”里改成沿用。
+            </p>
+            <ul v-if="plannedProblems.length && !busy && !waiting" class="hint notice warn-list">
+              <li v-for="item in plannedProblems" :key="item">{{ item }}</li>
+            </ul>
+
             <HandoffPanel />
+            <ScriptApprovalPanel />
             <LessonPanel />
 
             <div class="actions">
@@ -317,7 +366,8 @@ onUnmounted(() => window.removeEventListener('keydown', onKey))
             </div>
             <p v-if="currentPipeline.lastError" class="error">{{ currentPipeline.lastError }}</p>
             <p v-if="currentPipeline.retryCount" class="meta">
-              已返工 {{ currentPipeline.retryCount }} / {{ currentPipeline.maxRetries }} 次
+              <template v-if="byExits">已返工 {{ currentPipeline.retryCount }} 次</template>
+              <template v-else>已返工 {{ currentPipeline.retryCount }} / {{ currentPipeline.maxRetries }} 次</template>
             </p>
 
             <section v-if="currentRun" class="activity">
@@ -728,6 +778,18 @@ textarea {
 .error {
   color: var(--ad-error);
   font-size: 13px;
+}
+
+.notice {
+  margin: 0 0 8px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--ad-muted);
+}
+
+.notice.warn-list {
+  padding-left: 16px;
+  color: var(--ad-warning);
 }
 
 .timeline {

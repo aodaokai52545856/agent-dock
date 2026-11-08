@@ -20,6 +20,7 @@ import {
   withNodePoints
 } from '../lib/flow/chartLayout.ts'
 import { roleLabel } from '../lib/flow/roles.ts'
+import { exitWires, humanExits, routesByExits, type ExitWire } from '../lib/flow/routing.ts'
 import {
   addRoleNodeAt,
   connectFlowNodes,
@@ -178,6 +179,43 @@ const drawn = computed((): DrawnEdge[] => {
     return row
   })
 })
+
+type DrawnExit = { wire: ExitWire; d: string; mid: { x: number; y: number } }
+
+const exitDrawn = computed((): DrawnExit[] => exitWires(placed.value).map((wire) => {
+  const fromNode = findNode(wire.fromId)
+  const toNode = findNode(wire.to)
+  if (wire.back && fromNode && toNode) {
+    const origin = rightAnchor({ ...fromNode, ...xy(fromNode, findIndex(fromNode.id)) })
+    const target = rightAnchor({ ...toNode, ...xy(toNode, findIndex(toNode.id)) })
+    // A node sending work back to itself still needs a visible loop.
+    const lift = toNode.id === fromNode.id ? { ...target, y: target.y - NODE_H / 2 } : target
+    return { wire, d: backPath(origin, lift), mid: { x: Math.max(origin.x, lift.x) + 56, y: (origin.y + lift.y) / 2 } }
+  }
+  const start = sourceAnchor(wire.fromId)
+  const end = targetAnchor(wire.to)
+  return { wire, d: forwardPath(start, end), mid: pathMid(start, end) }
+}))
+
+const byExits = computed(() => routesByExits(placed.value))
+
+function outputNames(node: FlowNode) {
+  return (node.outputs ?? []).map((row) => row.path.replace(/^task:/, '').split('/').pop()).filter(Boolean)
+}
+
+function nodeMeta(node: FlowNode) {
+  const parts: string[] = []
+  const names = outputNames(node)
+  if (names.length) parts.push(`产出 ${names.join('、')}`)
+  const people = humanExits(node)
+  if (people.length) parts.push(`${people.join('、')} → 人工`)
+  return parts.join(' · ')
+}
+
+function onExitClick(wire: ExitWire, event: MouseEvent) {
+  event.stopPropagation()
+  setSelectedNode(wire.fromId, 'exits')
+}
 
 function surfacePoint(event: PointerEvent | DragEvent) {
   const el = surfaceRef.value
@@ -383,6 +421,13 @@ const linkLine = computed(() => {
           class="wire wire-back"
           :d="item.back!.d"
         />
+        <path
+          v-for="item in exitDrawn"
+          :key="item.wire.id"
+          class="wire"
+          :class="{ 'wire-back': item.wire.back, 'is-on': selectedId === item.wire.fromId }"
+          :d="item.d"
+        />
         <path v-if="linkLine" class="wire wire-draft" :d="linkLine.d" />
       </svg>
 
@@ -402,6 +447,19 @@ const linkLine = computed(() => {
           {{ item.edge.gate === 'passFail' ? '通过 · 结束' : '结束' }}
         </template>
         <template v-else>完成后 · {{ modeLabel(item.edge) }}</template>
+      </button>
+
+      <button
+        v-for="item in exitDrawn"
+        :key="item.wire.id + '-tag'"
+        type="button"
+        class="edge-tag exit-tag"
+        :class="{ 'is-loop': item.wire.back, 'is-on': selectedId === item.wire.fromId }"
+        :style="{ left: item.mid.x + 'px', top: item.mid.y + 'px' }"
+        :title="readonly ? '' : '点开这个节点的出口'"
+        @click="onExitClick(item.wire, $event)"
+      >
+        {{ item.wire.label }}
       </button>
 
       <span
@@ -446,6 +504,7 @@ const linkLine = computed(() => {
         <span class="box-body">
           <strong>{{ node.title || roleLabel(node.role) }}</strong>
           <span>{{ channelText(node) }}</span>
+          <em v-if="nodeMeta(node)" class="box-meta" :title="nodeMeta(node)">{{ nodeMeta(node) }}</em>
         </span>
         <span v-if="nodeWarn(node)" class="warn" title="未绑定或窗口已关闭">!</span>
         <button
@@ -463,6 +522,7 @@ const linkLine = computed(() => {
       </div>
 
       <p v-if="!placed.nodes.length" class="empty">把角色拖进画布，再从「开始」拉线。</p>
+      <p v-else-if="!readonly && byExits" class="hint">从节点右下角拖线到下一个节点或「结束」，就加一个出口。第一条是 PASS，之后是退回的路。点线上的标签改结论。</p>
       <p v-else-if="!readonly" class="hint">审查拉回开发会变成循环边。点那条线可改最大次数。用尽后走接到「结束」的线。</p>
     </div>
   </div>
@@ -570,6 +630,16 @@ const linkLine = computed(() => {
   font-size: 11px;
   color: var(--ad-muted);
   flex-shrink: 0;
+}
+
+.box-meta {
+  display: block;
+  overflow: hidden;
+  font-style: normal;
+  font-size: 11px;
+  color: var(--ad-muted);
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .box-body {

@@ -1,7 +1,11 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import NodeExitsTab from './NodeExitsTab.vue'
+import NodeIoTab from './NodeIoTab.vue'
 import {
   channelKindLabel,
+  channelSupportsFresh,
+  nodeSession,
   describeChannel,
   defaultChannel,
   inspectPty,
@@ -17,7 +21,8 @@ import {
   updateNode
 } from '../lib/flow/runtime.ts'
 import { allRoles, roleHint, roleLabel } from '../lib/flow/roles.ts'
-import type { ChannelKind, CodexChannel, FlowNode, PtyChannel, RoleId } from '../lib/flow/types.ts'
+import { SCRIPT_TIMEOUT_DEFAULT_SEC } from '../lib/flow/scripts.ts'
+import type { ChannelKind, CodexChannel, FlowNode, NodeSession, PtyChannel, RoleId } from '../lib/flow/types.ts'
 import { liveOfProject } from '../lib/livePty'
 import { refreshCodexThreads } from '../lib/pipeline'
 import { store } from '../lib/store'
@@ -29,7 +34,36 @@ const props = defineProps<{
 }>()
 
 const roles = computed(() => allRoles(store.customRoles))
-const channels: ChannelKind[] = ['codexApp', 'pty', 'ompRpc', 'cursorSdk', 'human']
+const channels: ChannelKind[] = ['codexApp', 'pty', 'ompRpc', 'cursorSdk', 'human', 'script']
+const tabs = [
+  { id: 'about', label: '说明' },
+  { id: 'inputs', label: '输入' },
+  { id: 'outputs', label: '输出' },
+  { id: 'exits', label: '出口' }
+] as const
+const tab = computed(() => store.bridgeNodeTab)
+const canClear = computed(() => channelSupportsFresh(props.node.channel))
+const resolvedSession = computed(() => nodeSession(props.node))
+const counts = computed(() => ({
+  about: 0,
+  inputs: props.node.inputs?.length ?? 0,
+  outputs: props.node.outputs?.length ?? 0,
+  exits: props.node.exits?.length ?? 0
+}))
+
+function setSession(value: string) {
+  updateNode(props.node.id, { session: value === 'fresh' || value === 'reuse' ? value as NodeSession : undefined })
+}
+
+function patchScript(patch: { command?: string; timeoutSec?: number }) {
+  if (props.node.channel.kind !== 'script') return
+  updateNode(props.node.id, { channel: { ...props.node.channel, ...patch } })
+}
+
+function onTimeout(event: Event) {
+  const value = Math.floor(Number((event.target as HTMLInputElement).value))
+  patchScript({ timeoutSec: value > 0 ? value : undefined })
+}
 const tools: ToolId[] = ['grokbuild', 'kimi', 'claude', 'opencode', 'pi', 'omp', 'dsh']
 const targets: { id: ReviewTargetKind; label: string }[] = [
   { id: 'uncommittedChanges', label: '未提交改动' },
@@ -66,7 +100,8 @@ function isThreadOn(id: string) {
 }
 
 function setChannelKind(kind: ChannelKind) {
-  if (kind === 'codexApp') updateNode(props.node.id, { channel: defaultChannel('reviewer') })
+  if (kind === 'script') updateNode(props.node.id, { channel: { kind: 'script', command: '' } })
+  else if (kind === 'codexApp') updateNode(props.node.id, { channel: defaultChannel('reviewer') })
   else if (kind === 'pty') updateNode(props.node.id, { channel: { kind: 'pty', toolId: 'grokbuild', sessionId: '', ptyId: '' } })
   else if (kind === 'ompRpc') updateNode(props.node.id, {channel:{kind:'ompRpc',toolId:'omp',sessionId:'',ptyId:''}})
   else if (kind === 'cursorSdk') updateNode(props.node.id, { channel: { kind: 'cursorSdk', agentId: '' } })
@@ -129,6 +164,24 @@ function onCodexField(field: 'commitSha' | 'baseBranch' | 'customInstructions', 
       <button type="button" class="text-btn" @click="removeRoleNode(node.id)">删除节点</button>
     </header>
 
+    <nav class="tabs" role="tablist" aria-label="节点设置">
+      <button
+        v-for="item in tabs"
+        :key="item.id"
+        type="button"
+        role="tab"
+        class="tab"
+        :class="{ 'is-on': tab === item.id }"
+        :aria-selected="tab === item.id"
+        @click="store.bridgeNodeTab = item.id"
+      >
+        {{ item.label }}<span v-if="counts[item.id]" class="count">{{ counts[item.id] }}</span>
+      </button>
+    </nav>
+
+    <NodeIoTab v-if="tab === 'inputs' || tab === 'outputs'" :node="node" :kind="tab" />
+    <NodeExitsTab v-else-if="tab === 'exits'" :node="node" />
+    <template v-else>
     <div class="row">
       <label class="field tight">
         <span>角色</span>
@@ -151,6 +204,18 @@ function onCodexField(field: 'commitSha' | 'baseBranch' | 'customInstructions', 
       <span>角色合同</span>
       <textarea :value="node.roleContract" rows="2" @change="onContract" />
     </label>
+
+    <label v-if="canClear" class="field tight">
+      <span>会话</span>
+      <select :value="node.session ?? ''" @change="setSession(($event.target as HTMLSelectElement).value)">
+        <option value="">默认（{{ resolvedSession === 'fresh' ? '每个任务清空' : '沿用' }}）</option>
+        <option value="fresh">每个任务清空</option>
+        <option value="reuse">沿用窗口里的对话</option>
+      </select>
+    </label>
+    <p v-if="canClear && resolvedSession === 'fresh'" class="hint">
+      任务第一次跑到这里时，会在绑定的窗口里开新会话（Claude 用 /clear，Grok 用 /new，OMP 新建会话）。旧对话保留，可以恢复。
+    </p>
 
     <div v-if="(node.channel.kind === 'pty' || node.channel.kind === 'ompRpc')" class="pty-bind">
       <div class="row">
@@ -232,7 +297,19 @@ function onCodexField(field: 'commitSha' | 'baseBranch' | 'customInstructions', 
       </div>
     </div>
     <p v-else-if="node.channel.kind === 'cursorSdk'" class="hint">走 Cursor SDK，额度与 IDE 分开。同一工作区不要同时开两个写者。</p>
-    <p v-else class="hint">人工节点：运行到这里会把当前任务当作已确认，然后沿边走下去。</p>
+    <div v-else-if="node.channel.kind === 'script'" class="script">
+      <label class="field tight">
+        <span>命令（在项目目录下执行）</span>
+        <textarea :value="node.channel.command" rows="2" placeholder="npm test" @change="patchScript({ command: ($event.target as HTMLTextAreaElement).value.trim() })" />
+      </label>
+      <label class="field tight">
+        <span>超时（秒）</span>
+        <input type="number" min="1" :value="node.channel.timeoutSec ?? ''" :placeholder="String(SCRIPT_TIMEOUT_DEFAULT_SEC)" @change="onTimeout" />
+      </label>
+      <p class="hint">退出码 0 走 PASS 出口，其余走 FAIL 出口。第一次运行和每次改命令后，都要在运行面板里确认命令全文。</p>
+    </div>
+    <p v-else class="hint">人工节点：运行到这里会暂停，标记通过或未通过后继续。</p>
+    </template>
   </article>
 </template>
 
@@ -279,6 +356,39 @@ function onCodexField(field: 'commitSha' | 'baseBranch' | 'customInstructions', 
   font-size: 12px;
   line-height: 18px;
   color: var(--ad-muted);
+}
+
+.tabs {
+  display: flex;
+  gap: 4px;
+  margin: 4px 0 2px;
+  border-bottom: 1px solid var(--ad-border);
+}
+
+.tab {
+  height: 30px;
+  padding: 0 10px;
+  border-bottom: 2px solid transparent;
+  color: var(--ad-muted);
+  font-size: 12px;
+}
+
+.tab.is-on {
+  border-bottom-color: var(--ad-text);
+  color: var(--ad-text);
+}
+
+.count {
+  margin-left: 4px;
+  padding: 0 5px;
+  border-radius: 8px;
+  background: var(--ad-selected);
+  font-size: 11px;
+}
+
+.script {
+  display: flex;
+  flex-direction: column;
 }
 
 .pty-bind {

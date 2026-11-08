@@ -103,7 +103,8 @@ const flowHint = computed(() => {
     node.channel.kind === 'pty' && !inspectPty(node.channel, store.live, store.selectedProjectId).ok
   )).length
   if (unbound) return `${unbound} 个窗口节点还没绑好。`
-  if (flow.nodes.length === 2 && flow.edges.some((edge) => edge.gate === 'passFail')) {
+  const pair = flow.edges.some((edge) => edge.gate === 'passFail') || flow.nodes.some((node) => node.exits?.some((exit) => exit.on !== 'PASS'))
+  if (flow.nodes.length === 2 && pair) {
     return '一对一：开发者完成后交给审查者，未通过再回到开发者。'
   }
   return `串行 ${flow.nodes.length} 个节点。`
