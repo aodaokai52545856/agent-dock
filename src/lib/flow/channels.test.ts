@@ -132,7 +132,6 @@ function twoGrokFlow(first: PtyChannel, second: PtyChannel): FlowDef {
         from: 'n-a',
         to: 'n-b',
         mode: 'auto',
-        transform: 'roleWrap',
         gate: 'none'
       }
     ],

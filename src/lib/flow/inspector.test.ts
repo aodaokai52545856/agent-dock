@@ -13,6 +13,13 @@ test('edit mode only floats inspector when a node or edge is selected', () => {
   assert.equal(flowInspectorKind('edit', 'n1', 'e1'), 'edge')
 })
 
+test('flow settings show only when nothing more specific is selected', () => {
+  assert.equal(flowInspectorKind('edit', '', '', true), 'flow')
+  assert.equal(flowInspectorKind('edit', 'n1', '', true), 'node')
+  assert.equal(flowInspectorKind('run', '', '', true), 'run')
+  assert.equal(flowInspectorTitle('flow'), '流程设置')
+})
+
 test('run mode always shows the run inspector overlay', () => {
   assert.equal(flowInspectorKind('run', '', ''), 'run')
   assert.equal(flowInspectorKind('run', 'n1', ''), 'run')

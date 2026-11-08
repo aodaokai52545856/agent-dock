@@ -390,6 +390,20 @@ export async function dshEmbedApplyTheme(script: string): Promise<void> {
   return invoke('dsh_embed_apply_theme', { script })
 }
 
+export type FlowScriptResult = { exitCode: number | null; output: string; timedOut: boolean; canceled: boolean }
+
+export async function flowScriptRun(args: { runId: string; projectId: string; command: string; timeoutSecs: number }): Promise<FlowScriptResult> {
+  return invoke('flow_script_run', args)
+}
+
+export async function flowScriptStop(runId: string): Promise<void> {
+  return invoke('flow_script_stop', { runId })
+}
+
+export async function ptySwitchSession(ptyId: string, sessionId: string): Promise<LivePtyInfo> {
+  return invoke('pty_switch_session', { ptyId, sessionId })
+}
+
 export async function ptyBindSession(
   ptyId: string,
   sessionId: string,

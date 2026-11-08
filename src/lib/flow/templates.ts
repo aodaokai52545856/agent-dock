@@ -31,7 +31,6 @@ function startEdge(to: string): FlowDef['edges'][number] {
     from: FLOW_START,
     to,
     mode: 'auto',
-    transform: 'roleWrap',
     gate: 'none'
   }
 }
@@ -54,27 +53,10 @@ export function createDevReviewFlow(): FlowDef {
   const dev = node('developer', '开发者', defaultChannel('developer'), 0)
   const rev = node('reviewer', '审查者', defaultCodexChannel(), 1)
   const flow = emptyFlow('开发 ↔ 审查', 'dev-review')
+  dev.exits = [{ on: 'PASS', to: rev.id }]
+  rev.exits = [{ on: 'PASS', to: '@end' }, { on: 'FAIL', to: dev.id }]
   flow.nodes = [dev, rev]
-  flow.edges = [
-    startEdge(dev.id),
-    {
-      id: makeId('e'),
-      from: dev.id,
-      to: rev.id,
-      mode: 'auto',
-      transform: 'roleWrap',
-      gate: 'none'
-    },
-    {
-      id: makeId('e'),
-      from: rev.id,
-      to: FLOW_END,
-      mode: 'auto',
-      transform: 'roleWrap',
-      gate: 'passFail',
-      backTo: dev.id
-    }
-  ]
+  flow.edges = [startEdge(dev.id)]
   return flow
 }
 
@@ -90,7 +72,6 @@ export function createCodexGrokFlow(): FlowDef {
       from: rev.id,
       to: grok.id,
       mode: 'manual',
-      transform: 'roleWrap',
       gate: 'none'
     },
     {
@@ -98,7 +79,6 @@ export function createCodexGrokFlow(): FlowDef {
       from: grok.id,
       to: FLOW_END,
       mode: 'auto',
-      transform: 'roleWrap',
       gate: 'none'
     }
   ]
@@ -108,18 +88,9 @@ export function createCodexGrokFlow(): FlowDef {
 export function createBlankFlow(): FlowDef {
   const first = node('pm', '项目经理', defaultChannel('pm'), 0)
   const flow = emptyFlow('空白流程', 'blank')
+  first.exits = [{ on: 'PASS', to: '@end' }]
   flow.nodes = [first]
-  flow.edges = [
-    startEdge(first.id),
-    {
-      id: makeId('e'),
-      from: first.id,
-      to: FLOW_END,
-      mode: 'auto',
-      transform: 'roleWrap',
-      gate: 'none'
-    }
-  ]
+  flow.edges = [startEdge(first.id)]
   return flow
 }
 

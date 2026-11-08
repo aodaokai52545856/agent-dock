@@ -41,7 +41,6 @@ function chain(mode: 'auto' | 'manual', gate: 'none' | 'passFail' = 'none'): Flo
         from: 'n-a',
         to: 'n-b',
         mode,
-        transform: 'roleWrap',
         gate,
         backTo: gate === 'passFail' ? 'n-a' : undefined
       }
@@ -60,7 +59,6 @@ test('startRun follows the start terminal when wired', () => {
     from: FLOW_START,
     to: 'n-b',
     mode: 'auto',
-    transform: 'roleWrap',
     gate: 'none'
   })
   const started = startRun(flow, 'proj', '修闸门')
@@ -153,7 +151,6 @@ test('passFail fail with backTo re-executes the source', () => {
         from: 'n-dev',
         to: 'n-rev',
         mode: 'auto',
-        transform: 'roleWrap',
         gate: 'none'
       },
       {
@@ -161,7 +158,6 @@ test('passFail fail with backTo re-executes the source', () => {
         from: 'n-rev',
         to: FLOW_END,
         mode: 'auto',
-        transform: 'roleWrap',
         gate: 'passFail',
         backTo: 'n-dev'
       }
@@ -187,7 +183,6 @@ test('passFail pass completes the run', () => {
         from: 'n-a',
         to: FLOW_END,
         mode: 'auto',
-        transform: 'roleWrap',
         gate: 'passFail'
       }
     ]
@@ -208,7 +203,6 @@ test('unknown verdict fail-opens to manual', () => {
         from: 'n-a',
         to: FLOW_END,
         mode: 'auto',
-        transform: 'roleWrap',
         gate: 'passFail',
         backTo: 'n-a'
       }
@@ -231,7 +225,6 @@ test('manual pass after unknown follows the pass path', () => {
         from: 'n-a',
         to: FLOW_END,
         mode: 'auto',
-        transform: 'roleWrap',
         gate: 'passFail'
       }
     ]
@@ -253,7 +246,6 @@ test('retry cap fails the run', () => {
         from: 'n-a',
         to: FLOW_END,
         mode: 'auto',
-        transform: 'roleWrap',
         gate: 'passFail',
         backTo: 'n-a'
       }
@@ -309,10 +301,10 @@ test('loop edge returns until the cap then takes the exit', () => {
       }
     ],
     edges: [
-      { id: 'e-s', from: FLOW_START, to: 'n-dev', mode: 'auto', transform: 'roleWrap', gate: 'none' },
-      { id: 'e-f', from: 'n-dev', to: 'n-rev', mode: 'auto', transform: 'roleWrap', gate: 'none' },
-      { id: 'e-loop', from: 'n-rev', to: 'n-dev', mode: 'auto', transform: 'roleWrap', gate: 'loop', maxLoops: 2 },
-      { id: 'e-end', from: 'n-rev', to: FLOW_END, mode: 'auto', transform: 'roleWrap', gate: 'none' }
+      { id: 'e-s', from: FLOW_START, to: 'n-dev', mode: 'auto', gate: 'none' },
+      { id: 'e-f', from: 'n-dev', to: 'n-rev', mode: 'auto', gate: 'none' },
+      { id: 'e-loop', from: 'n-rev', to: 'n-dev', mode: 'auto', gate: 'loop', maxLoops: 2 },
+      { id: 'e-end', from: 'n-rev', to: FLOW_END, mode: 'auto', gate: 'none' }
     ],
     maxRetries: 2,
     maxSteps: 20,
@@ -359,9 +351,9 @@ function humanGate(gate: 'none' | 'passFail'): FlowDef {
     ...base,
     nodes: [dev, human, after],
     edges: [
-      { id: 'e1', from: dev.id, to: human.id, mode: 'auto', transform: 'roleWrap', gate: 'none' },
-      { id: 'e2', from: human.id, to: after.id, mode: 'auto', transform: 'roleWrap', gate, backTo: gate === 'passFail' ? dev.id : undefined },
-      { id: 'e3', from: after.id, to: FLOW_END, mode: 'auto', transform: 'roleWrap', gate: 'none' }
+      { id: 'e1', from: dev.id, to: human.id, mode: 'auto', gate: 'none' },
+      { id: 'e2', from: human.id, to: after.id, mode: 'auto', gate, backTo: gate === 'passFail' ? dev.id : undefined },
+      { id: 'e3', from: after.id, to: FLOW_END, mode: 'auto', gate: 'none' }
     ]
   }
 }
@@ -418,7 +410,7 @@ test('any node with a passFail exit yields a verdict', () => {
   const flow: FlowDef = {
     ...chain('auto'),
     nodes: [{ ...chain('auto').nodes[0], role: 'role-custom', channel: { kind: 'pty', toolId: 'kimi', sessionId: 's', ptyId: 'p' } }],
-    edges: [{ id: 'e-end', from: 'n-a', to: FLOW_END, mode: 'auto', transform: 'roleWrap', gate: 'passFail' }]
+    edges: [{ id: 'e-end', from: 'n-a', to: FLOW_END, mode: 'auto', gate: 'passFail' }]
   }
   assert.equal(expectsVerdict(flow, 'n-a'), true)
   const started = startRun(flow, 'proj', '测试')

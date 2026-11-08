@@ -43,6 +43,7 @@ import { defaultShellPath } from './platform'
 import { flowAsPipeline } from './flow/compat.ts'
 import { ensureProjectFlows, loadAllFlows, loadAllRuns, selectedFlow, persistAllFlows } from './flow/model.ts'
 import { loadCustomRoles, type RoleDef } from './flow/roles.ts'
+import type { ScriptRow } from './flow/scripts.ts'
 import type { FlowRun, ProjectFlows } from './flow/types.ts'
 import type {
   AppMode,
@@ -227,6 +228,9 @@ export const store = reactive({
   bridgePaneMode: 'edit' as 'edit' | 'run',
   bridgeSelectedNodeId: '',
   bridgeSelectedEdgeId: '',
+  bridgeFlowSettings: false,
+  bridgeNodeTab: 'about' as 'about' | 'inputs' | 'outputs' | 'exits',
+  scriptApproval: null as { projectId: string; nodeId?: string; scripts: ScriptRow[] } | null,
   customRoles: [] as RoleDef[],
   projectFlows: {} as Record<string, ProjectFlows>,
   runs: {} as Record<string, FlowRun | null>,
@@ -1150,6 +1154,14 @@ export async function bindLiveSession(ptyId: string, sessionId: string, title?: 
   } catch {
     /* keep the local bind until the next live list */
   }
+}
+
+// The window started a new conversation itself, so the old binding no longer holds.
+export async function switchLiveSession(ptyId: string, sessionId: string) {
+  const info = await api.ptySwitchSession(ptyId, sessionId)
+  const idx = store.live.findIndex((item) => item.ptyId === ptyId)
+  if (idx >= 0) store.live[idx] = { ...store.live[idx], ...info, openedAt: info.openedAt ?? store.live[idx].openedAt }
+  if (store.activePtyId === ptyId && idx >= 0) store.focusedSession = focusedFromLive(store.live[idx])
 }
 
 async function reconcileLiveBinds(projectId: string) {

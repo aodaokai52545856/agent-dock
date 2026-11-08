@@ -44,9 +44,9 @@ function flow(experience?: FlowExperience): FlowDef {
       { id: 'pm', title: '人工', role: 'pm', roleContract: '确认', channel: { kind: 'human' } }
     ],
     edges: [
-      { id: 'e0', from: FLOW_START, to: 'dev', mode: 'auto', transform: 'roleWrap', gate: 'none' },
-      { id: 'e1', from: 'dev', to: 'cr', mode: 'auto', transform: 'roleWrap', gate: 'none' },
-      { id: 'e2', from: 'cr', to: FLOW_END, mode: 'auto', transform: 'roleWrap', gate: 'passFail', backTo: 'dev' }
+      { id: 'e0', from: FLOW_START, to: 'dev', mode: 'auto', gate: 'none' },
+      { id: 'e1', from: 'dev', to: 'cr', mode: 'auto', gate: 'none' },
+      { id: 'e2', from: 'cr', to: FLOW_END, mode: 'auto', gate: 'passFail', backTo: 'dev' }
     ],
     experience,
     maxRetries: 2,

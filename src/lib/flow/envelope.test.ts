@@ -41,7 +41,6 @@ const flow: FlowDef = {
       from: 'n-rev',
       to: 'n-dev',
       mode: 'manual',
-      transform: 'roleWrap',
       gate: 'none'
     }
   ],
@@ -63,7 +62,7 @@ test('roleWrap names both roles and keeps the contract', () => {
     verdict: 'fail',
     artifacts: [{ kind: 'text', body: '缺测试\nVERDICT: FAIL' }]
   })
-  const text = renderEnvelope(env, { transform: 'roleWrap', contract: ROLE_CONTRACTS.developer })
+  const text = renderEnvelope(env, { contract: ROLE_CONTRACTS.developer })
   assert.match(text, /【编排接力 · 审查者 → 开发者】/)
   assert.match(text, /本轮任务：修闸门/)
   assert.match(text, /结论：FAIL/)
@@ -93,7 +92,7 @@ test('transform sets causationId and target role', () => {
     task: '修闸门',
     done: 'FAIL'
   })
-  const next = transformEnvelope(flow.edges[0], env, flow, 'n-dev')
+  const next = transformEnvelope(env, flow, 'n-dev')
   assert.equal(next.causationId, 'env-1')
   assert.notEqual(next.id, 'env-1')
   assert.equal(next.toNode, 'n-dev')

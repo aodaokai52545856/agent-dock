@@ -1,11 +1,12 @@
 import { parseReviewVerdict } from '../reviewVerdict.ts'
+import { sectionBody } from './sections.ts'
 import type { ReviewVerdict } from '../types.ts'
-import { channelSupportsAuto, ptyToolLabel } from './channels.ts'
+import { channelSupportsAuto, nodeHasContract, ptyToolLabel } from './channels.ts'
 import type { ChannelBinding, FlowDef, FlowNode, NodeOutput } from './types.ts'
 
 export const DOCK_DIR = '.agentDock'
 const CONCLUSION = '## 结论'
-const PLACEHOLDER = /\{\{[^{}\n]*\}\}/
+const PLACEHOLDER = /\{\{[^{}\n]*\}\}/g
 
 export type ResolvedRef = {
   // Relative to `.agentDock/`, as the file commands take it.
@@ -31,9 +32,7 @@ export function resolveRef(ref: string, taskDir: string): ResolvedRef | null {
   return { rel, path: `${DOCK_DIR}/${rel}` }
 }
 
-export function nodeHasContract(node: FlowNode) {
-  return Boolean(node.inputs?.length || node.outputs?.length)
-}
+export { nodeHasContract, sectionBody }
 
 export function flowHasContract(flow: FlowDef) {
   return Boolean(flow.experience) || flow.nodes.some(nodeHasContract)
@@ -97,9 +96,9 @@ export function renderContractBlock(inputs: InputBlock[], outputs: OutputBlock[]
   }
   for (const item of outputs) {
     const required = item.sections.length ? `必须包含：${item.sections.join('、')}。` : ''
-    const template = item.template ? `按模板 ${item.template} 的结构写。` : ''
+    const template = item.template ? `按模板 ${item.template} 的结构写，填完所有占位符。` : ''
     if (item.capture === 'file') {
-      lines.push(`把产物写到 ${item.path}。${template}填完所有占位符，${required}`)
+      lines.push(`把产物写到 ${item.path}。${template}${required}`)
     } else {
       lines.push(`在回复里给出完整产物，Dock 会保存到 ${item.path}。${template}${required}`)
     }
@@ -107,24 +106,16 @@ export function renderContractBlock(inputs: InputBlock[], outputs: OutputBlock[]
   return lines.join('\n')
 }
 
-export function sectionBody(text: string, heading: string) {
-  const lines = text.split(/\r?\n/)
-  const level = /^#+/.exec(heading)?.[0].length ?? 0
-  const start = lines.findIndex((line) => line.trim() === heading)
-  if (start < 0) return null
-  const body: string[] = []
-  for (const line of lines.slice(start + 1)) {
-    const depth = /^(#+)\s/.exec(line)?.[1].length ?? 0
-    if (depth && depth <= level) break
-    body.push(line)
-  }
-  return body.join('\n').trim()
+export function templatePlaceholders(template: string) {
+  return [...new Set(template.match(PLACEHOLDER) ?? [])]
 }
 
-export function validateOutputText(path: string, text: string, sections: string[]): string | null {
+// Only the template's own placeholders can be left over. A report may well say it
+// found no `{{}}` anywhere, and that sentence is not a leftover.
+export function validateOutputText(path: string, text: string, sections: string[], placeholders: string[] = []): string | null {
   if (!text.trim()) return `产物 ${path} 是空的`
-  const placeholder = PLACEHOLDER.exec(text)
-  if (placeholder) return `产物 ${path} 还有模板占位符：${placeholder[0]}`
+  const left = placeholders.find((item) => text.includes(item))
+  if (left) return `产物 ${path} 还有模板占位符：${left}`
   for (const heading of sections) {
     const body = sectionBody(text, heading)
     if (body === null) return `产物 ${path} 缺少段落：${heading}`

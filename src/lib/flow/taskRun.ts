@@ -4,11 +4,13 @@ import {
   renderContractBlock,
   resolveRef,
   templateRel,
+  templatePlaceholders,
   validateOutputText,
   verdictFromDocument,
   type InputBlock,
   type OutputBlock
 } from './contract.ts'
+import { readConclusion } from './exits.ts'
 import { validateLessonText } from './lessons.ts'
 import type { AdapterOutcome, FlowNode, FlowRun, StepFile } from './types.ts'
 
@@ -22,6 +24,7 @@ export type PreparedStep = {
   inputs: StepFile[]
   // Output hashes before the node ran, to tell a rewrite from a stale file.
   before: Record<string, string | null>
+  placeholders: Record<string, string[]>
 }
 
 export function attemptOf(run: FlowRun, nodeId: string) {
@@ -37,6 +40,13 @@ export function attemptCounts(run: FlowRun) {
   return counts
 }
 
+// Rework means the node finished and was sent back. A first try that failed has
+// nothing to rework, and whatever would send it back does not exist yet.
+export function completedNodes(run: FlowRun) {
+  const own = run.steps.filter((step) => step.status === 'completed' && step.purpose !== 'lesson').map((step) => step.nodeId)
+  return [...new Set([...(run.priorCompleted ?? []), ...own])]
+}
+
 export function taskOf(run: FlowRun) {
   return run.taskDir || ''
 }
@@ -44,7 +54,7 @@ export function taskOf(run: FlowRun) {
 async function collectInputs(fs: DockFs, node: FlowNode, run: FlowRun) {
   const rows: InputBlock[] = []
   const inputs: StepFile[] = []
-  const reworked = attemptOf(run, node.id) > 1
+  const reworked = completedNodes(run).includes(node.id)
   const inline = !channelReadsFiles(node.channel)
   for (const input of node.inputs ?? []) {
     if (input.when === 'reworked' && !reworked) continue
@@ -61,6 +71,7 @@ async function collectInputs(fs: DockFs, node: FlowNode, run: FlowRun) {
 async function prepareOutputs(fs: DockFs, node: FlowNode, run: FlowRun) {
   const rows: OutputBlock[] = []
   const before: Record<string, string | null> = {}
+  const placeholders: Record<string, string[]> = {}
   for (const output of node.outputs ?? []) {
     const target = resolveRef(output.path, taskOf(run))
     if (!target) return { error: `输出写法不对：${output.path}` }
@@ -73,6 +84,7 @@ async function prepareOutputs(fs: DockFs, node: FlowNode, run: FlowRun) {
       current = await fs.write(target.rel, template.text)
     }
     before[output.path] = current
+    placeholders[output.path] = template ? templatePlaceholders(template.text) : []
     rows.push({
       path: target.path,
       capture,
@@ -80,7 +92,7 @@ async function prepareOutputs(fs: DockFs, node: FlowNode, run: FlowRun) {
       template: templatePath ? resolveRef(`project:${templatePath}`, '')?.path : undefined
     })
   }
-  return { rows, before }
+  return { rows, before, placeholders }
 }
 
 export async function prepareStep(fs: DockFs, node: FlowNode, run: FlowRun): Promise<PreparedStep | { error: string }> {
@@ -92,7 +104,8 @@ export async function prepareStep(fs: DockFs, node: FlowNode, run: FlowRun): Pro
     return {
       block: renderContractBlock(inputs.rows, outputs.rows),
       inputs: inputs.inputs,
-      before: outputs.before
+      before: outputs.before,
+      placeholders: outputs.placeholders
     }
   } catch (err) {
     return { error: err instanceof Error ? err.message : String(err) }
@@ -127,21 +140,27 @@ export async function finishStep(
   const failed = (error: string) => ({ outcome: { ...outcome, ok: false, error }, outputs })
   if (outcome.unconfirmed) return failed('这一步没有确认完成，无法校验产物')
   let verdict = outcome.verdict
+  const documents: string[] = []
   try {
     for (let index = 0; index < total; index += 1) {
       const row = await collectOutput(fs, node, run, prepared, outcome, index)
       if ('error' in row) return failed(row.error ?? '')
       outputs.push({ ref: (node.outputs ?? [])[index].path, sha256: row.sha256 })
       const output = (node.outputs ?? [])[index]
-      const problem = validateOutputText(row.path, row.text, row.sections)
+      const problem = validateOutputText(row.path, row.text, row.sections, prepared.placeholders[output.path])
         || (output.lesson ? validateLessonText(row.path, row.text, output.lesson) : null)
       if (problem) return failed(problem)
-      if (gated) verdict = verdictFromDocument(row.text) ?? verdict
+      documents.push(row.text)
+      if (gated && outcome.conclusion === undefined) verdict = verdictFromDocument(row.text) ?? verdict
     }
   } catch (err) {
     return failed(err instanceof Error ? err.message : String(err))
   }
-  return { outcome: { ...outcome, verdict }, outputs }
+  // An exit code outranks anything written down.
+  const conclusion = outcome.conclusion !== undefined || !node.exits?.length
+    ? outcome.conclusion
+    : readConclusion(documents, outcome.text)
+  return { outcome: { ...outcome, verdict, conclusion }, outputs }
 }
 
 export function runRecord(run: FlowRun) {
@@ -150,10 +169,12 @@ export function runRecord(run: FlowRun) {
     id: run.id,
     flowId: run.flowId,
     task: run.task,
+    profile: run.profile,
     status: run.status,
     error: run.lastError || undefined,
     createdAt: run.createdAt,
     lessons: run.lessons,
+    freshNodes: run.freshNodes,
     steps: run.steps.map((step) => {
       const attempt = (attempts.get(step.nodeId) ?? 0) + (step.purpose === 'lesson' ? 0 : 1)
       attempts.set(step.nodeId, attempt)
@@ -166,6 +187,7 @@ export function runRecord(run: FlowRun) {
         endedAt: step.endedAt,
         error: step.error,
         verdict: step.status === 'completed' ? step.envelope?.verdict : undefined,
+        conclusion: step.envelope?.conclusion,
         inputs: step.inputs,
         outputs: step.outputs
       }

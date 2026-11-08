@@ -97,7 +97,6 @@ export function connectForward(flow: FlowDef, fromId: string, toId: string): Flo
           from: fromId,
           to: toId,
           mode: 'auto',
-          transform: 'roleWrap',
           gate: 'loop',
           maxLoops: MAX_LOOPS_DEFAULT
         }
@@ -120,7 +119,6 @@ export function connectForward(flow: FlowDef, fromId: string, toId: string): Flo
         from: fromId,
         to: toId,
         mode: 'auto',
-        transform: 'roleWrap',
         gate: 'none'
       }
     ]

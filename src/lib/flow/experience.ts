@@ -59,7 +59,7 @@ export function validateExperience(flow: FlowDef): string | null {
   if (!experience.authors.length) return '经验配置没有指定作者节点（authors）'
   const worker = (id: string) => {
     const node = flow.nodes.find((item) => item.id === id)
-    return node && node.channel.kind !== 'human' ? node : null
+    return node && node.channel.kind !== 'human' && node.channel.kind !== 'script' ? node : null
   }
   for (const id of experience.authors) {
     const author = worker(id)

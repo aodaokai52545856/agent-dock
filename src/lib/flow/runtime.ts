@@ -1,10 +1,10 @@
 import * as api from '../api.ts'
 import { appearanceFromSettings, resolvedTheme, systemPrefersLight } from '../appearance.ts'
-import { jumpToLive, rememberOpened, showToast, store, watchPendingSession } from '../store.ts'
+import { jumpToLive, rememberOpened, showToast, store, switchLiveSession, watchPendingSession } from '../store.ts'
 import { runChannel } from './adapters.ts'
-import { defaultChannel, firstCodexNode, validateFlowPtyBindings } from './channels.ts'
+import { defaultChannel, firstCodexNode, validateFlowPtyBindings, validateSessions } from './channels.ts'
 import { connectForward, deleteEdge, placeNode, placeTerminal, withNodePoints } from './chartLayout.ts'
-import { flowHasContract, nodeHasContract, taskDirName, validateContract } from './contract.ts'
+import { flowHasContract, nodeHasContract, resolveRef, taskDirName, validateContract } from './contract.ts'
 import { dockFs } from './dockFs.ts'
 import {
   afterOutcome,
@@ -21,8 +21,20 @@ import {
   startRun
 } from './engine.ts'
 import { renderEnvelope, withVerdictTicket } from './envelope.ts'
+import { exitTicket, validateExits } from './exits.ts'
+import {
+  isScriptApproved,
+  loadApprovals,
+  saveApprovals,
+  unapprovedScripts,
+  validateScripts,
+  withApprovedScripts
+} from './scripts.ts'
+import { startsFresh } from './session.ts'
+import { connectExit, convertToExits, routesByExits } from './routing.ts'
 import { collectLessons, harvestLessons, lessonTurnAuthor, noteLessonRequest, planStep, validateExperience } from './experience.ts'
 import { FLOWS_DIR, flowFilePath, flowFileText, mergeRepoFlows, parseFlowFile } from './flowFiles.ts'
+import { preflight, preflightMessage, selectedProfile, validateProfiles } from './preflight.ts'
 import {
   appendNode,
   createCustomNode,
@@ -34,8 +46,9 @@ import {
   ensureProjectFlows as ensureBundle
 } from './model.ts'
 import { addCustomRole as pushCustomRole, roleContract, roleLabel } from './roles.ts'
-import { attemptCounts, finishStep, prepareStep, runRecord, type PreparedStep } from './taskRun.ts'
+import { attemptCounts, completedNodes, finishStep, prepareStep, runRecord, type PreparedStep } from './taskRun.ts'
 import { flowFromTemplate } from './templates.ts'
+import { FLOW_START } from './types.ts'
 import type {
   EngineEvent,
   EngineResult,
@@ -233,7 +246,12 @@ async function drive(flow: FlowDef, result: EngineResult) {
   const seq = ++runSeq
   let run = result.run
   let event: EngineEvent = result.event
-  setRun(run)
+  // A finished run may still owe lessons. Until that is known it must not show as
+  // completed, which would unlock the next slice past the approval.
+  const publish = () => {
+    if (event.type !== 'complete') setRun(run)
+  }
+  publish()
 
   while (event.type === 'execute') {
     const execute = event
@@ -256,6 +274,14 @@ async function drive(flow: FlowDef, result: EngineResult) {
       setRun(run)
       break
     }
+    // The flow file may have changed since the run started, while it waited for a person.
+    if (node.channel.kind === 'script' && !isScriptApproved(loadApprovals(localStorage), run.projectId, node.channel.command)) {
+      const refused = afterOutcome(flow, run, { ok: false, text: '', error: `脚本命令没有确认过，未运行：${node.channel.command}` })
+      run = refused.run
+      event = refused.event
+      setRun(run)
+      continue
+    }
     const step = run.steps[run.steps.length - 1]
     const gated = step?.purpose !== 'lesson' && expectsVerdict(flow, node.id)
     const plan = planStep(flow, node, run, step)
@@ -275,13 +301,28 @@ async function drive(flow: FlowDef, result: EngineResult) {
       setRun(run)
     }
     const contract = [node.roleContract, prepared?.block, plan.note].filter(Boolean).join('\n\n')
-    const contracted = { ...plan.node, roleContract: gated ? withVerdictTicket(contract) : contract }
+    const ticketed = !gated ? contract : node.exits?.length ? `${contract}\n${exitTicket(node)}`.trim() : withVerdictTicket(contract)
+    const contracted = { ...plan.node, roleContract: ticketed }
     let outcome = await runChannel(contracted, execute.envelope, {
       projectId: run.projectId,
       send: execute.send,
       // Verbatim text would drop the input list and the output requirements.
       verbatim: execute.verbatim && !prepared,
-      live: store.live,
+      fresh: startsFresh(node, run, step),
+      async onFresh(sessionId) {
+        if (seq !== runSeq) return
+        run.freshNodes = [...(run.freshNodes ?? []), node.id]
+        if (node.channel.kind === 'pty' || node.channel.kind === 'ompRpc') {
+          node.channel.sessionId = sessionId
+          persistFlows()
+        }
+        setRun(run)
+      },
+      switchSession: switchLiveSession,
+      // Read on every use: the list is replaced as windows come and go.
+      get live() {
+        return store.live
+      },
       ptyDataAt: store.ptyDataAt,
       cursorApiKey: store.settings.cursorApiKey,
       isCurrent: () => seq === runSeq,
@@ -308,7 +349,7 @@ async function drive(flow: FlowDef, result: EngineResult) {
     const next = afterOutcome(flow, run, outcome)
     run = next.run
     event = next.event
-    setRun(run)
+    publish()
   }
 
   if (event.type === 'waitManual') {
@@ -331,12 +372,24 @@ async function drive(flow: FlowDef, result: EngineResult) {
       showToast('流程已通过：审批经验后本片才算走完')
       return
     }
+    setRun(run)
     showToast('本片流程已走完')
     return
   }
   if (event.type === 'fail') {
     showToast(event.error)
   }
+}
+
+async function preflightProblems(flow: FlowDef, projectId: string, profile: string | undefined) {
+  const { problems, reached } = preflight(flow, profile)
+  const refs = new Set(reached.flatMap((node) => (node.inputs ?? []).filter((input) => input.required).map((input) => input.ref)))
+  const fs = dockFs(projectId)
+  for (const ref of refs) {
+    const target = ref.startsWith('project:') ? resolveRef(ref, '') : null
+    if (target && !(await fs.read(target.rel))) problems.push(`必读文件不存在：${target.path}`)
+  }
+  return problems
 }
 
 export async function startSelectedFlow(nodeId?: string) {
@@ -350,22 +403,52 @@ export async function startSelectedFlow(nodeId?: string) {
   await syncProjectFlows(projectId)
   const flow = currentFlow()
   if (!flow) return
-  const bindError = validateFlowPtyBindings(flow, store.live, projectId) || validateContract(flow) || validateExperience(flow)
+  const bindError = validateFlowPtyBindings(flow, store.live, projectId) || validateSessions(flow) || validateExits(flow) || validateProfiles(flow) || validateScripts(flow) || validateContract(flow) || validateExperience(flow)
   if (bindError) {
     showToast(bindError)
+    return
+  }
+  const profile = selectedProfile(flow)
+  // A rerun from a node continues a task whose files already exist.
+  const problems = nodeId ? [] : await preflightProblems(flow, projectId, profile)
+  if (problems.length) {
+    showToast(preflightMessage(problems))
+    return
+  }
+  const scripts = unapprovedScripts(flow, loadApprovals(localStorage), projectId)
+  if (scripts.length) {
+    store.bridgePaneMode = 'run'
+    store.scriptApproval = { projectId, nodeId, scripts }
     return
   }
   const previous = currentRun()
   store.bridgePaneMode = 'run'
   await refreshGit()
-  const result = startRun(flow, projectId, flow.draftTask, nodeId)
+  const result = startRun(flow, projectId, flow.draftTask, nodeId, profile)
   if (flowHasContract(flow)) {
     // Rerunning from a failed node continues the same task's documents.
     const resumed = nodeId && previous?.flowId === flow.id ? previous.taskDir : ''
     result.run.taskDir = resumed || taskDirName(result.run.task, result.run.createdAt, result.run.id)
-    if (resumed && previous) result.run.priorAttempts = attemptCounts(previous)
+    if (resumed && previous) {
+      result.run.priorAttempts = attemptCounts(previous)
+      result.run.priorCompleted = completedNodes(previous)
+      result.run.freshNodes = previous.freshNodes
+    }
   }
   await drive(flow, result)
+}
+
+export async function approveScripts() {
+  const pending = store.scriptApproval
+  if (!pending) return
+  store.scriptApproval = null
+  const commands = pending.scripts.map((row) => row.command)
+  saveApprovals(localStorage, withApprovedScripts(loadApprovals(localStorage), pending.projectId, commands))
+  await startSelectedFlow(pending.nodeId)
+}
+
+export function declineScripts() {
+  store.scriptApproval = null
 }
 
 export async function startReviewOnly() {
@@ -464,19 +547,24 @@ export function setPaneMode(mode: 'edit' | 'run') {
   store.bridgePaneMode = mode
 }
 
-export function setSelectedNode(nodeId: string) {
+export function setSelectedNode(nodeId: string, tab?: typeof store.bridgeNodeTab) {
+  if (store.bridgeSelectedNodeId !== nodeId) store.bridgeNodeTab = 'about'
+  if (tab) store.bridgeNodeTab = tab
   store.bridgeSelectedNodeId = nodeId
   store.bridgeSelectedEdgeId = ''
+  store.bridgeFlowSettings = false
 }
 
 export function setSelectedEdge(edgeId: string) {
   store.bridgeSelectedEdgeId = edgeId
   store.bridgeSelectedNodeId = ''
+  store.bridgeFlowSettings = false
 }
 
 export function clearSelection() {
   store.bridgeSelectedNodeId = ''
   store.bridgeSelectedEdgeId = ''
+  store.bridgeFlowSettings = false
 }
 
 export function createPairFlow() {
@@ -568,9 +656,8 @@ export function addRoleNodeAt(role: RoleId, point?: { x: number; y: number }) {
   if (!flow) return
   const next = appendNode(flow, createCustomNode(role, defaultChannel(role), point))
   patchFlow(next)
-  const id = next.nodes[next.nodes.length - 1]?.id || ''
-  store.bridgeSelectedNodeId = id
-  store.bridgeSelectedEdgeId = ''
+  // A new node opens on its description, not on whichever tab the last one showed.
+  setSelectedNode(next.nodes[next.nodes.length - 1]?.id || '', 'about')
 }
 
 export function moveFlowNode(nodeId: string, x: number, y: number) {
@@ -582,7 +669,38 @@ export function moveFlowNode(nodeId: string, x: number, y: number) {
 export function connectFlowNodes(fromId: string, toId: string) {
   const flow = currentFlow()
   if (!flow) return
+  if (fromId !== FLOW_START && routesByExits(flow)) {
+    patchFlow(connectExit(flow, fromId, toId))
+    store.bridgeSelectedNodeId = fromId
+    store.bridgeSelectedEdgeId = ''
+    store.bridgeNodeTab = 'exits'
+    return
+  }
   patchFlow(connectForward(flow, fromId, toId))
+}
+
+export function openFlowSettings() {
+  store.bridgeSelectedNodeId = ''
+  store.bridgeSelectedEdgeId = ''
+  store.bridgeFlowSettings = true
+}
+
+export function patchCurrentFlow(patch: Partial<FlowDef>) {
+  const flow = currentFlow()
+  if (flow) patchFlow({ ...flow, ...patch })
+}
+
+// Converting changes how the flow runs, so it only happens when every edge maps
+// onto an exit with the same meaning.
+export function convertCurrentFlow() {
+  const flow = currentFlow()
+  if (!flow) return null
+  const result = convertToExits(flow)
+  if ('flow' in result) {
+    patchFlow(result.flow)
+    showToast('已转换为出口')
+  }
+  return result
 }
 
 export function disconnectEdge(edgeId: string) {
@@ -719,6 +837,11 @@ export function updateNode(nodeId: string, patch: Partial<FlowNode>) {
     return next
   })
   patchFlow({ ...flow, nodes })
+}
+
+export function setDraftProfile(draftProfile: string) {
+  const flow = currentFlow()
+  if (flow) patchFlow({ ...flow, draftProfile })
 }
 
 export function setEdgeMode(edgeId: string, mode: 'auto' | 'manual') {

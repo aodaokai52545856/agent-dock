@@ -11,13 +11,28 @@ import {
   seedProjectFlows,
   type StorageLike
 } from './model.ts'
-import { FLOW_END } from './types.ts'
+import { FLOW_END, type FlowDef } from './types.ts'
 import { FLOW_TEMPLATES, flowFromTemplate } from './templates.ts'
 import { emptyPipeline } from '../pipelineModel.ts'
 
 function test(name: string, fn: () => void) {
   fn()
   console.log(`ok ${name}`)
+}
+
+// The seed flow routes by exits now; these tests cover the old edges, which stay supported.
+function legacy(): FlowDef {
+  const flow = seedProjectFlows().flows[0]
+  const [dev, rev] = flow.nodes
+  return {
+    ...flow,
+    nodes: flow.nodes.map((node) => ({ ...node, exits: undefined })),
+    edges: [
+      ...flow.edges,
+      { id: 'e-fwd', from: dev.id, to: rev.id, mode: 'auto', gate: 'none' },
+      { id: 'e-end', from: rev.id, to: FLOW_END, mode: 'auto', gate: 'passFail', backTo: dev.id }
+    ]
+  }
 }
 
 function memory(): StorageLike {
@@ -69,7 +84,7 @@ test('empty storage seeds the developer-reviewer pair', () => {
   assert.equal(seeded.flows.length, 1)
   assert.equal(seeded.flows[0].templateId, 'dev-review')
   assert.equal(seeded.flows[0].nodes.length, 2)
-  assert.ok(seeded.flows[0].edges.some((edge) => edge.backTo === seeded.flows[0].nodes[0].id))
+  assert.ok(seeded.flows[0].nodes[1].exits?.some((exit) => exit.on === 'FAIL' && exit.to === seeded.flows[0].nodes[0].id))
 })
 
 test('old pipeline storage migrates on load', () => {
@@ -122,7 +137,7 @@ test('adding a node does not auto-wire it', () => {
   assert.equal(added.edges.some((edge) => edge.from === last.id || edge.to === last.id), false)
 })
 
-test('load repairs passFail gates that sat on a forward hop', () => {
+test('load keeps a gate in the middle of a flow', () => {
   const storage = memory()
   const seeded = seedProjectFlows()
   const flow = seeded.flows[0]
@@ -130,27 +145,18 @@ test('load repairs passFail gates that sat on a forward hop', () => {
   extra.id = 'n-extra'
   flow.nodes.push(extra)
   flow.edges = [
-    { id: 'e1', from: flow.nodes[0].id, to: flow.nodes[1].id, mode: 'auto', transform: 'roleWrap', gate: 'none' },
-    {
-      id: 'e2',
-      from: flow.nodes[1].id,
-      to: extra.id,
-      mode: 'auto',
-      transform: 'roleWrap',
-      gate: 'passFail',
-      backTo: flow.nodes[0].id
-    }
+    { id: 'e1', from: flow.nodes[0].id, to: flow.nodes[1].id, mode: 'auto', gate: 'none' },
+    { id: 'e2', from: flow.nodes[1].id, to: extra.id, mode: 'auto', gate: 'passFail', backTo: flow.nodes[0].id }
   ]
   persistAllFlows({ p1: { ...seeded, flows: [flow] } }, storage)
   const loaded = loadAllFlows(storage).p1.flows[0]
-  const hop = loaded.edges.find((edge) => edge.from === flow.nodes[1].id && edge.to === extra.id)
-  assert.equal(hop?.gate, 'none')
-  const terminal = loaded.edges.find((edge) => edge.to === FLOW_END)
-  assert.equal(terminal?.gate, 'passFail')
+  const hop = loaded.edges.find((edge) => edge.id === 'e2')
+  assert.equal(hop?.to, extra.id)
+  assert.equal(hop?.gate, 'passFail')
 })
 
 test('appending onto a passFail end edge does not leave the gate on the forward hop', () => {
-  const flow = seedProjectFlows().flows[0]
+  const flow = legacy()
   const added = appendNode(flow, createCustomNode('pm', { kind: 'human' }))
   const mid = added.nodes[1]
   const last = added.nodes[2]
@@ -163,7 +169,7 @@ test('appending onto a passFail end edge does not leave the gate on the forward 
 })
 
 test('removeNode drops the node and its wires without stitching', () => {
-  const flow = seedProjectFlows().flows[0]
+  const flow = legacy()
   const extra = appendNode(flow, createCustomNode('pm', { kind: 'human' }))
   const mid = extra.nodes[1]
   const trimmed = removeNode(extra, mid.id)
@@ -173,7 +179,7 @@ test('removeNode drops the node and its wires without stitching', () => {
 })
 
 test('removeNode can clear the last role node', () => {
-  const flow = seedProjectFlows().flows[0]
+  const flow = legacy()
   let next = flow
   for (const node of [...flow.nodes]) next = removeNode(next, node.id)
   assert.equal(next.nodes.length, 0)
@@ -181,7 +187,7 @@ test('removeNode can clear the last role node', () => {
 
 test('two nodes get a fail-back loop', () => {
   const one = {
-    ...seedProjectFlows().flows[0],
+    ...legacy(),
     nodes: [createCustomNode('developer', { kind: 'cursorSdk', agentId: '' })],
     edges: []
   }

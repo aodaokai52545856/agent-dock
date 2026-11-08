@@ -21,9 +21,9 @@ function flow(): FlowDef {
       { id: 'cur', title: '补丁', role: 'developer', roleContract: '打补丁', x: 10, y: 220, channel: { kind: 'cursorSdk', agentId: 'agent-1' } }
     ],
     edges: [
-      { id: 'e0', from: FLOW_START, to: 'dev', mode: 'auto', transform: 'roleWrap', gate: 'none' },
-      { id: 'e1', from: 'dev', to: 'cr', mode: 'auto', transform: 'roleWrap', gate: 'none' },
-      { id: 'e2', from: 'cr', to: FLOW_END, mode: 'auto', transform: 'roleWrap', gate: 'passFail', backTo: 'dev' }
+      { id: 'e0', from: FLOW_START, to: 'dev', mode: 'auto', gate: 'none' },
+      { id: 'e1', from: 'dev', to: 'cr', mode: 'auto', gate: 'none' },
+      { id: 'e2', from: 'cr', to: FLOW_END, mode: 'auto', gate: 'passFail', backTo: 'dev' }
     ],
     maxRetries: 3,
     maxSteps: 12,

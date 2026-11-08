@@ -1,16 +1,20 @@
 import type { LivePtyInfo, ToolId } from '../types.ts'
 import { findRole, roleLabel } from './roles.ts'
-import type { ChannelBinding, ChannelKind, CodexChannel, FlowDef, FlowNode, PtyChannel, RoleId } from './types.ts'
+import type { ChannelBinding, ChannelKind, CodexChannel, FlowDef, FlowNode, NodeSession, PtyChannel, RoleId } from './types.ts'
 
 export const CHANNEL_LABEL: Record<ChannelKind, string> = {
   codexApp: 'Codex 应用程序',
   pty: '终端窗口',
   ompRpc: 'OMP 封装会话（RPC）',
   cursorSdk: 'Cursor SDK',
-  human: '人工'
+  human: '人工',
+  script: '脚本'
 }
 
 export const AUTO_PTY_TOOLS: ToolId[] = ['grokbuild', 'kimi', 'claude']
+
+// Typed into the window to start a new conversation. OMP does it over RPC.
+export const FRESH_COMMANDS: Partial<Record<ToolId, string>> = { claude: '/clear', grokbuild: '/new' }
 
 export function channelKindLabel(kind: ChannelKind) {
   return CHANNEL_LABEL[kind]
@@ -41,8 +45,28 @@ export function defaultChannel(role: RoleId): ChannelBinding {
 }
 
 export function channelSupportsAuto(channel: ChannelBinding) {
-  if (channel.kind === 'codexApp' || channel.kind === 'cursorSdk' || channel.kind === 'human') return true
+  if (channel.kind === 'codexApp' || channel.kind === 'cursorSdk' || channel.kind === 'human' || channel.kind === 'script') return true
   return (channel.kind === 'pty' || channel.kind === 'ompRpc') && (channel.toolId === 'omp' || AUTO_PTY_TOOLS.includes(channel.toolId))
+}
+
+export function channelSupportsFresh(channel: ChannelBinding) {
+  if (channel.kind !== 'pty' && channel.kind !== 'ompRpc') return false
+  return channel.toolId === 'omp' || Boolean(FRESH_COMMANDS[channel.toolId])
+}
+
+export function nodeHasContract(node: FlowNode) {
+  return Boolean(node.inputs?.length || node.outputs?.length)
+}
+
+// Nodes that hand over through files need no conversation history. Older relay
+// flows pass everything through it, so they keep their sessions.
+export function nodeSession(node: FlowNode): NodeSession {
+  return node.session ?? (nodeHasContract(node) && channelSupportsFresh(node.channel) ? 'fresh' : 'reuse')
+}
+
+export function validateSessions(flow: FlowDef): string | null {
+  const node = flow.nodes.find((item) => item.session === 'fresh' && !channelSupportsFresh(item.channel))
+  return node ? `节点「${node.title || roleLabel(node.role)}」的通道不能清空上下文，不能用 session: fresh` : null
 }
 
 export function ptyToolLabel(toolId: ToolId) {
@@ -66,6 +90,7 @@ export function describeChannel(channel: ChannelBinding, live: LivePtyInfo[] = [
     return `未绑定的 ${tool} 窗口`
   }
   if (channel.kind === 'cursorSdk') return 'Cursor SDK'
+  if (channel.kind === 'script') return `脚本 · ${channel.command.length > 24 ? `${channel.command.slice(0, 23)}…` : channel.command}`
   return '人工确认'
 }
 
@@ -150,6 +175,8 @@ export function ptyBindError(node: FlowNode, reason: PtyInspectReason) {
 
 function nodeNeedsAutoSession(flow: FlowDef, node: FlowNode) {
   if ((node.channel.kind !== 'pty' && node.channel.kind !== 'ompRpc') || !channelSupportsAuto(node.channel)) return false
+  // Clearing the context gives the window a session of its own.
+  if (nodeSession(node) === 'fresh') return false
   const edge = flow.edges.find((item) => item.from === node.id)
   return !edge || edge.mode === 'auto'
 }

@@ -11,7 +11,7 @@ export const ARTIFACT_CHAR_CAP = 200_000
 export type RoleId = string
 export type PaneMode = 'edit' | 'run'
 
-export type ChannelKind = 'codexApp' | 'pty' | 'ompRpc' | 'cursorSdk' | 'human'
+export type ChannelKind = 'codexApp' | 'pty' | 'ompRpc' | 'cursorSdk' | 'human' | 'script'
 
 export type CodexChannel = {
   kind: 'codexApp'
@@ -39,9 +39,28 @@ export type HumanChannel = {
   kind: 'human'
 }
 
-export type ChannelBinding = CodexChannel | PtyChannel | CursorChannel | HumanChannel
+export type ScriptChannel = {
+  kind: 'script'
+  command: string
+  timeoutSec?: number
+}
+
+export type ChannelBinding = CodexChannel | PtyChannel | CursorChannel | HumanChannel | ScriptChannel
 
 export type EdgeMode = 'auto' | 'manual'
+export type ConclusionOn = 'PASS' | 'FAIL' | 'REJECT' | 'BLOCK'
+
+export interface Conclusion {
+  on: ConclusionOn
+  owner?: string
+}
+
+export interface NodeExit {
+  on: ConclusionOn
+  owner?: string
+  // A node id, `@human` or `@end`.
+  to: string
+}
 export type EdgeTransform = 'roleWrap' | 'verbatim'
 export type EdgeGate = 'none' | 'passFail' | 'loop'
 
@@ -53,6 +72,8 @@ export interface NodeInput {
 }
 
 export type LessonRule = 'entries' | 'entries-or-na'
+
+export type NodeSession = 'fresh' | 'reuse'
 
 export interface NodeOutput {
   path: string
@@ -71,6 +92,9 @@ export interface FlowNode {
   channel: ChannelBinding
   inputs?: NodeInput[]
   outputs?: NodeOutput[]
+  session?: NodeSession
+  exits?: NodeExit[]
+  maxAttempts?: number
   x?: number
   y?: number
 }
@@ -80,7 +104,6 @@ export interface FlowEdge {
   from: string
   to: string
   mode: EdgeMode
-  transform: EdgeTransform
   gate: EdgeGate
   backTo?: string
   maxLoops?: number
@@ -97,6 +120,10 @@ export interface FlowExperience {
   judge?: string
 }
 
+export interface FlowProfile {
+  skip: string[]
+}
+
 export interface FlowDef {
   id: string
   name: string
@@ -104,6 +131,9 @@ export interface FlowDef {
   nodes: FlowNode[]
   edges: FlowEdge[]
   experience?: FlowExperience
+  profiles?: Record<string, FlowProfile>
+  // Which profile this machine runs; the flow file only lists them.
+  draftProfile?: string
   maxRetries: number
   maxSteps: number
   slice: number
@@ -136,6 +166,7 @@ export interface Envelope {
   blockers: string[]
   artifacts: Artifact[]
   verdict?: ReviewVerdict
+  conclusion?: Conclusion
 }
 
 export type TaskStatus = 'submitted' | 'working' | 'input-required' | 'completed' | 'failed' | 'canceled'
@@ -197,7 +228,13 @@ export interface FlowRun {
   createdAt: number
   taskDir?: string
   // Attempts made by earlier runs of the same task, kept across a rerun.
+  profile?: string
   priorAttempts?: Record<string, number>
+  priorCompleted?: string[]
+  // Nodes whose context was cleared for this task; a failed reset does not count.
+  freshNodes?: string[]
+  // Why the run stopped at an exit for a person to decide.
+  exitPause?: string
   lessonWanted?: string
   pendingLessons?: LessonDraft[]
   lessons?: LessonRecord[]
@@ -213,6 +250,8 @@ export type AdapterOutcome = {
   ok: boolean
   text: string
   verdict?: ReviewVerdict
+  // Null means it was read and nothing could be made of it.
+  conclusion?: Conclusion | null
   cursorAgentId?: string
   error?: string
   unconfirmed?: boolean

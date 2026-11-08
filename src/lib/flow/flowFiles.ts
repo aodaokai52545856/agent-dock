@@ -18,6 +18,7 @@ function portableChannel(channel: ChannelBinding): Partial<ChannelBinding> {
     }
   }
   if (channel.kind === 'pty' || channel.kind === 'ompRpc') return { kind: channel.kind, toolId: channel.toolId }
+  if (channel.kind === 'script') return channel
   return { kind: channel.kind }
 }
 
@@ -33,7 +34,7 @@ function withBindings(channel: ChannelBinding, local: ChannelBinding): ChannelBi
 }
 
 export function flowFileText(flow: FlowDef) {
-  const { draftTask: _task, slice: _slice, ...definition } = flow
+  const { draftTask: _task, slice: _slice, draftProfile: _profile, ...definition } = flow
   const nodes = flow.nodes.map((node) => ({ ...node, channel: portableChannel(node.channel) }))
   return `${JSON.stringify({ ...definition, nodes }, null, 2)}\n`
 }
@@ -53,6 +54,7 @@ export function mergeRepoFlow(repo: FlowDef, local: FlowDef | undefined): FlowDe
   return {
     ...repo,
     draftTask: local?.draftTask ?? '',
+    draftProfile: local?.draftProfile,
     slice: local?.slice ?? 1,
     nodes: repo.nodes.map((node) => {
       const old = known.get(node.id)

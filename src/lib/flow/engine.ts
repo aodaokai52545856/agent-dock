@@ -1,16 +1,21 @@
 import { emptyEnvelope, envelopeFromOutcome, initialEnvelope, transformEnvelope } from './envelope.ts'
+import { EXIT_END, EXIT_HUMAN, passSkipped, pickExit, readConclusion } from './exits.ts'
 import { makeId } from './ids.ts'
+import { attemptOf } from './taskRun.ts'
 import {
   FLOW_END,
   FLOW_START,
   type AdapterOutcome,
+  type Conclusion,
   type EngineResult,
   type Envelope,
   type FlowDef,
   type FlowEdge,
+  type FlowNode,
   type FlowRun,
   type LessonDraft,
   type LessonRecord,
+  type NodeExit,
   type RunStep
 } from './types.ts'
 
@@ -29,6 +34,7 @@ function findNode(flow: FlowDef, id: string) {
 }
 
 export function expectsVerdict(flow: FlowDef, nodeId: string) {
+  if (findNode(flow, nodeId)?.exits?.length) return true
   return flow.edges.some((edge) => edge.from === nodeId && edge.gate === 'passFail')
 }
 
@@ -109,10 +115,18 @@ export function createRun(projectId: string, flow: FlowDef, task: string): FlowR
   }
 }
 
-export function startRun(flow: FlowDef, projectId: string, task: string, nodeId?: string): EngineResult {
+function skipOf(flow: FlowDef, run: FlowRun) {
+  return (run.profile && flow.profiles?.[run.profile]?.skip) || []
+}
+
+export function startRun(flow: FlowDef, projectId: string, task: string, nodeId?: string, profile?: string): EngineResult {
   const run = createRun(projectId, flow, task)
-  const first = entryNode(flow, nodeId)
-  if (!first) return fail(run, '流程里还没有节点，或开始还没连到第一个角色')
+  run.profile = profile
+  const named = entryNode(flow, nodeId)
+  if (!named) return fail(run, '流程里还没有节点，或开始还没连到第一个角色')
+  // Naming a node is a deliberate rerun of it, so the skip list does not apply.
+  const first = nodeId ? named : findNode(flow, passSkipped(flow, skipOf(flow, run), named.id))
+  if (!first) return fail(run, '这个 profile 没有可以开始的节点')
   const envelope = initialEnvelope(run, first)
   run.lastEnvelope = envelope
   run.status = 'running'
@@ -122,11 +136,11 @@ export function startRun(flow: FlowDef, projectId: string, task: string, nodeId?
   return { run, event: { type: 'execute', nodeId: first.id, envelope, send: true, verbatim: false } }
 }
 
-function goTo(flow: FlowDef, run: FlowRun, edge: FlowEdge, envelope: Envelope, toId: string, mode = edge.mode): EngineResult {
+function goTo(flow: FlowDef, run: FlowRun, envelope: Envelope, toId: string, mode: FlowEdge['mode'] = 'auto'): EngineResult {
   if (!toId || toId === FLOW_END) return complete(run)
   const nextNode = findNode(flow, toId)
   if (!nextNode) return fail(run, '找不到下一节点')
-  const nextEnvelope = transformEnvelope(edge, envelope, flow, toId)
+  const nextEnvelope = transformEnvelope(envelope, flow, toId)
   if (mode === 'manual') {
     run.status = 'waiting'
     run.pendingHandoff = nextEnvelope
@@ -155,11 +169,11 @@ export function followEdge(flow: FlowDef, run: FlowRun, envelope: Envelope): Eng
   const verdict = envelope.verdict ?? 'unknown'
   if (forward?.gate === 'passFail') {
     if (verdict === 'pass') {
-      return goTo(flow, run, forward, envelope, forward.to, 'auto')
+      return goTo(flow, run, envelope, forward.to)
     }
     if (verdict === 'unknown') {
       const target = loop?.to || forward.backTo || (forward.to !== FLOW_END ? forward.to : FLOW_END)
-      const nextEnvelope = transformEnvelope(forward, envelope, flow, target)
+      const nextEnvelope = transformEnvelope(envelope, flow, target)
       run.status = 'waiting'
       run.pendingHandoff = nextEnvelope
       const last = run.steps[run.steps.length - 1]
@@ -169,22 +183,80 @@ export function followEdge(flow: FlowDef, run: FlowRun, envelope: Envelope): Eng
     }
     if (loop && takeLoop(run, loop)) {
       run.retryCount += 1
-      return goTo(flow, run, { ...loop, transform: 'roleWrap' }, envelope, loop.to, 'auto')
+      return goTo(flow, run, envelope, loop.to)
     }
     const maxRetries = flow.maxRetries || 0
     if (forward.backTo && run.retryCount < maxRetries) {
       run.retryCount += 1
-      return goTo(flow, run, { ...forward, transform: 'roleWrap' }, envelope, forward.backTo, 'auto')
+      return goTo(flow, run, envelope, forward.backTo)
     }
     if (loop) return fail(run, `已循环 ${loop.maxLoops || 3} 次仍未通过，下一片保持锁定`)
     return fail(run, run.retryCount ? `已返工 ${run.retryCount} 次仍未通过，下一片保持锁定` : '审查未通过')
   }
 
   if (loop && takeLoop(run, loop)) {
-    return goTo(flow, run, loop, envelope, loop.to)
+    return goTo(flow, run, envelope, loop.to, loop.mode)
   }
-  if (forward) return goTo(flow, run, forward, envelope, forward.to)
+  if (forward) return goTo(flow, run, envelope, forward.to, forward.mode)
   return complete(run)
+}
+
+function withConclusion(node: FlowNode, outcome: AdapterOutcome): AdapterOutcome {
+  if (!node.exits?.length) return outcome
+  const conclusion = outcome.conclusion === undefined ? readConclusion([], outcome.text) : outcome.conclusion
+  const verdict = !conclusion ? 'unknown' : conclusion.on === 'PASS' ? 'pass' : 'fail'
+  return { ...outcome, conclusion, verdict }
+}
+
+function pauseAtExit(run: FlowRun, reason: string): EngineResult {
+  run.status = 'waiting'
+  run.exitPause = reason
+  run.lastError = reason
+  const step = run.steps[run.steps.length - 1]
+  if (step) step.status = 'input-required'
+  return { run, event: { type: 'waitHuman', nodeId: run.currentNodeId } }
+}
+
+function takeExit(flow: FlowDef, run: FlowRun, node: FlowNode, exit: NodeExit, envelope: Envelope): EngineResult {
+  const to = passSkipped(flow, skipOf(flow, run), exit.to)
+  if (to === EXIT_END) return complete(run)
+  if (to === EXIT_HUMAN) return pauseAtExit(run, `节点「${node.title}」的结论是 ${[exit.on, exit.owner].filter(Boolean).join(' ')}，等人工决定`)
+  const target = findNode(flow, to)
+  if (!target) return fail(run, '找不到下一节点')
+  const limit = target.maxAttempts ?? (flow.maxRetries || 0) + 1
+  const attempts = attemptOf(run, target.id)
+  if (attempts >= limit) return pauseAtExit(run, `节点「${target.title}」已尝试 ${attempts} 次，等人工决定`)
+  if (attempts) run.retryCount += 1
+  return goTo(flow, run, envelope, target.id)
+}
+
+function followExits(flow: FlowDef, run: FlowRun, node: FlowNode, envelope: Envelope): EngineResult {
+  const conclusion = envelope.conclusion
+  if (!conclusion) return pauseAtExit(run, `节点「${node.title}」的结论读不出来，等人工决定`)
+  const exit = pickExit(node.exits ?? [], conclusion)
+  const said = [conclusion.on, conclusion.owner].filter(Boolean).join(' ')
+  if (!exit) return pauseAtExit(run, `节点「${node.title}」的结论 ${said} 没有对应的出口，等人工决定`)
+  return takeExit(flow, run, node, exit, envelope)
+}
+
+// Marking a step by hand must never complete a run the exits did not lead out of.
+function decideExit(flow: FlowDef, run: FlowRun, node: FlowNode, verdict: 'pass' | 'fail'): EngineResult {
+  const conclusion: Conclusion = { on: verdict === 'pass' ? 'PASS' : 'FAIL' }
+  const exit = pickExit(node.exits ?? [], conclusion)
+  const step = run.steps[run.steps.length - 1]
+  const envelope = { ...(step?.envelope ?? run.lastEnvelope ?? emptyEnvelope({ runId: run.id, toNode: node.id, toRole: node.role })), verdict, conclusion }
+  run.exitPause = undefined
+  run.lastError = ''
+  if (!exit || exit.to === EXIT_HUMAN) {
+    if (step) step.status = 'working'
+    return fail(run, verdict === 'pass' ? `节点「${node.title}」没有可走的 PASS 出口` : '人工判定未通过')
+  }
+  if (step) {
+    step.status = 'completed'
+    step.envelope = envelope
+  }
+  run.lastEnvelope = envelope
+  return takeExit(flow, run, node, exit, envelope)
 }
 
 export function afterOutcome(flow: FlowDef, run: FlowRun, outcome: AdapterOutcome): EngineResult {
@@ -205,7 +277,7 @@ export function afterOutcome(flow: FlowDef, run: FlowRun, outcome: AdapterOutcom
     return fail(next, outcome.error || '节点失败')
   }
 
-  const envelope = envelopeFromOutcome(next, node, outcome, expectsVerdict(flow, node.id))
+  const envelope = envelopeFromOutcome(next, node, withConclusion(node, outcome), expectsVerdict(flow, node.id))
   next.lastEnvelope = envelope
   next.lastError = ''
   if (step) {
@@ -213,7 +285,7 @@ export function afterOutcome(flow: FlowDef, run: FlowRun, outcome: AdapterOutcom
     step.endedAt = Date.now()
     step.envelope = envelope
   }
-  return followEdge(flow, next, envelope)
+  return node.exits?.length ? followExits(flow, next, node, envelope) : followEdge(flow, next, envelope)
 }
 
 export function resumeManual(flow: FlowDef, run: FlowRun, envelope: Envelope, send: boolean): EngineResult {
@@ -244,7 +316,7 @@ export function awaitHuman(run: FlowRun, nodeId: string): EngineResult {
 
 export function isAwaitingHuman(flow: FlowDef | null | undefined, run: FlowRun | null | undefined) {
   if (!flow || !run || run.status !== 'waiting' || run.pendingHandoff) return false
-  return findNode(flow, run.currentNodeId)?.channel.kind === 'human'
+  return Boolean(run.exitPause) || findNode(flow, run.currentNodeId)?.channel.kind === 'human'
 }
 
 function decideHuman(flow: FlowDef, run: FlowRun, verdict: 'pass' | 'fail'): EngineResult {
@@ -255,11 +327,14 @@ function decideHuman(flow: FlowDef, run: FlowRun, verdict: 'pass' | 'fail'): Eng
   }
   const envelope = run.lastEnvelope
   const text = envelope?.done.trim() || envelope?.task.trim() || run.task || '已确认'
-  return afterOutcome(flow, run, { ok: true, text, verdict })
+  const conclusion = findNode(flow, run.currentNodeId)?.exits?.length ? { on: verdict === 'pass' ? 'PASS' as const : 'FAIL' as const } : undefined
+  return afterOutcome(flow, run, { ok: true, text, verdict, conclusion })
 }
 
 export function applyManualVerdict(flow: FlowDef, run: FlowRun, verdict: 'pass' | 'fail'): EngineResult {
   const next = cloneRun(run)
+  const node = findNode(flow, next.currentNodeId)
+  if (node?.exits?.length && (next.exitPause || node.channel.kind !== 'human')) return decideExit(flow, next, node, verdict)
   if (isAwaitingHuman(flow, next)) return decideHuman(flow, next, verdict)
   if (!next.lastEnvelope) return fail(next, '还没有可标记的结论')
   next.lastEnvelope = { ...next.lastEnvelope, verdict }
@@ -326,6 +401,7 @@ export function cancelRun(run: FlowRun): FlowRun {
   next.lastError = '已停止'
   next.pendingHandoff = null
   next.pendingLessons = undefined
+  next.exitPause = undefined
   const current = next.steps[next.steps.length - 1]
   if (current && (current.status === 'working' || current.status === 'input-required')) {
     current.status = 'canceled'

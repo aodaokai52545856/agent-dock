@@ -6,7 +6,7 @@ import {
   type AdapterOutcome,
   type Envelope,
   type FlowDef,
-  type FlowEdge,
+  type EdgeTransform,
   type FlowNode,
   type FlowRun,
   type RoleId
@@ -33,7 +33,8 @@ export function emptyEnvelope(partial: Partial<Envelope> & Pick<Envelope, 'runId
     remaining: partial.remaining || '',
     blockers: partial.blockers ? [...partial.blockers] : [],
     artifacts: (partial.artifacts || []).map((item) => ({ ...item, body: cap(item.body) })),
-    verdict: partial.verdict
+    verdict: partial.verdict,
+    conclusion: partial.conclusion
   }
 }
 
@@ -63,11 +64,12 @@ export function envelopeFromOutcome(run: FlowRun, node: FlowNode, outcome: Adapt
     done: text,
     remaining: '',
     artifacts: text ? [{ kind: 'text', body: text }] : [],
-    verdict
+    verdict,
+    conclusion: outcome.conclusion ?? undefined
   })
 }
 
-export function transformEnvelope(_edge: FlowEdge, envelope: Envelope, flow: FlowDef, toNodeId: string): Envelope {
+export function transformEnvelope(envelope: Envelope, flow: FlowDef, toNodeId: string): Envelope {
   const toNode = flow.nodes.find((item) => item.id === toNodeId)
   const toRole: RoleId = toNode?.role || envelope.toRole
   return emptyEnvelope({
@@ -82,7 +84,7 @@ export function transformEnvelope(_edge: FlowEdge, envelope: Envelope, flow: Flo
   })
 }
 
-export function renderEnvelope(envelope: Envelope, opts?: { transform?: FlowEdge['transform']; contract?: string }) {
+export function renderEnvelope(envelope: Envelope, opts?: { transform?: EdgeTransform; contract?: string }) {
   if (opts?.transform === 'verbatim') {
     const body = envelope.artifacts.map((item) => item.body).join('\n\n').trim()
     return body || envelope.done || envelope.task

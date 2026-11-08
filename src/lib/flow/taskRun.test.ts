@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { finishStep, prepareStep, runRecord, type DockFs, type PreparedStep } from './taskRun.ts'
+import { completedNodes, finishStep, prepareStep, runRecord, type DockFs, type PreparedStep } from './taskRun.ts'
 import type { AdapterOutcome, FlowNode, FlowRun, RunStep } from './types.ts'
 
 function memoryFs(seed: Record<string, string> = {}) {
@@ -33,11 +33,11 @@ function step(nodeId: string, status: RunStep['status'] = 'working'): RunStep {
   return { id: `s-${nodeId}`, nodeId, status, startedAt: 1 }
 }
 
-function run(steps: RunStep[] = [step('dev')]): FlowRun {
+function run(steps: RunStep[] = [step('dev')], extra: Partial<FlowRun> = {}): FlowRun {
   return {
     id: 'r1', projectId: 'p', flowId: 'f', status: 'running', currentNodeId: 'dev', task: '任务', steps,
     lastEnvelope: null, pendingHandoff: null, retryCount: 0, loopCounts: {}, stepCount: 1, lastError: '',
-    cursorAgentId: '', git: null, createdAt: 1, taskDir: 't1'
+    cursorAgentId: '', git: null, createdAt: 1, taskDir: 't1', ...extra
   }
 }
 
@@ -79,6 +79,21 @@ test('rework-only inputs appear from the second attempt', async () => {
   assert.deepEqual(second.inputs, [{ ref: 'task:review.md', sha256: 'sha:意见' }])
 })
 
+test('a retry after a failed first try is not a rework', async () => {
+  const { fs } = memoryFs()
+  const target = node({ inputs: [{ ref: 'task:review.md', when: 'reworked', required: true }] })
+  const retried = run([step('dev')], { priorAttempts: { dev: 1 } })
+  assert.deepEqual((await prepared(fs, target, retried)).inputs, [])
+})
+
+test('a rerun of a node that finished earlier is still a rework', async () => {
+  const { fs } = memoryFs()
+  const target = node({ inputs: [{ ref: 'task:review.md', when: 'reworked', required: true }] })
+  const rerun = run([step('dev')], { priorCompleted: ['dev'] })
+  assert.deepEqual(await prepareStep(fs, target, rerun), { error: '缺少必读输入：task:review.md' })
+  assert.deepEqual(completedNodes(run([step('dev', 'completed'), step('cr', 'failed')], { priorCompleted: ['sa'] })), ['sa', 'dev'])
+})
+
 test('a template seeds the output and an untouched copy fails', async () => {
   const { fs, files } = memoryFs({ 'roles/developer/log.md': '## 结论\n{{结论}}\n' })
   const target = node({ outputs: [{ path: 'task:log.md', template: 'log.md' }] })
@@ -87,6 +102,32 @@ test('a template seeds the output and an untouched copy fails', async () => {
   assert.match(ready.block, /按模板 \.agentDock\/roles\/developer\/log\.md/)
   const { outcome } = await finishStep(fs, target, run(), ready, ok, false)
   assert.match(outcome.error || '', /没有更新产物/)
+})
+
+test('a template placeholder left in the output fails, whatever else the text says', async () => {
+  const { fs, files } = memoryFs({ 'roles/developer/log.md': '## 结论\n{{结论}}\n## 证据\n{{证据}}\n' })
+  const target = node({ outputs: [{ path: 'task:log.md', template: 'log.md' }] })
+  const ready = await prepared(fs, target)
+  files.set(`${TASK}/log.md`, '## 结论\nPASS\n## 证据\n{{证据}}\n')
+  const { outcome } = await finishStep(fs, target, run(), ready, ok, false)
+  assert.match(outcome.error || '', /占位符：\{\{证据\}\}/)
+})
+
+test('a report that mentions placeholders is not a leftover', async () => {
+  const { fs, files } = memoryFs({ 'roles/developer/log.md': '## 结论\n{{结论}}\n' })
+  const target = node({ outputs: [{ path: 'task:log.md', template: 'log.md' }] })
+  const ready = await prepared(fs, target)
+  files.set(`${TASK}/log.md`, '## 结论\nPASS，全文不含 `{{}}` 这类写法\n')
+  assert.equal((await finishStep(fs, target, run(), ready, ok, false)).outcome.ok, true)
+})
+
+test('an output without a template is never checked for placeholders', async () => {
+  const { fs, files } = memoryFs()
+  const target = node({ outputs: [{ path: 'task:log.md' }] })
+  const ready = await prepared(fs, target)
+  files.set(`${TASK}/log.md`, '核查：dev-log 不含 `{{}}`、TODO 等占位符\n')
+  assert.equal((await finishStep(fs, target, run(), ready, ok, false)).outcome.ok, true)
+  assert.doesNotMatch(ready.block, /占位符/)
 })
 
 test('a missing template stops the node', async () => {
@@ -179,7 +220,7 @@ test('file errors become a node failure', async () => {
   }
   assert.deepEqual(await prepareStep(fs, node({ inputs: [{ ref: 'task:a.md' }] }), run()), { error: '磁盘坏了' })
   const target = node({ channel: codex, outputs: [{ path: 'task:a.md' }] })
-  const { outcome } = await finishStep(fs, target, run(), { block: '', inputs: [], before: {} }, ok, false)
+  const { outcome } = await finishStep(fs, target, run(), { block: '', inputs: [], before: {}, placeholders: {} }, ok, false)
   assert.equal(outcome.error, '磁盘坏了')
 })
 

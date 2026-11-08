@@ -91,7 +91,7 @@ test('output validation catches empty, unfilled and incomplete documents', () =>
   const sections = ['## 验证证据', '## 结论']
   assert.equal(validateOutputText('a.md', '## 验证证据\n跑过了\n\n## 结论\nPASS\n', sections), null)
   assert.match(validateOutputText('a.md', '  \n', []) || '', /是空的/)
-  assert.match(validateOutputText('a.md', '## 结论\n{{结论}}', []) || '', /占位符：\{\{结论\}\}/)
+  assert.match(validateOutputText('a.md', '## 结论\n{{结论}}', [], ['{{结论}}']) || '', /占位符：\{\{结论\}\}/)
   assert.match(validateOutputText('a.md', '## 结论\nPASS', sections) || '', /缺少段落：## 验证证据/)
   assert.match(validateOutputText('a.md', '## 验证证据\n\n## 结论\nPASS', sections) || '', /段落是空的：## 验证证据/)
 })

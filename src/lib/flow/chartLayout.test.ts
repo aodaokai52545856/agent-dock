@@ -11,11 +11,26 @@ import {
   withNodePoints
 } from './chartLayout.ts'
 import { createCustomNode, seedProjectFlows } from './model.ts'
-import { FLOW_END, FLOW_START } from './types.ts'
+import { FLOW_END, FLOW_START, type FlowDef } from './types.ts'
 
 function test(name: string, fn: () => void) {
   fn()
   console.log(`ok ${name}`)
+}
+
+// The seed flow routes by exits now; these tests cover the old edges, which stay supported.
+function legacy(): FlowDef {
+  const flow = seedProjectFlows().flows[0]
+  const [dev, rev] = flow.nodes
+  return {
+    ...flow,
+    nodes: flow.nodes.map((node) => ({ ...node, exits: undefined })),
+    edges: [
+      ...flow.edges,
+      { id: 'e-fwd', from: dev.id, to: rev.id, mode: 'auto', gate: 'none' },
+      { id: 'e-end', from: rev.id, to: FLOW_END, mode: 'auto', gate: 'passFail', backTo: dev.id }
+    ]
+  }
 }
 
 test('default node points share an x so the spine stays aligned', () => {
@@ -26,7 +41,7 @@ test('default node points share an x so the spine stays aligned', () => {
 })
 
 test('start sits above the first node, end sits below the last', () => {
-  const flow = withNodePoints(seedProjectFlows().flows[0])
+  const flow = withNodePoints(legacy())
   const { start, end } = terminals(flow)
   const first = defaultNodePoint(0)
   const last = defaultNodePoint(1)
@@ -38,14 +53,14 @@ test('start sits above the first node, end sits below the last', () => {
 })
 
 test('connectForward can start from the start terminal', () => {
-  const flow = seedProjectFlows().flows[0]
+  const flow = legacy()
   const wired = connectForward(flow, FLOW_START, flow.nodes[0].id)
   const edge = wired.edges.find((item) => item.from === FLOW_START)
   assert.equal(edge?.to, flow.nodes[0].id)
 })
 
 test('deleteEdge removes only that wire', () => {
-  const flow = seedProjectFlows().flows[0]
+  const flow = legacy()
   const edgeId = flow.edges[0].id
   const next = deleteEdge(flow, edgeId)
   assert.equal(next.edges.some((item) => item.id === edgeId), false)
@@ -60,7 +75,7 @@ test('snap lands on the 16px grid', () => {
 })
 
 test('withNodePoints fills missing coordinates without moving placed nodes', () => {
-  const flow = seedProjectFlows().flows[0]
+  const flow = legacy()
   flow.nodes[0].x = 80
   flow.nodes[0].y = 40
   const placed = withNodePoints(flow)
@@ -71,14 +86,14 @@ test('withNodePoints fills missing coordinates without moving placed nodes', () 
 })
 
 test('placeNode snaps the dragged node', () => {
-  const flow = withNodePoints(seedProjectFlows().flows[0])
+  const flow = withNodePoints(legacy())
   const moved = placeNode(flow, flow.nodes[0].id, 19, 27)
   assert.equal(moved.nodes[0].x, 16)
   assert.equal(moved.nodes[0].y, 32)
 })
 
 test('connectForward rewires the existing outgoing edge', () => {
-  const flow = seedProjectFlows().flows[0]
+  const flow = legacy()
   const extra = createCustomNode('pm', { kind: 'human' })
   extra.id = 'n-extra'
   const next = { ...flow, nodes: [...flow.nodes, extra] }
@@ -89,7 +104,7 @@ test('connectForward rewires the existing outgoing edge', () => {
 })
 
 test('connecting back to an upstream node adds a loop and keeps the exit', () => {
-  const flow = seedProjectFlows().flows[0]
+  const flow = legacy()
   const dev = flow.nodes[0]
   const rev = flow.nodes[1]
   const wired = connectForward(flow, rev.id, dev.id)

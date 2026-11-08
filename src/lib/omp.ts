@@ -9,6 +9,7 @@ export type OmpCommand = { type: 'prompt'; message: string; images?: {type:'imag
   | { type: 'steer_subagent'; subagentId:string; message:string }
   | { type: 'cancel_subagent'; subagentId:string }
   | { type: 'navigate_tree'|'fork'|'branch'; entryId?:string }
+  | { type: 'new_session' }
   | { type: 'compact'; customInstructions?:string }
   | { type: 'remove_queued_message'; message:string; queue:'steering'|'followUp' }
   | { type: 'promote_queued_message'; message:string }
