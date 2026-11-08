@@ -172,7 +172,7 @@ fn missing_in(project: &Path, paths: &[String]) -> Vec<String> {
     paths.iter().filter(|rel| !exists_in(project, rel)).cloned().collect()
 }
 
-fn project_root(app: &AppHandle, project_id: &str) -> Result<PathBuf, String> {
+pub(crate) fn project_root(app: &AppHandle, project_id: &str) -> Result<PathBuf, String> {
     let state = state::load_state(app)?;
     Ok(PathBuf::from(&state::find_project(&state, project_id)?.path))
 }

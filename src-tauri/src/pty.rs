@@ -531,6 +531,33 @@ impl PtyHub {
         Ok(live_info(pty))
     }
 
+    /// `bind_session` keeps a window on its session. This is for when the tool
+    /// itself moved on, as `/clear` does.
+    pub fn switch_session(&self, pty_id: &str, session_id: &str) -> Result<LivePtyInfo, String> {
+        let session_id = session_id.trim();
+        if session_id.is_empty() {
+            return Err("会话还没有编号，稍后再试".into());
+        }
+        self.reap_dead();
+        let mut sessions = self.sessions.lock().expect("pty lock");
+        let (project_id, tool_id) = {
+            let pty = sessions
+                .get(pty_id)
+                .ok_or_else(|| "这个终端已经关闭，无法绑定会话".to_string())?;
+            (pty.project_id.clone(), pty.tool_id)
+        };
+        let key = session_live_key(&project_id, tool_id, session_id);
+        if sessions.values().any(|pty| pty.key == key && pty.id != pty_id) {
+            return Err("这个会话已经在另一个终端里打开".into());
+        }
+        let pty = sessions
+            .get_mut(pty_id)
+            .ok_or_else(|| "这个终端已经关闭，无法绑定会话".to_string())?;
+        pty.session_id = Some(session_id.to_string());
+        pty.key = key;
+        Ok(live_info(pty))
+    }
+
     fn reap_dead(&self) {
         let retired = {
             let mut sessions = self.sessions.lock().expect("pty lock");

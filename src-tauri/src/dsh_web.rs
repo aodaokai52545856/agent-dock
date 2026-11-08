@@ -559,7 +559,7 @@ fn kill_tree(child: &mut Child) -> Result<(), String> {
     Ok(())
 }
 
-fn kill_pid(pid: u32) {
+pub(crate) fn kill_pid(pid: u32) {
     if pid == 0 {
         return;
     }

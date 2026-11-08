@@ -349,6 +349,7 @@ impl Hub {
             "get_tree",
             "get_entries",
             "navigate_tree",
+            "new_session",
             "branch",
             "fork",
             "compact",
@@ -412,7 +413,7 @@ impl Hub {
             snap.settled = before_settled;
             snap.activity = before_activity;
         }
-        if matches!(kind, "fork" | "branch" | "navigate_tree")
+        if matches!(kind, "fork" | "branch" | "navigate_tree" | "new_session")
             && !response
                 .data
                 .as_ref()
@@ -468,6 +469,14 @@ impl Hub {
 fn apply_refresh(snap: &mut Snapshot, state: Value, messages: Vec<Value>, before_seq: u64) {
     let raced = snap.seq != before_seq;
     let recent_state = snap.state.clone();
+    let session = state["sessionId"].as_str().map(|id| omp::public_id(&snap.profile_id, id));
+    let switched = session.is_some() && session != snap.info.session_id;
+    if switched {
+        snap.messages.clear();
+        snap.tools.clear();
+        snap.prompt_results.clear();
+        snap.dialogs.clear();
+    }
     let streaming = state["isStreaming"] == true;
     let settled = state["isSettled"].as_bool().unwrap_or(!streaming);
     snap.state = state.clone();
@@ -494,8 +503,11 @@ fn apply_refresh(snap: &mut Snapshot, state: Value, messages: Vec<Value>, before
             }
         }
     }
-    if let Some(id) = state["sessionId"].as_str() {
-        snap.info.session_id = Some(omp::public_id(&snap.profile_id, id));
+    if let Some(id) = session {
+        if switched {
+            snap.info.key = format!("{}:omp:{id}", snap.info.project_id);
+        }
+        snap.info.session_id = Some(id);
     }
     if let Some(title) = state["sessionName"].as_str().filter(|s| !s.is_empty()) {
         snap.info.title = title.into();
@@ -735,6 +747,29 @@ mod tests {
                 url: None,
             },
         }
+    }
+    #[test]
+    fn a_new_session_drops_everything_from_the_old_one() {
+        let mut s = snapshot();
+        s.info.session_id = Some(omp::public_id("work", "old"));
+        s.messages = vec![json!({"role": "user", "content": "old prompt"})];
+        s.dialogs = vec![json!({"id": "ask"})];
+        s.tools.insert("call".into(), json!({}));
+        s.prompt_results.insert("p".into(), json!({}));
+        apply_refresh(&mut s, json!({"sessionId": "new", "isSettled": true}), vec![], 0);
+        let id = omp::public_id("work", "new");
+        assert_eq!(s.info.key, format!("p:omp:{id}"));
+        assert_eq!(s.info.session_id, Some(id));
+        assert!(s.messages.is_empty() && s.dialogs.is_empty() && s.tools.is_empty() && s.prompt_results.is_empty());
+    }
+    #[test]
+    fn a_refresh_of_the_same_session_keeps_its_dialogs() {
+        let mut s = snapshot();
+        s.info.session_id = Some(omp::public_id("work", "same"));
+        s.dialogs = vec![json!({"id": "ask"})];
+        apply_refresh(&mut s, json!({"sessionId": "same", "isSettled": true}), vec![], 0);
+        assert_eq!(s.dialogs.len(), 1);
+        assert_eq!(s.info.key, "key");
     }
     #[test]
     fn a_yield_with_background_work_does_not_finish_the_session() {

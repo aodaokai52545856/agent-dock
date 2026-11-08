@@ -4,6 +4,7 @@ mod clipboard;
 mod ccswitch;
 mod cursor_dev;
 mod dock_files;
+mod flow_script;
 mod dsh_balance;
 mod dsh_credentials;
 mod dsh_embed;
@@ -974,6 +975,41 @@ async fn dsh_embed_apply_theme(app: AppHandle, script: String) -> Result<(), Str
 }
 
 #[tauri::command]
+async fn flow_script_run(
+    app: AppHandle,
+    hub: State<'_, Arc<flow_script::Hub>>,
+    run_id: String,
+    project_id: String,
+    command: String,
+    timeout_secs: u64,
+) -> Result<flow_script::ScriptResult, String> {
+    let hub = hub.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let root = dock_files::project_root(&app, &project_id)?;
+        hub.run(&run_id, &root, &command, std::time::Duration::from_secs(timeout_secs))
+    })
+    .await
+    .map_err(|err| format!("脚本运行失败：{err}"))?
+}
+
+#[tauri::command]
+fn flow_script_stop(hub: State<'_, Arc<flow_script::Hub>>, run_id: String) {
+    hub.stop(&run_id);
+}
+
+#[tauri::command]
+async fn pty_switch_session(
+    hub: State<'_, Arc<PtyHub>>,
+    pty_id: String,
+    session_id: String,
+) -> Result<LivePtyInfo, String> {
+    let hub = hub.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || hub.switch_session(&pty_id, &session_id))
+        .await
+        .map_err(|err| err.to_string())?
+}
+
+#[tauri::command]
 async fn pty_bind_session(
     hub: State<'_, Arc<PtyHub>>,
     web: State<'_, Arc<dsh_web::Hub>>,
@@ -1141,6 +1177,7 @@ pub fn run() {
             app.manage(hub);
             app.manage(Arc::new(dsh_embed::Hub::default()));
             app.manage(Arc::new(bridge::BridgeHub::new()));
+            app.manage(Arc::new(flow_script::Hub::default()));
             let web = dsh_web::Hub::new();
             if let Ok(dir) = app.path().app_data_dir() {
                 web.set_lock_path(dir.join("dsh-web-pids.json"));
@@ -1279,6 +1316,9 @@ pub fn run() {
             dsh_embed_close,
             dsh_embed_apply_theme,
             pty_bind_session,
+            pty_switch_session,
+            flow_script_run,
+            flow_script_stop,
             list_live_ptys,
             codex_probe,
             list_codex_threads,
