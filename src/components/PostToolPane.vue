@@ -39,10 +39,121 @@ import {
 import { importData, exportCollection } from "../lib/posttool/transfer";
 import { runScripts, type ScriptResult } from "../lib/posttool/scripts";
 import { iterationData } from "../lib/posttool/runner";
+import {
+  SIDEBAR_DEFAULT,
+  SIDEBAR_MIN,
+  SIDEBAR_STORAGE_KEY,
+  sidebarWidth as clampSidebarWidth,
+  storedSidebarWidth,
+} from "../lib/posttool/sidebar";
 import "../styles/posttool.css";
 import "../styles/posttool-workbench.css";
 
 const props = defineProps<{ active: boolean }>();
+const workbench = ref<HTMLElement>();
+const workbenchWidth = ref(window.innerWidth);
+const preferredSidebarWidth = ref(
+  (() => {
+    try {
+      return storedSidebarWidth(localStorage.getItem(SIDEBAR_STORAGE_KEY));
+    } catch {
+      return SIDEBAR_DEFAULT;
+    }
+  })(),
+);
+const sidebarWidth = computed(() =>
+  clampSidebarWidth(preferredSidebarWidth.value, workbenchWidth.value),
+);
+const sidebarResizing = ref(false);
+let sidebarDrag: { x: number; width: number } | undefined;
+let workbenchObserver: ResizeObserver | undefined;
+function saveSidebarWidth() {
+  try {
+    localStorage.setItem(SIDEBAR_STORAGE_KEY, String(preferredSidebarWidth.value));
+  } catch {
+    // A restricted WebView can still resize for this session.
+  }
+}
+function startSidebarResize(event: PointerEvent) {
+  if (event.button !== 0) return;
+  sidebarDrag = { x: event.clientX, width: sidebarWidth.value };
+  sidebarResizing.value = true;
+  (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
+  event.preventDefault();
+}
+function moveSidebarResize(event: PointerEvent) {
+  if (sidebarDrag)
+    preferredSidebarWidth.value = clampSidebarWidth(
+      sidebarDrag.width + event.clientX - sidebarDrag.x,
+      workbenchWidth.value,
+    );
+}
+function endSidebarResize() {
+  if (sidebarDrag) saveSidebarWidth();
+  sidebarDrag = undefined;
+  sidebarResizing.value = false;
+}
+function resizeSidebarBy(delta: number) {
+  preferredSidebarWidth.value = clampSidebarWidth(
+    sidebarWidth.value + delta,
+    workbenchWidth.value,
+  );
+  saveSidebarWidth();
+}
+function resetSidebarWidth() {
+  preferredSidebarWidth.value = SIDEBAR_DEFAULT;
+  saveSidebarWidth();
+}
+const contextMenu = ref<{ entry: Entry; x: number; y: number }>();
+const menuElement = ref<HTMLElement>();
+let menuTrigger: HTMLElement | undefined;
+async function openContextMenu(event: MouseEvent, entry: Entry, anchor = false) {
+  event.preventDefault();
+  menuTrigger = event.currentTarget as HTMLElement;
+  const rect = menuTrigger.getBoundingClientRect();
+  contextMenu.value = {
+    entry,
+    x: anchor || !event.clientX ? rect.left : event.clientX,
+    y: anchor || !event.clientY ? rect.bottom + 4 : event.clientY,
+  };
+  await nextTick();
+  if (!contextMenu.value || !menuElement.value) return;
+  const size = menuElement.value.getBoundingClientRect();
+  contextMenu.value.x = Math.max(
+    8, Math.min(contextMenu.value.x, window.innerWidth - size.width - 8),
+  );
+  contextMenu.value.y = Math.max(
+    8, Math.min(contextMenu.value.y, window.innerHeight - size.height - 8),
+  );
+  menuElement.value
+    .querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus();
+}
+function closeContextMenu(restoreFocus = false) {
+  contextMenu.value = undefined;
+  if (restoreFocus) menuTrigger?.focus();
+}
+function dismissContextMenu(event: PointerEvent) {
+  if (!(event.target as Element).closest(".pt-context-menu")) closeContextMenu();
+}
+function menuKeyboard(event: KeyboardEvent) {
+  if (event.key === "Escape" || event.key === "Tab") {
+    if (event.key === "Escape") event.preventDefault();
+    closeContextMenu(true);
+  } else if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+    event.preventDefault();
+    const buttons = [
+      ...menuElement.value!.querySelectorAll<HTMLButtonElement>("button:not(:disabled)"),
+    ];
+    const index = buttons.indexOf(document.activeElement as HTMLButtonElement);
+    buttons[
+      (index + (event.key === "ArrowDown" ? 1 : -1) + buttons.length) % buttons.length
+    ]?.focus();
+  }
+}
+watch(contextMenu, (menu) => {
+  if (menu) document.addEventListener("pointerdown", dismissContextMenu, true);
+  else document.removeEventListener("pointerdown", dismissContextMenu, true);
+});
 const environmentLoading = ref(false);
 let globalsId = "";
 const PostToolStream = defineAsyncComponent(
@@ -130,7 +241,11 @@ function resizeEditorBy(delta: number) {
 watch(
   () => props.active,
   (active) => {
-    if (!active) endEditorResize();
+    if (!active) {
+      endEditorResize();
+      endSidebarResize();
+      closeContextMenu();
+    }
   },
 );
 const section = ref("params"),
@@ -152,6 +267,27 @@ const loading = ref(false),
   loadError = ref(""),
   notice = ref(""),
   booted = ref(false);
+const copyBusy = ref(false),
+  copyProgress = ref(""),
+  checkedEntries = ref(new Set<string>()),
+  lastCopy = ref<api.CopyResult>();
+const selectedEntries = computed(() =>
+  entries.value.filter((entry) => checkedEntries.value.has(entry.id)),
+);
+const allEntriesChecked = computed(
+  () =>
+    entries.value.length > 0 &&
+    selectedEntries.value.length === entries.value.length,
+);
+function toggleEntry(entry: Entry) {
+  if (checkedEntries.value.has(entry.id)) checkedEntries.value.delete(entry.id);
+  else checkedEntries.value.add(entry.id);
+}
+function toggleAllEntries() {
+  checkedEntries.value = allEntriesChecked.value
+    ? new Set()
+    : new Set(entries.value.map((entry) => entry.id));
+}
 const modal = ref<
     "none" | "name" | "confirm" | "environment" | "import" | "export" | "runner"
   >("none"),
@@ -216,6 +352,7 @@ const canSend = computed(
     !!doc.value.url.trim() &&
     !!doc.value.method.trim() &&
     !current.value.running &&
+    !copyBusy.value &&
     !environmentLoading.value,
 );
 const bodyBytes = computed(
@@ -228,6 +365,139 @@ async function copyExport() {
   } catch (e) {
     modalError.value = String(e);
   }
+}
+
+async function prepareCopy(
+  request: RequestDoc,
+  source: string,
+  tab?: Tab,
+  responseId?: string,
+): Promise<api.CopyItem> {
+  if (tab?.running)
+    throw new Error(`${request.name} 正在运行，请完成或停止后再复制`);
+  const item: api.CopyItem = {
+    request: JSON.parse(JSON.stringify(request)),
+    responseId: responseId ?? tab?.responseId,
+    source,
+    error: tab?.error,
+    tests: tab ? JSON.parse(JSON.stringify(tab.tests)) : [],
+    logs: tab ? [...tab.logs] : [],
+  };
+  try {
+    const context = await parentContext(item.request);
+    item.resolved = compile(item.request, context.vars, context.inherited);
+  } catch (e) {
+    item.resolutionError = String(e);
+  }
+  return item;
+}
+async function copyRequests(batch = false, target?: Entry) {
+  if (copyBusy.value || environmentLoading.value || runner.value.running) return;
+  const records = target ? [target] : [...selectedEntries.value];
+  const tab = current.value;
+  if (batch && !records.length) return;
+  copyBusy.value = true;
+  notice.value = "";
+  lastCopy.value = undefined;
+  try {
+    const items: api.CopyItem[] = [];
+    if (target && (target.kind === 'collection' || target.kind === 'folder')) {
+      copyProgress.value = `正在整理“${target.name}”及子文件夹…`;
+      // Only open tabs cross IPC; saved collection documents are streamed from SQLite by Rust.
+      for (const owner of tabs.value.filter((t) => !t.running)) {
+        items.push(await prepareCopy(owner.request, 'collection', owner));
+      }
+    } else if (!batch && !target) {
+      copyProgress.value = "正在整理请求…";
+      items.push(await prepareCopy(tab.request, "editor", tab));
+    } else {
+      for (const [index, entry] of records.entries()) {
+        copyProgress.value = `正在整理 ${index + 1}/${records.length}…`;
+        const payload = await api.get<unknown>(entry.id);
+        if (entry.kind === "history") {
+          const history = payload as { request: unknown; responseId?: string };
+          const owner = history.responseId
+            ? tabs.value.find((t) => t.responseId === history.responseId)
+            : undefined;
+          items.push(
+            await prepareCopy(
+              normalizeRequest(history.request),
+              "history",
+              owner,
+              history.responseId,
+            ),
+          );
+        } else {
+          const owner = tabs.value.find((t) =>
+            entry.kind === "draft"
+              ? t.key === entry.id
+              : t.request.id === entry.id,
+          );
+          items.push(
+            await prepareCopy(
+              owner?.request ?? normalizeRequest(payload),
+              entry.kind,
+              owner,
+            ),
+          );
+        }
+      }
+    }
+    copyProgress.value = target && ['collection', 'folder'].includes(target.kind)
+      ? '正在保存集合、子文件夹及完整正文…'
+      : `正在保存 ${items.length} 条请求及完整正文…`;
+    const result = target && (target.kind === 'collection' || target.kind === 'folder')
+      ? await api.copyCollection(target.id, items, {
+          environment: JSON.parse(JSON.stringify(environment.value)),
+          globals: JSON.parse(JSON.stringify(globals.value)),
+        })
+      : await api.copyRequests(items);
+    lastCopy.value = result;
+    notice.value = result.clipboardError
+      ? `资料已保存到 ${result.directory}；剪贴板写入失败：${result.clipboardError}。点击“复制说明”重试。`
+      : `已复制 ${result.count ? `${result.count} 条请求的资料说明` : '集合配置（暂无请求）'}，可直接粘贴给 AI。文件目录：${result.directory}`;
+    if (!result.clipboardError) showToast(`已复制 ${result.count} 条请求，可粘贴给 AI`);
+  } catch (e) {
+    notice.value = `复制失败：${e}`;
+  } finally {
+    copyBusy.value = false;
+    copyProgress.value = "";
+    if (!props.active && !busyCount.value) scheduleIdle();
+  }
+}
+function copyMenuTarget() {
+  const entry = contextMenu.value?.entry;
+  closeContextMenu();
+  if (entry) void copyRequests(false, entry);
+}
+function editMenuTarget() {
+  const entry = contextMenu.value?.entry;
+  closeContextMenu();
+  if (entry) collectionEditing.value = entry;
+}
+function deleteMenuTarget() {
+  const entry = contextMenu.value?.entry;
+  closeContextMenu();
+  if (entry) deleteEntry(entry);
+}
+function addFolderFromMenu() {
+  const entry = contextMenu.value?.entry;
+  closeContextMenu();
+  if (entry) { enterFolder(entry); createFolder(); }
+}
+function openMenuTarget() {
+  const entry = contextMenu.value?.entry;
+  closeContextMenu();
+  if (entry) void loadEntry(entry);
+}
+async function retryCopyInstructions() {
+  if (!lastCopy.value) return;
+  await guard(async () => {
+    await navigator.clipboard.writeText(lastCopy.value!.clipboardText);
+    lastCopy.value!.clipboardError = null;
+    notice.value = `说明已复制，可直接粘贴给 AI。文件目录：${lastCopy.value!.directory}`;
+    showToast("资料说明已复制");
+  });
 }
 
 function closeModal() {
@@ -285,6 +555,7 @@ function addTab(request = freshRequest(), saved = "") {
   selected.value = tab.key;
 }
 async function closeTab(tab: Tab) {
+  if (copyBusy.value) return;
   const close = async () => {
     await stop(tab);
     clearTimeout(draftTimer);
@@ -688,7 +959,7 @@ async function sendRequest(
   iteration = 0,
   iterationCount = 1,
 ): Promise<ScriptResult | undefined> {
-  if (tab.running || environmentLoading.value) return;
+  if (tab.running || environmentLoading.value || copyBusy.value) return;
   tab.running = true;
   const controller = new AbortController();
   controllers.set(tab.key, controller);
@@ -783,6 +1054,7 @@ async function sendRequest(
           status: response.status,
           elapsedMs: response.elapsedMs,
           error: response.error,
+          responseId: response.id,
         },
       })
       .catch((e) => {
@@ -820,7 +1092,7 @@ function openRunner() {
   modalTitle.value = "Collection Runner · 本机运行";
 }
 async function startRunner() {
-  if (runner.value.running) return;
+  if (runner.value.running || copyBusy.value) return;
   runnerStop = false;
   runner.value.error = "";
   runner.value.results = [];
@@ -978,7 +1250,7 @@ function startPolling() {
 function scheduleIdle() {
   clearTimeout(idleTimer);
   idleTimer = setTimeout(() => {
-    if (!props.active && !busyCount.value) {
+    if (!props.active && !busyCount.value && !copyBusy.value) {
       for (const tab of tabs.value) {
         tab.preview = "";
         tab.offset = 0;
@@ -1091,6 +1363,7 @@ watch(search, () => {
   }, 250);
 });
 watch(page, () => void refreshList());
+watch([nav, folder, search, page], () => checkedEntries.value.clear());
 watch(environmentId, () => void selectEnvironment());
 watch(selected, () => {
   customMethod.value = !METHODS.includes(doc.value.method);
@@ -1130,6 +1403,10 @@ watch(
   },
 );
 onMounted(async () => {
+  workbenchObserver = new ResizeObserver(([entry]) => {
+    if (entry && entry.contentRect.width > 0) workbenchWidth.value = entry.contentRect.width;
+  });
+  if (workbench.value) workbenchObserver.observe(workbench.value);
   window.addEventListener("keydown", keyboard);
   if (!api.desktop) {
     loadError.value = "网络和本地存储功能需在 Agent Dock 桌面应用中使用";
@@ -1144,6 +1421,9 @@ onMounted(async () => {
   }
 });
 onUnmounted(() => {
+  workbenchObserver?.disconnect();
+  endSidebarResize();
+  document.removeEventListener('pointerdown', dismissContextMenu, true);
   endEditorResize();
   alive = false;
   pollSeq++;
@@ -1160,12 +1440,17 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <section class="posttool" aria-label="postTool API 工作台">
+  <section
+    ref="workbench"
+    :class="['posttool', { 'pt-sidebar-resizing': sidebarResizing }]"
+    :style="{ '--pt-sidebar-width': `${sidebarWidth}px` }"
+    aria-label="postTool API 工作台"
+  >
     <aside v-if="active" class="pt-sidebar">
       <div class="pt-brand">
         <span class="pt-brand-mark"><PostToolIcon name="bolt" /></span>
         <div><strong>postTool</strong><span>API 工作台</span></div>
-        <span class="pt-local-tag" title="数据保存在本机">LOCAL</span>
+        <span class="pt-local-tag" title="数据保存在本机"><PostToolIcon name="shield" /></span>
       </div>
       <div class="pt-side-actions">
         <button class="pt-new-request" @click="addTab()">
@@ -1206,52 +1491,48 @@ onUnmounted(() => {
       /></label>
       <div v-if="nav === 'request'" class="pt-collections">
         <div class="pt-section-caption">
-          <span>我的集合</span><span>{{ collections.length }}</span>
+          <span>集合</span><span>{{ collections.length }}</span>
         </div>
-        <button :class="{ selected: !folder }" @click="enterFolder()">
-          未分组请求
+        <button :class="['pt-ungrouped', { selected: !folder }]" @click="enterFolder()">
+          <PostToolIcon name="collection" /><span>未分组请求</span>
         </button>
         <div
           v-for="collection in collections"
           :key="collection.id"
-          class="pt-folder-row"
+          :class="['pt-folder-row', { selected: folder === collection.id }]"
+          @contextmenu="openContextMenu($event, collection)"
         >
           <button
-            :class="{ selected: folder === collection.id }"
+            :title="collection.name"
             @click="enterFolder(collection)"
           >
-            <PostToolIcon name="folder" />{{ collection.name }}
+            <PostToolIcon name="folder" /><span class="pt-node-name">{{ collection.name }}</span>
           </button>
           <button
-            :aria-label="`设置集合 ${collection.name}`"
-            @click="collectionEditing = collection"
+            :aria-label="`更多操作 ${collection.name}`"
+            title="更多操作（也可右键）"
+            aria-haspopup="menu"
+            @click="openContextMenu($event, collection, true)"
           >
-            <PostToolIcon name="settings" /></button
-          ><button
-            :aria-label="`删除集合 ${collection.name}`"
-            @click="deleteEntry(collection)"
-          >
-            ×
+            <PostToolIcon name="more" />
           </button>
         </div>
         <div
           v-for="item in folders.filter((f) => f.parent === folder)"
           :key="item.id"
-          class="pt-folder-row"
+          class="pt-folder-row pt-nested-folder"
+          @contextmenu="openContextMenu($event, item)"
         >
-          <button @click="enterFolder(item)">
-            <PostToolIcon name="folder" />{{ item.name }}
+          <button :title="item.name" @click="enterFolder(item)">
+            <PostToolIcon name="chevron" /><PostToolIcon name="folder" /><span class="pt-node-name">{{ item.name }}</span>
           </button>
           <button
-            :aria-label="`设置文件夹 ${item.name}`"
-            @click="collectionEditing = item"
+            :aria-label="`更多操作 ${item.name}`"
+            title="更多操作（也可右键）"
+            aria-haspopup="menu"
+            @click="openContextMenu($event, item, true)"
           >
-            <PostToolIcon name="settings" /></button
-          ><button
-            :aria-label="`删除文件夹 ${item.name}`"
-            @click="deleteEntry(item)"
-          >
-            ×
+            <PostToolIcon name="more" />
           </button>
         </div>
         <button v-if="folder" class="pt-add-row" @click="createFolder">
@@ -1262,6 +1543,33 @@ onUnmounted(() => {
         <button @click="enterFolder()">集合</button
         ><span>/ {{ breadcrumbs[0]?.name }}</span>
       </div>
+      <div class="pt-copy-toolbar" aria-label="批量复制请求">
+        <label title="全选当前页（每页最多 100 条）">
+          <input
+            type="checkbox"
+            :checked="allEntriesChecked"
+            :indeterminate="selectedEntries.length > 0 && !allEntriesChecked"
+            :disabled="loading || !entries.length || copyBusy"
+            aria-label="全选当前页请求"
+            @change="toggleAllEntries"
+          />
+          <span>{{ selectedEntries.length ? `已选 ${selectedEntries.length} 条` : '请求' }}</span>
+        </label>
+        <button
+          :disabled="!api.desktop || !selectedEntries.length || copyBusy || environmentLoading || runner.running"
+          title="将所选请求及可用响应保存到软件目录 tmp，并复制 AI 阅读说明"
+          @click="copyRequests(true)"
+        ><PostToolIcon name="copy" />{{ copyBusy ? '复制中…' : '复制给 AI' }}</button>
+        <button
+          v-if="selectedEntries.length"
+          class="pt-icon-button"
+          aria-label="清除请求选择"
+          title="清除选择"
+          :disabled="copyBusy"
+          @click="checkedEntries.clear()"
+        >×</button>
+      </div>
+      <div v-if="copyBusy" class="pt-copy-progress" role="status">{{ copyProgress }}</div>
       <div class="pt-entry-list">
         <p v-if="loading" class="pt-empty">正在读取…</p>
         <div v-else-if="loadError" class="pt-error">
@@ -1277,8 +1585,16 @@ onUnmounted(() => {
         <div
           v-for="entry in entries"
           :key="entry.id"
-          :class="['pt-entry-row', { selected: doc.id === entry.id }]"
+          :class="['pt-entry-row', { selected: doc.id === entry.id, checked: checkedEntries.has(entry.id) }]"
+          @contextmenu="openContextMenu($event, entry)"
         >
+          <input
+            type="checkbox"
+            :checked="checkedEntries.has(entry.id)"
+            :disabled="copyBusy"
+            :aria-label="`选择请求 ${entry.name}`"
+            @change="toggleEntry(entry)"
+          />
           <button :title="entry.url || entry.name" @click="loadEntry(entry)">
             <span class="pt-method" :data-method="entry.method">{{
               entry.method
@@ -1288,10 +1604,12 @@ onUnmounted(() => {
               ><small v-if="entry.url">{{ entry.url }}</small></span
             ></button
           ><button
-            :aria-label="`删除 ${entry.name}`"
-            @click="deleteEntry(entry)"
+            :aria-label="`更多操作 ${entry.name}`"
+            title="更多操作（也可右键）"
+            aria-haspopup="menu"
+            @click="openContextMenu($event, entry, true)"
           >
-            ×
+            <PostToolIcon name="more" />
           </button>
         </div>
       </div>
@@ -1320,6 +1638,53 @@ onUnmounted(() => {
         ><span><PostToolIcon name="shield" />本地存储</span>
       </div>
     </aside>
+    <div
+      v-if="active"
+      class="pt-sidebar-divider"
+      role="separator"
+      aria-label="调整 postTool 左侧栏宽度"
+      aria-orientation="vertical"
+      :aria-valuemin="SIDEBAR_MIN"
+      :aria-valuemax="clampSidebarWidth(560, workbenchWidth)"
+      :aria-valuenow="sidebarWidth"
+      tabindex="0"
+      title="拖动调整宽度，双击恢复默认；方向键微调"
+      @pointerdown="startSidebarResize"
+      @pointermove="moveSidebarResize"
+      @pointerup="endSidebarResize"
+      @pointercancel="endSidebarResize"
+      @lostpointercapture="endSidebarResize"
+      @dblclick="resetSidebarWidth"
+      @keydown.left.prevent="resizeSidebarBy(-16)"
+      @keydown.right.prevent="resizeSidebarBy(16)"
+      @keydown.home.prevent="resizeSidebarBy(-10000)"
+      @keydown.end.prevent="resizeSidebarBy(10000)"
+    />
+    <Teleport to="body">
+      <div
+        v-if="contextMenu"
+        ref="menuElement"
+        class="pt-context-menu"
+        role="menu"
+        :aria-label="`${contextMenu.entry.name} 操作`"
+        :style="{ left: `${contextMenu.x}px`, top: `${contextMenu.y}px` }"
+        @contextmenu.prevent
+        @keydown="menuKeyboard"
+      >
+        <div class="pt-menu-caption" :title="contextMenu.entry.name">{{ contextMenu.entry.name }}</div>
+        <button role="menuitem" :disabled="!api.desktop || copyBusy || environmentLoading || runner.running || busyCount > 0" @click="copyMenuTarget">
+          <PostToolIcon name="copy" /><span>复制给 AI</span>
+          <small>{{ ['collection', 'folder'].includes(contextMenu.entry.kind) ? '含子文件夹' : '请求与响应' }}</small>
+        </button>
+        <template v-if="['collection', 'folder'].includes(contextMenu.entry.kind)">
+          <button role="menuitem" @click="addFolderFromMenu"><PostToolIcon name="plus" />新建文件夹</button>
+          <button role="menuitem" @click="editMenuTarget"><PostToolIcon name="settings" />{{ contextMenu.entry.kind === 'collection' ? '集合设置' : '文件夹设置' }}</button>
+        </template>
+        <button v-else role="menuitem" @click="openMenuTarget"><PostToolIcon name="file" />打开请求</button>
+        <div class="pt-menu-divider" />
+        <button class="pt-menu-danger" role="menuitem" :disabled="copyBusy" @click="deleteMenuTarget"><PostToolIcon name="trash" />{{ ['collection', 'folder'].includes(contextMenu.entry.kind) ? '删除及其内容' : '删除请求' }}</button>
+      </div>
+    </Teleport>
     <main class="pt-main">
       <header v-if="active" class="pt-workbar">
         <div class="pt-client-switch" role="group" aria-label="客户端类型">
@@ -1344,7 +1709,7 @@ onUnmounted(() => {
         <button class="pt-runner-button" @click="openRunner">
           <PostToolIcon name="play" />Runner
         </button>
-        <button class="pt-globals-button" @click="openGlobals">
+        <button class="pt-globals-button" :disabled="copyBusy" @click="openGlobals">
           <PostToolIcon name="code" />全局变量
         </button>
         <div class="pt-spacer" />
@@ -1363,7 +1728,7 @@ onUnmounted(() => {
         <div class="pt-environment">
           <PostToolIcon name="globe" /><select
             v-model="environmentId"
-            :disabled="busyCount > 0 || runner.running"
+            :disabled="busyCount > 0 || runner.running || copyBusy"
             aria-label="当前环境"
           >
             <option value="">无环境</option>
@@ -1375,6 +1740,7 @@ onUnmounted(() => {
             class="pt-icon-button"
             :aria-label="environmentId ? '编辑环境' : '新建环境'"
             :title="environmentId ? '编辑环境' : '新建环境'"
+            :disabled="copyBusy"
             @click="openEnvironment()"
           >
             <PostToolIcon :name="environmentId ? 'settings' : 'plus'" />
@@ -1384,12 +1750,20 @@ onUnmounted(() => {
             class="pt-icon-button"
             aria-label="新建环境"
             title="新建环境"
+            :disabled="copyBusy"
             @click="openEnvironment('')"
           >
             <PostToolIcon name="plus" />
           </button>
         </div>
       </header>
+      <div v-if="notice" class="pt-notice" role="status">
+        <span>{{ notice }}</span>
+        <button v-if="lastCopy?.clipboardError" @click="retryCopyInstructions">
+          复制说明
+        </button>
+        <button aria-label="关闭提示" @click="notice = ''">×</button>
+      </div>
       <PostToolStream
         v-if="streamOpened"
         :active="active && clientMode === 'stream'"
@@ -1428,10 +1802,6 @@ onUnmounted(() => {
             ＋
           </button>
         </div>
-        <div v-if="notice" class="pt-notice" role="status">
-          <span>{{ notice }}</span
-          ><button aria-label="关闭提示" @click="notice = ''">×</button>
-        </div>
         <div class="pt-request-heading">
           <PostToolIcon name="file" />
           <input
@@ -1458,9 +1828,15 @@ onUnmounted(() => {
             <PostToolIcon name="save" />保存 <kbd>Ctrl S</kbd>
           </button>
           <button
+            class="pt-copy-button"
+            :disabled="!api.desktop || copyBusy || current.running || environmentLoading || runner.running"
+            title="保存请求配置、完整请求与响应到软件目录 tmp，并复制 AI 阅读说明"
+            @click="copyRequests()"
+          ><PostToolIcon name="copy" />{{ copyBusy ? '复制中…' : '复制给 AI' }}</button>
+          <button
             class="pt-icon-button"
-            aria-label="复制请求"
-            title="复制请求"
+            aria-label="创建请求副本"
+            title="创建请求副本"
             @click="
               addTab({
                 ...JSON.parse(JSON.stringify(doc)),

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { sidebarWidth, storedSidebarWidth } from "./sidebar.ts";
 import {
   compile,
   freshRequest,
@@ -20,6 +21,15 @@ function test(name: string, fn: () => void) {
   fn();
   console.log(`ok ${name}`);
 }
+test("sidebar preference survives malformed storage and preserves editor space", () => {
+  assert.equal(storedSidebarWidth(null), 288);
+  assert.equal(storedSidebarWidth("bad"), 288);
+  assert.equal(storedSidebarWidth("400"), 400);
+  assert.equal(sidebarWidth(560, 1100), 480);
+  assert.equal(sidebarWidth(10_000, 1440), 560);
+  assert.equal(sidebarWidth(-100, 1440), 224);
+  assert.equal(sidebarWidth(Number.NaN, 1440), 288);
+});
 test("scope order, disabled variables, nested and circular references", () => {
   const vars = variables(
     [pair("base", "http://localhost"), pair("token", "global")],

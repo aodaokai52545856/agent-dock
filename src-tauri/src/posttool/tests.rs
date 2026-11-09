@@ -47,7 +47,7 @@ fn cache_and_client_limits_are_bounded() {
     assert!(hub.inner.lock().unwrap().active.is_empty());
 }
 
-fn isolated_hub() -> Arc<Hub> {
+pub(super) fn isolated_hub() -> Arc<Hub> {
     Arc::new(Hub {
         inner: Mutex::new(Inner {
             active: HashMap::new(),
@@ -61,7 +61,7 @@ fn isolated_hub() -> Arc<Hub> {
         cookies: Arc::new(BoundedCookies::default()),
     })
 }
-fn spec(url: String) -> RequestSpec {
+pub(super) fn spec(url: String) -> RequestSpec {
     serde_json::from_value(serde_json::json!({"id":uuid::Uuid::new_v4().to_string(),"method":"GET","url":url,"proxy":"direct"})).unwrap()
 }
 
@@ -197,6 +197,7 @@ async fn thousand_requests_reclaim_response_files_tasks_and_accounting() {
                     request.id.clone(),
                     ResponseEntry {
                         meta: meta.clone(),
+                        request: request.clone(),
                         path: path.clone(),
                         started: Instant::now(),
                     },

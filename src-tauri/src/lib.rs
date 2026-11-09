@@ -1225,6 +1225,8 @@ pub fn run() {
             posttool::posttool_release,
             posttool::posttool_response_slice,
             posttool::posttool_response_save,
+            posttool::copy::posttool_copy_requests,
+            posttool::copy::posttool_copy_collection,
             posttool::storage::posttool_document_list,
             posttool::storage::posttool_document_get,
             posttool::storage::posttool_document_put,

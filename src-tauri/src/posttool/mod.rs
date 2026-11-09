@@ -1,4 +1,5 @@
 //! Local API client. No workers, clients, database or cache are created until first use.
+pub mod copy;
 pub mod grpc;
 pub mod oauth;
 pub mod storage;
@@ -90,6 +91,7 @@ pub struct ResponseMeta {
 }
 struct ResponseEntry {
     meta: Arc<Mutex<ResponseMeta>>,
+    request: RequestSpec,
     path: PathBuf,
     started: Instant,
 }
@@ -332,6 +334,7 @@ pub async fn posttool_request(app: AppHandle, spec: RequestSpec) -> Result<Respo
             spec.id.clone(),
             ResponseEntry {
                 meta: meta.clone(),
+                request: spec.clone(),
                 path: path.clone(),
                 started: start,
             },

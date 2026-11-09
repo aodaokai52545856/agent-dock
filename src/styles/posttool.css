@@ -156,7 +156,7 @@
   min-width: 0;
 }
 .pt-folder-row > button:first-child,
-.pt-entry-row > button:first-child {
+.pt-entry-row > button:first-of-type {
   flex: 1;
   min-width: 0;
   overflow: hidden;
@@ -186,13 +186,13 @@
   min-height: 0;
   padding: 8px;
 }
-.pt-entry-row > button:first-child {
+.pt-entry-row > button:first-of-type {
   display: flex;
   gap: 8px;
   align-items: center;
   height: 32px;
 }
-.pt-entry-row > button:first-child > span:last-child {
+.pt-entry-row > button:first-of-type > span:last-child {
   overflow: hidden;
   text-overflow: ellipsis;
 }

@@ -57,6 +57,61 @@ pub struct Page {
     total: i64,
 }
 
+// One decrypted document at a time: collection handoff does not load every body into IPC/RAM.
+pub(super) fn visit_collection_documents(
+    dir: &Path,
+    id: &str,
+    visitor: &mut dyn FnMut(Document) -> Result<(), String>,
+) -> Result<(), String> {
+    validate_id(id)?;
+    let db = connect(dir)?;
+    let exists: bool = db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM documents WHERE id=?1 AND kind IN ('collection','folder'))",
+        [id], |r| r.get(0),
+    ).map_err(err)?;
+    if !exists {
+        return Err("集合或文件夹不存在，请刷新后重试".into());
+    }
+    let master = {
+        let _lock = STORE_LOCK.lock().unwrap();
+        key(dir)?
+    };
+    let mut stmt = db.prepare(
+        "WITH RECURSIVE subtree(id) AS (
+            SELECT id FROM documents WHERE id=?1
+            UNION SELECT d.id FROM documents d JOIN subtree t ON d.parent=t.id WHERE d.kind IN ('folder','request')
+        ), ancestors(id) AS (
+            SELECT parent FROM documents WHERE id=?1
+            UNION SELECT d.parent FROM documents d JOIN ancestors a ON d.id=a.id WHERE d.parent<>''
+        ) SELECT id,kind,parent,name,method,url,updated,payload,nonce FROM documents
+          WHERE id IN (SELECT id FROM subtree) OR id IN (SELECT id FROM ancestors)
+          ORDER BY CASE kind WHEN 'collection' THEN 0 WHEN 'folder' THEN 1 ELSE 2 END,name,id"
+    ).map_err(err)?;
+    let mut rows = stmt.query([id]).map_err(err)?;
+    let mut count = 0;
+    while let Some(row) = rows.next().map_err(err)? {
+        count += 1;
+        if count > 20_000 {
+            return Err("集合超过 20,000 项，请按子文件夹分别复制".into());
+        }
+        let encrypted: Vec<u8> = row.get(7).map_err(err)?;
+        let nonce: Vec<u8> = row.get(8).map_err(err)?;
+        let payload =
+            serde_json::from_slice(&secret_box::open(&master, &nonce, &encrypted)?).map_err(err)?;
+        visitor(Document {
+            id: row.get(0).map_err(err)?,
+            kind: row.get(1).map_err(err)?,
+            parent: row.get(2).map_err(err)?,
+            name: row.get(3).map_err(err)?,
+            method: row.get(4).map_err(err)?,
+            url: row.get(5).map_err(err)?,
+            updated: row.get(6).map_err(err)?,
+            payload,
+        })?;
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn posttool_document_list(
     app: AppHandle,
@@ -118,7 +173,7 @@ pub async fn posttool_document_put(app: AppHandle, document: Document) -> Result
     }).await.map_err(err)?
 }
 
-fn import_documents(dir: &Path, documents: Vec<Document>) -> Result<(), String> {
+pub(super) fn import_documents(dir: &Path, documents: Vec<Document>) -> Result<(), String> {
     if documents.len() > 10_000 {
         return Err("单次导入最多 10,000 项".into());
     }

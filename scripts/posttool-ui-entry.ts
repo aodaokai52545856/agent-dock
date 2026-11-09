@@ -8,7 +8,7 @@ export function mount() {
   const active = ref(true);
   (window as unknown as { __posttoolActive: typeof active }).__posttoolActive =
     active;
-  createApp({ setup: () => () => h(Pane, { active: active.value }) }).mount(
-    "#app",
-  );
+  const app = createApp({ setup: () => () => h(Pane, { active: active.value }) });
+  app.mount("#app");
+  return app;
 }

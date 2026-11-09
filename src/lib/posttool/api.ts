@@ -6,6 +6,7 @@ import type {
   ResponseMeta,
   ResponseSlice,
   ResourceInfo,
+  compile,
 } from "./model";
 export const desktop =
   typeof window !== "undefined" &&
@@ -28,6 +29,26 @@ export const slice = (id: string, offset = 0) =>
 export const resources = () => call<ResourceInfo>("resources");
 export const responseSave = (id: string, path: string) =>
   call<number>("response_save", { id, path });
+export interface CopyItem {
+  request: RequestDoc;
+  responseId?: string;
+  resolved?: ReturnType<typeof compile>;
+  resolutionError?: string;
+  source: string;
+  error?: string;
+  tests?: unknown[];
+  logs?: string[];
+}
+export interface CopyResult {
+  directory: string;
+  count: number;
+  clipboardText: string;
+  clipboardError: string | null;
+}
+export const copyRequests = (items: CopyItem[]) =>
+  call<CopyResult>("copy_requests", { items });
+export const copyCollection = (id: string, openItems: CopyItem[], context: unknown) =>
+  call<CopyResult>("copy_collection", { id, openItems, context });
 export const list = (kind: string, search = "", page = 0, parent?: string) =>
   call<Page>("document_list", { kind, search, page, parent: parent ?? null });
 export const get = <T>(id: string) => call<T>("document_get", { id });

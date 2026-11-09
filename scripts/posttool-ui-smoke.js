@@ -16,11 +16,36 @@ async (page) => {
       responses = new Map(),
       cancelled = new Set(),
       calls = [],
-      requests = [];
-    window.__posttoolSmoke = { documents, responses, calls, requests };
+      requests = [],
+      copies = [];
+    localStorage.removeItem("posttool.sidebarWidth.v1");
+    window.__posttoolSmoke = { documents, responses, calls, requests, copies, collectionCopies: [] };
     window.__TAURI_INTERNALS__ = {
       invoke: async (command, args = {}) => {
         calls.push(command);
+        if (command === "posttool_copy_collection") {
+          window.__posttoolSmoke.collectionCopies.push(JSON.parse(JSON.stringify(args)));
+          const parents = new Set([args.id]);
+          let previous = 0;
+          while (previous !== parents.size) {
+            previous = parents.size;
+            for (const doc of documents.values()) if (doc.kind === "folder" && parents.has(doc.parent)) parents.add(doc.id);
+          }
+          const count = [...documents.values()].filter((d) => d.kind === "request" && parents.has(d.parent)).length;
+          return { directory: "D:\\aidock\\tmp\\posttool-collection", count,
+            clipboardText: "请读取 D:\\aidock\\tmp\\posttool-collection\\README.md", clipboardError: null };
+        }
+        if (command === "posttool_copy_requests") {
+          copies.push(JSON.parse(JSON.stringify(args.items)));
+          await new Promise((resolve) => setTimeout(resolve, 150));
+          if (window.__posttoolSmoke.failCopy) throw Error("模拟磁盘写入失败");
+          return {
+            directory: "C:\\Agent Dock\\tmp\\posttool-smoke",
+            count: args.items.length,
+            clipboardText: "请读取 C:\\Agent Dock\\tmp\\posttool-smoke\\README.md",
+            clipboardError: window.__posttoolSmoke.clipboardFailure ? "模拟剪贴板占用" : null,
+          };
+        }
         if (command === "posttool_document_list") {
           const items = [...documents.values()].filter(
             (d) =>
@@ -125,8 +150,32 @@ async (page) => {
       },
     };
     const { mount } = await import("/scripts/posttool-ui-entry.ts");
-    mount();
+    window.__posttoolApp = mount();
   });
+  const sidebarDivider = page.getByRole("separator", { name: "调整 postTool 左侧栏宽度" });
+  const originalSidebar = await page.locator(".pt-sidebar").evaluate((el) => el.clientWidth);
+  const grip = await sidebarDivider.boundingBox();
+  await page.mouse.move(grip.x + 2, grip.y + 200);
+  await page.mouse.down();
+  await page.mouse.move(grip.x + 82, grip.y + 200, { steps: 8 });
+  await page.mouse.up();
+  const expandedSidebar = await page.locator(".pt-sidebar").evaluate((el) => el.clientWidth);
+  if (expandedSidebar < originalSidebar + 60) throw Error("Sidebar pointer resize failed");
+  await sidebarDivider.focus();
+  await sidebarDivider.press("ArrowRight");
+  const savedWidth = await page.locator(".pt-sidebar").evaluate((el) => el.clientWidth);
+  if (savedWidth < expandedSidebar + 10) throw Error("Sidebar keyboard resize failed");
+  if (Number(await page.evaluate(() => localStorage.getItem("posttool.sidebarWidth.v1"))) !== savedWidth)
+    throw Error("Sidebar width was not persisted");
+  await page.evaluate(async () => {
+    window.__posttoolApp.unmount();
+    const { mount } = await import("/scripts/posttool-ui-entry.ts");
+    window.__posttoolApp = mount();
+  });
+  await sidebarDivider.waitFor();
+  if (await page.locator(".pt-sidebar").evaluate((el) => el.clientWidth) !== savedWidth)
+    throw Error("Sidebar width was not restored after remount");
+  await sidebarDivider.dblclick();
   await page
     .getByLabel("请求 URL", { exact: true })
     .fill("http://localhost:9876/echo?q=hello&q=world");
@@ -140,6 +189,12 @@ async (page) => {
     .locator(".pt-entry-list")
     .getByRole("button", { name: "GET Echo test" })
     .waitFor();
+  const singleCopy = page.locator(".pt-request-heading").getByRole("button", { name: "复制给 AI", exact: true });
+  await singleCopy.click();
+  await page.getByText(/已复制 1 条请求的资料说明/).waitFor();
+  const initialCopy = await page.evaluate(() => window.__posttoolSmoke.copies[0][0]);
+  if (!initialCopy.responseId || initialCopy.request.name !== "Echo test" || !initialCopy.resolved.url.includes("q=hello&q=world"))
+    throw Error("Single copy lost request details or response association");
   const methodPicker = page.getByRole("combobox", {
     name: "HTTP 方法",
     exact: true,
@@ -306,6 +361,106 @@ async (page) => {
   await page.getByRole("button", { name: "发送", exact: true }).click();
   await page.getByText("201 Created", { exact: true }).waitFor();
   await page.getByRole("button", { name: "保存 Ctrl S" }).click();
+  // Copy is a local handoff operation; it must never send the selected requests.
+  await page.evaluate(() => {
+    const documents = window.__posttoolSmoke.documents;
+    const saved = [...documents.values()].find((d) => d.kind === "request");
+    const second = JSON.parse(JSON.stringify(saved));
+    second.id = crypto.randomUUID();
+    second.name = "第二个请求";
+    second.payload.id = second.id;
+    second.payload.name = second.name;
+    documents.set(second.id, second);
+  });
+  await page.getByRole("tab", { name: "历史", exact: true }).click();
+  await page.getByRole("tab", { name: "集合", exact: true }).click();
+  await page.getByRole("checkbox", { name: "选择请求 第二个请求", exact: true }).waitFor();
+  const batchCopy = page.locator(".pt-copy-toolbar").getByRole("button", { name: "复制给 AI", exact: true });
+  if (await batchCopy.isEnabled()) throw Error("Empty selection allowed batch copy");
+  await page.getByRole("checkbox", { name: "选择请求 创建用户", exact: true }).check();
+  if (!(await page.getByRole("checkbox", { name: "全选当前页请求" }).evaluate((el) => el.indeterminate)))
+    throw Error("Partial selection did not set indeterminate state");
+  await page.getByRole("checkbox", { name: "全选当前页请求" }).check();
+  const sentBeforeCopy = await page.evaluate(() => window.__posttoolSmoke.requests.length);
+  await batchCopy.click();
+  await page.getByText(/已复制 2 条请求的资料说明/).waitFor();
+  const batchResult = await page.evaluate(() => ({
+    copy: window.__posttoolSmoke.copies.at(-1),
+    sent: window.__posttoolSmoke.requests.length,
+  }));
+  if (batchResult.copy.length !== 2 || batchResult.sent !== sentBeforeCopy)
+    throw Error("Batch copy selected wrong requests or made a network request");
+  if (!batchResult.copy.find((i) => i.request.name === "创建用户")?.responseId)
+    throw Error("Batch copy lost the current response");
+  if (batchResult.copy.find((i) => i.request.name === "第二个请求")?.responseId)
+    throw Error("Unsent request acquired another request's response");
+  await page.getByRole("button", { name: "清除请求选择" }).click();
+  await page.evaluate(() => {
+    window.__posttoolSmoke.clipboardFailure = true;
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: {
+      writeText: async (text) => { window.__posttoolSmoke.clipboardRetryText = text; },
+    } });
+  });
+  await singleCopy.click();
+  await page.getByRole("button", { name: "复制说明", exact: true }).click();
+  await page.getByText(/说明已复制，可直接粘贴给 AI/).waitFor();
+  if (!(await page.evaluate(() => window.__posttoolSmoke.clipboardRetryText)).includes("README.md"))
+    throw Error("Clipboard retry did not use the saved bundle instructions");
+  await page.evaluate(() => {
+    window.__posttoolSmoke.clipboardFailure = false;
+    window.__posttoolSmoke.failCopy = true;
+  });
+  await singleCopy.click();
+  await page.getByText(/复制失败.*模拟磁盘写入失败/).waitFor();
+  if (await singleCopy.isDisabled()) throw Error("Copy failure left button busy");
+  await page.evaluate(() => { window.__posttoolSmoke.failCopy = false; });
+  await page.getByRole("button", { name: "关闭提示", exact: true }).click();
+  await page.getByRole("button", { name: "新建集合", exact: true }).click();
+  await page.getByLabel("名称", { exact: true }).fill("订单接口");
+  await page.getByRole("dialog", { name: "新建集合" }).getByRole("button", { name: "保存", exact: true }).click();
+  const collectionRow = page.locator(".pt-folder-row").filter({ has: page.getByRole("button", { name: "订单接口", exact: true }) });
+  await collectionRow.click({ button: "right" });
+  await page.getByRole("menuitem", { name: "复制给 AI", exact: false }).click();
+  await page.getByText(/已复制 集合配置（暂无请求）/).waitFor();
+  await page.getByLabel("所属集合").selectOption({ label: "订单接口" });
+  await page.getByRole("button", { name: "保存 Ctrl S" }).click();
+  await page.getByRole("button", { name: "更多操作 订单接口", exact: true }).click();
+  await page.getByRole("menuitem", { name: "新建文件夹", exact: true }).click();
+  await page.getByLabel("名称", { exact: true }).fill("后台服务");
+  await page.getByRole("dialog", { name: "新建文件夹" }).getByRole("button", { name: "保存", exact: true }).click();
+  await page.getByRole("button", { name: "后台服务", exact: true }).waitFor();
+  await page.evaluate(() => {
+    const documents = window.__posttoolSmoke.documents;
+    const parent = [...documents.values()].find((d) => d.kind === "folder");
+    const saved = [...documents.values()].find((d) => d.kind === "request");
+    for (let n = 0; n < 130; n++) {
+      const request = JSON.parse(JSON.stringify(saved));
+      request.id = crypto.randomUUID();
+      request.parent = parent.id;
+      request.name = `服务请求 ${n}`;
+      Object.assign(request.payload, { id: request.id, parent: parent.id, name: request.name });
+      documents.set(request.id, request);
+    }
+  });
+  await page.getByLabel("搜索请求").fill("没有匹配的请求");
+  await page.getByText("未找到符合条件的请求", { exact: true }).waitFor();
+  const sentBeforeCollectionCopy = await page.evaluate(() => window.__posttoolSmoke.requests.length);
+  await collectionRow.click({ button: "right" });
+  await page.getByRole("menuitem", { name: "复制给 AI", exact: false }).click();
+  await page.getByText(/已复制 131 条请求的资料说明/).waitFor();
+  const wholeCollection = await page.evaluate(() => window.__posttoolSmoke.collectionCopies.at(-1));
+  if (!wholeCollection.id || !wholeCollection.context.environment || !wholeCollection.openItems.some((i) => i.responseId))
+    throw Error("Collection copy lost context or open response snapshots");
+  if (await page.evaluate(() => window.__posttoolSmoke.requests.length) !== sentBeforeCollectionCopy)
+    throw Error("Collection copy sent network requests");
+  await page.getByLabel("搜索请求").fill("");
+  await page.getByRole("button", { name: "后台服务", exact: true }).click({ button: "right" });
+  await page.getByRole("menuitem", { name: "复制给 AI", exact: false }).click();
+  await page.getByText(/已复制 130 条请求的资料说明/).waitFor();
+  await page.getByRole("button", { name: "更多操作 订单接口", exact: true }).click();
+  await page.keyboard.press("Escape");
+  if (await page.getByRole("menu").count()) throw Error("Context menu did not close with Escape");
+  await page.getByRole("button", { name: "关闭提示", exact: true }).click();
   await page.screenshot({ path: ".pwtmp/posttool-ui.png", fullPage: true });
   await page.screenshot({
     path: ".pwtmp/posttool-redesign-dark.png",

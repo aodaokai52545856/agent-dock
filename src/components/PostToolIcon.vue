@@ -22,6 +22,7 @@ const paths: Record<string, string> = {
     "M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0ZM3 12h18M12 3a19 19 0 0 1 0 18 19 19 0 0 1 0-18Z",
   play: "m8 4 13 8-13 8V4Z",
   chevron: "m9 5 7 7-7 7",
+  more: "M5 11h.01v2H5zM12 11h.01v2H12zM19 11h.01v2H19z",
   code: "m8 7-5 5 5 5m8-10 5 5-5 5m-3-14-2 18",
   shield: "m12 2 9 4v6c0 5-9 10-9 10S3 17 3 12V6l9-4Zm-4 10 3 3 5-6",
   check: "m5 12 4 4L19 6",
