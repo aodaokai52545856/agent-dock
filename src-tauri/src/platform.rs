@@ -53,6 +53,10 @@ pub fn resolve_shell(configured: &str) -> Result<String, String> {
 
 pub fn extra_bin_dirs() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
+    #[cfg(windows)]
+    if let Some(local_app_data) = dirs::data_local_dir() {
+        dirs.push(local_app_data.join("agy").join("bin"));
+    }
     if let Some(home) = dirs::home_dir() {
         dirs.push(home.join(".bun").join("bin"));
         dirs.push(home.join("AppData").join("Local").join("omp"));

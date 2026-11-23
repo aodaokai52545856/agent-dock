@@ -3,7 +3,7 @@ import { computed, ref, watch } from 'vue'
 import * as api from '../lib/api'
 import { store, showToast } from '../lib/store'
 import { toolLabel, TOOL_OFFICIAL_URLS, type ToolId, type ToolVersionInfo, type VersionTask } from '../lib/types'
-import { canUpgradeTool, taskRunning, toolInstalled } from '../lib/versionCenter'
+import { canUninstallTool, canUpgradeTool, taskRunning, toolInstalled } from '../lib/versionCenter'
 import { versionCenter } from '../lib/versionService'
 import ToolMark from './ToolMark.vue'
 import ConfirmDialog from './ConfirmDialog.vue'
@@ -33,7 +33,7 @@ watch(() => props.open, open => {
 
 const lastTask = (target: string) => history.value.find(task => task.target === target)
 const targetLabel = (target: string) => target === 'app' ? 'Agent Dock' : toolLabel(target as ToolId)
-const taskLabel = (task: VersionTask) => ({ upgrade: '安装 / 升级', uninstall: '卸载', download: '下载更新', apply: '安装更新' })[task.action]
+const taskLabel = (task: VersionTask) => ({ upgrade: task.target === 'antigravity' ? '升级' : '安装 / 升级', uninstall: '卸载', download: '下载更新', apply: '安装更新' })[task.action]
 const bytes = (value: number) => `${(value / 1024 / 1024).toFixed(1)} MB`
 const displayVersion = (value: string) => !value || value === '—' ? '—' : value
 const taskTime = (task: VersionTask) => task.startedAt || task.finishedAt
@@ -62,6 +62,7 @@ function actionLabel(row: ToolVersionInfo) {
   const task = lastTask(row.toolId)
   if (task && taskRunning(task)) return task.status === 'queued' ? '等待中' : '执行中…'
   if (state.snapshot.readyTools?.[row.toolId]) return '应用更新'
+  if (row.toolId === 'antigravity') return '升级'
   return toolInstalled(row) ? '升级' : '安装'
 }
 function uninstallBody(row: ToolVersionInfo) {
@@ -137,12 +138,13 @@ async function copy(text: string) { showToast(await api.clipboardWrite(text) ? '
               <tbody>
                 <template v-for="row in state.rows" :key="row.toolId">
                   <tr class="software-row" :class="{ expanded: expanded === row.toolId }">
-                    <td><div class="software-name"><ToolMark :id="row.toolId" /><div><strong>{{ toolLabel(row.toolId) }}</strong><span v-if="state.errors[row.toolId]" class="compact-error" :title="state.errors[row.toolId]">检测失败，可展开详情重试</span><span v-else-if="!canUpgradeTool(row) && row.compare !== '未检测'">请通过官方安装包安装</span></div></div></td>
+                    <td><div class="software-name"><ToolMark :id="row.toolId" /><div><strong>{{ toolLabel(row.toolId) }}</strong><span v-if="state.errors[row.toolId]" class="compact-error" :title="state.errors[row.toolId]">检测失败，可展开详情重试</span><span v-else-if="row.toolId === 'grokbuild' && !canUpgradeTool(row) && row.compare !== '未检测'">请通过官方安装包安装</span></div></div></td>
                     <td class="version-number">{{ displayVersion(row.localVersion) }}</td><td class="version-number">{{ displayVersion(row.latestVersion) }}</td>
                     <td><span class="status" :class="statusClass(statusLabel(row.toolId, row.compare))">{{ statusLabel(row.toolId, row.compare) }}</span></td>
                     <td><div class="row-actions">
                       <button type="button" class="btn btn-ghost btn-small" :disabled="busy" @click="versionCenter.check(row.toolId)">检测</button>
-                      <button type="button" class="btn btn-ghost btn-small" :disabled="busy || !canUpgradeTool(row)" @click="state.snapshot.readyTools?.[row.toolId] ? (ompApplyConfirm = true) : versionCenter.start([row.toolId], 'upgrade')">{{ actionLabel(row) }}</button>
+                      <button v-if="row.toolId === 'antigravity' && !row.found" type="button" class="btn btn-ghost btn-small" @click="api.openExternal(TOOL_OFFICIAL_URLS.antigravity)">安装指南 ↗</button>
+                      <button v-else type="button" class="btn btn-ghost btn-small" :disabled="busy || !canUpgradeTool(row)" @click="state.snapshot.readyTools?.[row.toolId] ? (ompApplyConfirm = true) : versionCenter.start([row.toolId], 'upgrade')">{{ actionLabel(row) }}</button>
                       <button v-if="row.toolId === 'omp' && state.snapshot.readyTools?.omp && lastTask('omp')?.status === 'failed'" type="button" class="text-btn" :disabled="busy" @click="versionCenter.start(['omp'], 'upgrade')">重新下载</button>
                       <button type="button" class="text-btn detail-toggle" :aria-label="`${toolLabel(row.toolId)}详情`" :aria-expanded="expanded === row.toolId" @click="expanded = expanded === row.toolId ? '' : row.toolId">详情 <span aria-hidden="true">{{ expanded === row.toolId ? '⌃' : '⌄' }}</span></button>
                     </div></td>
@@ -151,7 +153,7 @@ async function copy(text: string) { showToast(await api.clipboardWrite(text) ? '
                     <div class="path-line"><span>安装路径</span><code>{{ row.path || '检测后显示安装路径' }}</code><button v-if="row.path" type="button" class="text-btn" @click="copy(row.path)">复制</button></div>
                     <p v-if="state.errors[row.toolId]" class="row-error">{{ state.errors[row.toolId] }}</p>
                     <ul v-if="row.checks?.length" class="environment-checks"><li v-for="item in row.checks" :key="item.name"><span class="status" :class="item.ok ? 'status-ok' : 'status-error'">{{ item.ok ? '通过' : '未通过' }}</span><strong>{{ item.name }}</strong><span>{{ item.detail }}</span></li></ul>
-                    <div class="detail-actions"><button type="button" class="text-btn" @click="api.openExternal(TOOL_OFFICIAL_URLS[row.toolId])">官网与安装说明 ↗</button><button v-if="toolInstalled(row)" type="button" class="text-btn danger-text" :disabled="busy" @click="pendingUninstall = row">卸载命令行</button></div>
+                    <div class="detail-actions"><button type="button" class="text-btn" @click="api.openExternal(TOOL_OFFICIAL_URLS[row.toolId])">官网与安装说明 ↗</button><button v-if="canUninstallTool(row)" type="button" class="text-btn danger-text" :disabled="busy" @click="pendingUninstall = row">卸载命令行</button></div>
                     <details v-if="lastTask(row.toolId)?.log" class="task-log"><summary>最近一次操作日志</summary><pre>{{ lastTask(row.toolId)?.log }}</pre></details>
                   </div></td></tr>
                 </template>

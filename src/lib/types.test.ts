@@ -21,7 +21,8 @@ function probes(missing: Partial<Record<keyof ToolProbeMap, boolean>> = {}): Too
     claude: { found: missing.claude !== true },
     pi: { found: missing.pi !== true },
     omp: { found: missing.omp !== true },
-    dsh: { found: missing.dsh !== true }
+    dsh: { found: missing.dsh !== true },
+    antigravity: { found: missing.antigravity !== true }
   }
 }
 
@@ -30,10 +31,11 @@ function test(name: string, fn: () => void) {
   console.log(`ok ${name}`)
 }
 
-test('seven CLI tools including Pi, OMP and DeepSeek Harness', () => {
-  assert.equal(TOOLS.length, 7)
+test('eight CLI tools including Antigravity, Pi, OMP and DeepSeek Harness', () => {
+  assert.equal(TOOLS.length, 8)
   assert.ok(TOOLS.some((tool) => tool.id === 'claude'))
   assert.ok(TOOLS.some((tool) => tool.id === 'pi'))
+  assert.equal(TOOLS.find((tool) => tool.id === 'antigravity')?.label, 'Antigravity')
   const dsh = TOOLS.find((tool) => tool.id === 'dsh')
   assert.ok(dsh)
   assert.equal(dsh?.hint, '打开 DeepSeek Web')
@@ -65,6 +67,7 @@ test('DeepSeek install is only ready when Node, dsh and dsh web all pass', () =>
 test('session filter accepts opened-live view', () => {
   assert.equal(parseSessionToolFilter('live'), 'all')
   assert.equal(parseSessionToolFilter('grokbuild'), 'grokbuild')
+  assert.equal(parseSessionToolFilter('antigravity'), 'antigravity')
   assert.equal(parseSessionToolFilter('nope'), 'all')
 })
 

@@ -22,6 +22,7 @@ import {
   matchUnboundLiveToSessions,
   mergeLiveFromServer,
   pendingSessionRows,
+  preserveLiveAccount,
   ptyIdFromPending
 } from './liveBind'
 import {
@@ -121,6 +122,7 @@ const defaultSettings = (): AppSettings => ({
   ompDefaultProfile: '',
   ompLaunchMode: 'wrapped',
   dshPath: '',
+  antigravityPath: '',
   powershellPath: defaultShellPath(),
   terminalFontSize: 14,
   uiFontSize: 13,
@@ -152,6 +154,10 @@ const lastPtyByProject: Record<string, string> = {}
 const previewSessions: Record<string, SessionRow[]> = {}
 
 export { parseAppMode }
+
+function initialSessionLoading() {
+  return Object.fromEntries(TOOLS.map(({ id }) => [id, false])) as Record<ToolId, boolean>
+}
 
 function sessionViewStorage(): SessionViewStorage | null {
   if (typeof localStorage === 'undefined') return null
@@ -198,15 +204,7 @@ export const store = reactive({
   sessionErrorKind: '' as string,
   sessionError: '',
   sessionErrors: {} as Partial<Record<ToolId, { kind: string; message: string }>>,
-  sessionLoading: {
-    opencode: false,
-    grokbuild: false,
-    kimi: false,
-    claude: false,
-    pi: false,
-    omp: false,
-    dsh: false
-  } as Record<ToolId, boolean>,
+  sessionLoading: initialSessionLoading(),
   sessionRefreshBusy: false,
   renamingSessionId: '',
   sessionQuery: '',
@@ -683,15 +681,7 @@ async function refreshSessionsNow(opts?: { silent?: boolean }) {
   if (!store.selectedProjectId) {
     store.sessions = []
     store.sessionErrors = {}
-    store.sessionLoading = {
-      opencode: false,
-      grokbuild: false,
-      kimi: false,
-      claude: false,
-      pi: false,
-    omp: false,
-      dsh: false
-    }
+    store.sessionLoading = initialSessionLoading()
     store.sessionRefreshBusy = false
     store.sessionStatus = 'idle'
     return
@@ -766,15 +756,7 @@ function applyPreviewSessions() {
   const rows = previewSessions[store.selectedProjectId] ?? []
   store.sessions = [...rows]
   store.sessionErrors = {}
-  store.sessionLoading = {
-    opencode: false,
-    grokbuild: false,
-    kimi: false,
-    claude: false,
-    pi: false,
-    omp: false,
-    dsh: false
-  }
+  store.sessionLoading = initialSessionLoading()
   store.sessionStatus = rows.length ? 'ready' : 'empty'
 }
 
@@ -1043,10 +1025,11 @@ function adoptLiveFallback(deadPtyId: string, deadProjectId?: string | null, opt
 
 export async function refreshLive() {
   if (!api.isTauri) return
+  const server = await api.listLivePtys()
   const previous = store.activePtyId
   const previousProject = store.live.find((item) => item.ptyId === previous)?.projectId ?? store.selectedProjectId
-  const local = store.live.slice()
-  store.live = mergeLiveFromServer(await api.listLivePtys(), local)
+  const local = store.live
+  store.live = mergeLiveFromServer(server, local)
   for (const item of local) if (!store.live.some(live => live.ptyId === item.ptyId)) {
     forgetOmpSession(item.ptyId)
     stopPendingWatch(item.ptyId)
@@ -1093,9 +1076,10 @@ export function markPtyExit(ptyId: string, opts?: { userClosed?: boolean; skipRe
 
 export function rememberOpened(info: LivePtyInfo) {
   rememberOmpMode(info)
-  const openedAt = info.openedAt ?? store.live.find((item) => item.ptyId === info.ptyId)?.openedAt ?? Date.now()
-  const next = { ...info, openedAt, alive: true }
   const idx = store.live.findIndex((item) => item.ptyId === info.ptyId)
+  const previous = store.live[idx]
+  const openedAt = info.openedAt ?? previous?.openedAt ?? Date.now()
+  const next = { ...(previous ? preserveLiveAccount(previous, info) : info), openedAt, alive: true }
   if (idx >= 0) store.live[idx] = next
   else store.live.push(next)
   activateLiveItem(next)
@@ -1140,10 +1124,11 @@ export async function bindLiveSession(ptyId: string, sessionId: string, title?: 
     const targetId = bound.ptyId || ptyId
     const idx = store.live.findIndex((item) => item.ptyId === targetId)
     if (idx >= 0) {
+      const previous = store.live[idx]
       store.live[idx] = {
-        ...store.live[idx],
-        ...bound,
-        openedAt: bound.openedAt ?? store.live[idx]?.openedAt
+        ...previous,
+        ...preserveLiveAccount(previous, bound),
+        openedAt: bound.openedAt ?? previous.openedAt
       }
     }
     if (targetId !== ptyId) {
@@ -1160,7 +1145,10 @@ export async function bindLiveSession(ptyId: string, sessionId: string, title?: 
 export async function switchLiveSession(ptyId: string, sessionId: string) {
   const info = await api.ptySwitchSession(ptyId, sessionId)
   const idx = store.live.findIndex((item) => item.ptyId === ptyId)
-  if (idx >= 0) store.live[idx] = { ...store.live[idx], ...info, openedAt: info.openedAt ?? store.live[idx].openedAt }
+  if (idx >= 0) {
+    const previous = store.live[idx]
+    store.live[idx] = { ...previous, ...preserveLiveAccount(previous, info), openedAt: info.openedAt ?? previous.openedAt }
+  }
   if (store.activePtyId === ptyId && idx >= 0) store.focusedSession = focusedFromLive(store.live[idx])
 }
 

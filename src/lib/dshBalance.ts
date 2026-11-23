@@ -4,11 +4,8 @@ export const DSH_BALANCE_INTERVAL_MS = 60_000
 
 export function shouldShowDshBalance(filter: SessionToolFilter, selectedTool: ToolId, appMode = 'console') {
   if (appMode !== 'console') return false
-  if (filter === 'opencode' || filter === 'kimi' || filter === 'pi' || filter === 'omp' || filter === 'grokbuild') {
-    return false
-  }
-  if (filter === 'dsh' || filter === 'claude') return true
-  return selectedTool === 'dsh' || selectedTool === 'claude'
+  const tool = filter === 'all' ? selectedTool : filter
+  return tool === 'dsh' || tool === 'claude'
 }
 
 export function balanceTone(balance: DshBalance | null | undefined): 'warn' | 'err' | '' {

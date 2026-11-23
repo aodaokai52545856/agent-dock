@@ -72,6 +72,7 @@ function syncForm() {
   form.ompDefaultProfile = props.settings.ompDefaultProfile ?? ''
   form.ompLaunchMode = parseOmpLaunchMode(props.settings.ompLaunchMode)
   form.dshPath = props.settings.dshPath ?? ''
+  form.antigravityPath = props.settings.antigravityPath ?? ''
   form.saving = false
 }
 
@@ -101,12 +102,13 @@ const form = reactive({
   ompDefaultProfile: props.settings.ompDefaultProfile ?? '',
   ompLaunchMode: parseOmpLaunchMode(props.settings.ompLaunchMode),
   dshPath: props.settings.dshPath ?? '',
+  antigravityPath: props.settings.antigravityPath ?? '',
   saving: false
 })
 syncForm()
 
 const configDirty = computed(() =>
-  form.ompLaunchMode!==parseOmpLaunchMode(props.settings.ompLaunchMode) || (['cursorApiKey', 'codexPath', 'claudePath', 'piPath', 'ompPath', 'ompDefaultProfile', 'dshPath'] as const)
+  form.ompLaunchMode!==parseOmpLaunchMode(props.settings.ompLaunchMode) || (['cursorApiKey', 'codexPath', 'claudePath', 'piPath', 'ompPath', 'ompDefaultProfile', 'dshPath', 'antigravityPath'] as const)
     .some(key => form[key] !== (props.settings[key] ?? ''))
 )
 
@@ -213,7 +215,8 @@ function submit() {
     ompPath: form.ompPath.trim(),
     ompDefaultProfile: form.ompDefaultProfile.trim(),
     ompLaunchMode: form.ompLaunchMode,
-    dshPath: form.dshPath.trim()
+    dshPath: form.dshPath.trim(),
+    antigravityPath: form.antigravityPath.trim()
   })
 }
 
@@ -424,6 +427,10 @@ defineExpose({ stopSave })
       <label class="field">
         <span>DeepSeek Harness 路径</span>
         <input v-model="form.dshPath" type="text" placeholder="留空则从 PATH 查找 dsh（含 dsh web）" />
+      </label>
+      <label class="field">
+        <span>Antigravity CLI 路径</span>
+        <input v-model="form.antigravityPath" type="text" placeholder="留空则自动查找 agy" />
       </label>
       <label class="field">
         <span>Codex 路径</span>

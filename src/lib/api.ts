@@ -1,8 +1,10 @@
+import { version as appPackageVersion } from '../../package.json'
 import { isOmpRuntime, ompCommand, ompDraft, ompState } from './omp'
 import { invoke } from '@tauri-apps/api/core'
 import { previewSpend } from './grokSpend'
 import { emptyUsageDashboard, emptyUsageLogs } from './usage'
 import type {
+  AntigravityManagerState,
   AppSettings,
   AppState,
   AppUpdateInfo,
@@ -429,20 +431,20 @@ export async function listLivePtys(): Promise<LivePtyInfo[]> {
 }
 
 export async function appVersion(): Promise<string> {
-  if (!isTauri) return '0.1.22'
+  if (!isTauri) return appPackageVersion
   return invoke('app_version')
 }
 
 export async function checkAppUpdate(proxyUrl?: string): Promise<AppUpdateInfo> {
   if (!isTauri) {
     return {
-      localVersion: '0.1.22',
-      latestVersion: '0.1.22',
+      localVersion: appPackageVersion,
+      latestVersion: appPackageVersion,
       compare: '已是最新',
       kind: 'win-setup',
       kindLabel: 'Windows 安装包',
-      assetName: 'AgentDock-0.1.22-Setup.exe',
-      htmlUrl: 'https://github.com/aodaokai52545856/agent-dock/releases/tag/v0.1.22'
+      assetName: `AgentDock-${appPackageVersion}-Setup.exe`,
+      htmlUrl: 'https://github.com/aodaokai52545856/agent-dock/releases/latest'
     }
   }
   return invoke('check_app_update', { proxyUrl: proxyUrl ?? null })
@@ -483,7 +485,8 @@ export async function listToolVersions(proxyUrl?: string, toolId?: ToolId): Prom
       { toolId: 'kimi', name: 'Kimi', found: true, path: 'C:\\Users\\me\\.kimi-code\\bin\\kimi.exe', localVersion: '0.34.0', latestVersion: '0.42.0', compare: '可更新' },
       { toolId: 'claude', name: 'Claude Code', found: true, path: 'C:\\Users\\me\\.local\\bin\\claude.exe', localVersion: '2.1.269', latestVersion: '2.1.269', compare: '已是最新' },
       { toolId: 'pi', name: 'Pi', found: false, localVersion: '未安装', latestVersion: '0.85.1', compare: '未安装' },
-      { toolId: 'dsh', name: 'DeepSeek Harness', found: false, localVersion: '未安装', latestVersion: '0.1.0', compare: '未安装' }
+      { toolId: 'dsh', name: 'DeepSeek Harness', found: false, localVersion: '未安装', latestVersion: '0.1.0', compare: '未安装' },
+      { toolId: 'antigravity', name: 'Antigravity', found: false, localVersion: '未安装', latestVersion: '-', compare: '未安装' }
     ]
     return toolId ? rows.filter((row) => row.toolId === toolId) : rows
   }
@@ -715,6 +718,19 @@ export async function cancelClaudeLogin(): Promise<void> {
 export async function updateClaudeAccount(accountId: string, name: string, proxy: string): Promise<ClaudeAccountList> {
   if (!isTauri) return emptyClaudeAccounts()
   return invoke('update_claude_account', { accountId, name, proxy })
+}
+
+export async function listAntigravityManagerAccounts(): Promise<AntigravityManagerState> {
+  if (!isTauri) return { accounts: [], canSwitch: false }
+  return invoke('antigravity_manager_list')
+}
+
+export async function switchAntigravityManagerAccount(accountId: string): Promise<AntigravityManagerState> {
+  return invoke('antigravity_manager_switch', { accountId })
+}
+
+export async function launchAntigravityManager(): Promise<void> {
+  return invoke('antigravity_manager_launch')
 }
 
 const previewUsage = (): GrokUsage => {

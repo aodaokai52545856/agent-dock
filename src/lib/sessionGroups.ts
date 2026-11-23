@@ -3,15 +3,16 @@ import { TOOLS, toolLabel, type ToolId, type SessionRow } from './types.ts'
 export const SESSION_GROUP_COLLAPSE_KEY = 'ad-session-group-collapsed'
 
 const TOOL_IDS = new Set(TOOLS.map((tool) => tool.id))
+const ACCOUNT_GROUP_TOOLS = ['claude', 'omp', 'antigravity'] as const
 
-export type SessionGroupId = ToolId | `claude:${string}` | `omp:${string}`
+export type SessionGroupId = ToolId | `${(typeof ACCOUNT_GROUP_TOOLS)[number]}:${string}`
 
 export function compareSessionRecency(a: SessionRow, b: SessionRow) {
   return b.updatedAt - a.updatedAt || a.toolId.localeCompare(b.toolId) || a.id.localeCompare(b.id)
 }
 
 export function accountSessionGroups(toolId: ToolId, sessions: SessionRow[]) {
-  if ((toolId !== 'claude' && toolId !== 'omp') || !sessions.length) {
+  if (!ACCOUNT_GROUP_TOOLS.some((tool) => tool === toolId) || !sessions.length) {
     return [{ id: toolId as SessionGroupId, label: toolLabel(toolId), sessions }]
   }
   const buckets = new Map<string, SessionRow[]>()
@@ -25,7 +26,7 @@ export function accountSessionGroups(toolId: ToolId, sessions: SessionRow[]) {
     a === b ? 0 : a === 'system' ? -1 : b === 'system' ? 1 : a.localeCompare(b)
   ).map(([id, rows]) => ({
     id: `${toolId}:${id}` as SessionGroupId,
-    label: `${toolId === 'omp' ? 'OMP' : 'Claude'} · ${rows[0].account?.name || '归属未知'}`,
+    label: `${toolId === 'claude' ? 'Claude' : toolLabel(toolId)} · ${rows[0].account?.name || '归属未知'}`,
     sessions: [...rows].sort(compareSessionRecency)
   }))
 }
@@ -36,7 +37,8 @@ export function parseCollapsedGroups(raw: string | null | undefined): Set<Sessio
     const value = JSON.parse(raw)
     if (!Array.isArray(value)) return new Set()
     return new Set(value.filter((id): id is SessionGroupId => typeof id === 'string' && (
-      TOOL_IDS.has(id as ToolId) || ((id.startsWith('claude:') || id.startsWith('omp:')) && (id.split(':')[1]?.length || 0) > 0 && id.length <= 200)
+      TOOL_IDS.has(id as ToolId) ||
+      ACCOUNT_GROUP_TOOLS.some((tool) => id.startsWith(`${tool}:`) && Boolean(id.split(':')[1]) && id.length <= 200)
     )))
   } catch {
     return new Set()

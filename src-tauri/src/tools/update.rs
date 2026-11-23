@@ -59,6 +59,7 @@ pub fn official_url(tool: ToolId) -> &'static str {
         ToolId::Claude => "https://code.claude.com/docs/en/quickstart",
         ToolId::Pi => "https://pi.dev",
         ToolId::Omp => "https://omp.sh",
+        ToolId::Antigravity => "https://antigravity.google/docs/getting-started?tab=cli",
         ToolId::Dsh => "https://github.com/deepseek-ai/deepseek-harness",
     }
 }
@@ -73,6 +74,7 @@ pub fn version_tools(tool: Option<ToolId>) -> Vec<ToolId> {
             ToolId::Claude,
             ToolId::Pi,
             ToolId::Omp,
+            ToolId::Antigravity,
             ToolId::Dsh,
         ],
     }
@@ -96,7 +98,7 @@ pub fn upgrade_tool(tool: ToolId, settings: &AppSettings, proxy_url: Option<&str
         ToolId::Omp => return super::omp_update::upgrade(settings, Some(proxy_url.unwrap_or(&settings.default_proxy_url))),
         ToolId::Opencode => upgrade_via_npm(&mut log, "opencode-ai", &proxy),
         ToolId::Kimi => upgrade_kimi(&mut log, settings, &proxy),
-        ToolId::Grokbuild => upgrade_grok(&mut log, settings, &proxy),
+        ToolId::Grokbuild | ToolId::Antigravity => upgrade_via_cli(tool, &mut log, settings, &proxy),
         ToolId::Claude => upgrade_claude(&mut log, settings, &proxy),
         ToolId::Pi => upgrade_via_npm_flags(
             &mut log,
@@ -124,6 +126,9 @@ pub fn uninstall_tool(tool: ToolId, settings: &AppSettings) -> UpgradeResult {
     let mut log = String::new();
     let mut did = false;
     if tool == ToolId::Omp { return super::omp_update::uninstall(settings); }
+    if tool == ToolId::Antigravity {
+        return finish_result(tool, settings, false, "请按 Antigravity CLI 官方文档管理安装。".into());
+    }
     if tool == ToolId::Kimi {
         did |= uninstall_kimi_official(&mut log);
     }
@@ -238,7 +243,7 @@ fn version_args(tool: ToolId) -> &'static [&'static str] {
     match tool {
         ToolId::Grokbuild => &["version"],
         ToolId::Dsh => &["-V"],
-        ToolId::Opencode | ToolId::Kimi | ToolId::Claude | ToolId::Pi | ToolId::Omp => &["--version"],
+        ToolId::Opencode | ToolId::Kimi | ToolId::Claude | ToolId::Pi | ToolId::Omp | ToolId::Antigravity => &["--version"],
     }
 }
 
@@ -313,6 +318,7 @@ fn remote_version(tool: ToolId, settings: &AppSettings, exe: Option<&Path>, prox
         ToolId::Claude => npm_view("@anthropic-ai/claude-code", &proxy),
         ToolId::Omp => super::omp_update::latest(Some(proxy_url.unwrap_or(&settings.default_proxy_url))).unwrap_or_else(|_| "查询失败".into()),
         ToolId::Pi => npm_view("@earendil-works/pi-coding-agent", &proxy),
+        ToolId::Antigravity => "—".into(),
         ToolId::Dsh => npm_view("@deepseek-ai/dsh", &proxy),
         ToolId::Grokbuild => match exe {
             Some(path) => match run_capture(path, &["update", "--check"], &proxy) {
@@ -1017,6 +1023,7 @@ fn npm_package(tool: ToolId) -> &'static str {
         ToolId::Claude => "@anthropic-ai/claude-code",
         ToolId::Pi => "@earendil-works/pi-coding-agent",
         ToolId::Omp => "@oh-my-pi/pi-coding-agent",
+        ToolId::Antigravity => "",
         ToolId::Dsh => "@deepseek-ai/dsh",
         ToolId::Grokbuild => "grok",
     }
@@ -1129,8 +1136,8 @@ fn run_npm(args: &[&str], proxy: &[(String, String)]) -> Result<String, String> 
     }
 }
 
-fn upgrade_grok(log: &mut String, settings: &AppSettings, proxy: &[(String, String)]) -> bool {
-    let exe = match resolve_binary(ToolId::Grokbuild, settings) {
+fn upgrade_via_cli(tool: ToolId, log: &mut String, settings: &AppSettings, proxy: &[(String, String)]) -> bool {
+    let exe = match resolve_binary(tool, settings) {
         Ok(path) => path,
         Err(err) => {
             push_line(log, &err);
@@ -1575,8 +1582,9 @@ mod tests {
     #[test]
     fn version_tools_one_or_all() {
         assert_eq!(version_tools(Some(ToolId::Dsh)), vec![ToolId::Dsh]);
-        assert_eq!(version_tools(None).len(), 7);
+        assert_eq!(version_tools(None).len(), 8);
         assert!(version_tools(None).contains(&ToolId::Dsh));
+        assert!(version_tools(None).contains(&ToolId::Antigravity));
     }
 
     #[test]
@@ -1588,6 +1596,7 @@ mod tests {
             ToolId::Claude,
             ToolId::Pi,
             ToolId::Omp,
+            ToolId::Antigravity,
             ToolId::Dsh,
         ] {
             assert!(official_url(tool).starts_with("https://"));

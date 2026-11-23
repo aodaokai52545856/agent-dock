@@ -204,6 +204,7 @@ function submit() {
           </div>
         </div>
 
+        <p v-if="form.toolId === 'antigravity'" class="mode-hint">在终端输入 <code>/resume</code> 可查看和管理会话。</p>
         <label v-if="form.toolId==='omp'" class="field"><span class="label">OMP 启动方式</span><select v-model="form.ompMode" aria-label="OMP 启动方式"><option value="native">原生模式 · OMP 终端</option><option value="wrapped">封装模式 · Dock 聊天界面</option></select><small class="mode-hint">{{ form.ompMode==='native'?'使用 OMP 自带的终端界面、快捷键和原生交互。':'使用 Dock 消息面板、文档引用和 RPC 自动编排。' }}</small></label>
         <p v-if="form.error" class="err">{{ form.error }}</p>
         <div class="actions">

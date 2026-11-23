@@ -1,18 +1,8 @@
-import type { ToolId } from './types'
-
-function toolName(toolId: ToolId) {
-  if (toolId === 'grokbuild') return 'Grok'
-  if (toolId === 'kimi') return 'Kimi'
-  if (toolId === 'claude') return 'Claude Code'
-  if (toolId === 'omp') return 'OMP'
-  if (toolId === 'pi') return 'Pi'
-  if (toolId === 'dsh') return 'DeepSeek'
-  return 'OpenCode'
-}
+import { toolLabel, type ToolId } from './types.ts'
 
 export function formatCiteHeader(toolId: ToolId, sessionTitle: string) {
   const title = sessionTitle.trim() || '会话'
-  return `【引用自 ${toolName(toolId)} · ${title}】`
+  return `【引用自 ${toolLabel(toolId)} · ${title}】`
 }
 
 export function formatCiteBlock(opts: {

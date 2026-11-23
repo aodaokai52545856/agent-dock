@@ -1,3 +1,5 @@
+mod antigravity_manager;
+mod antigravity_usage;
 mod app_update;
 mod bridge;
 mod clipboard;
@@ -41,7 +43,7 @@ use pty::{LivePtyInfo, PtyHub, PtyOpened};
 use serde::{Deserialize, Serialize};
 use state::{AppSettings, AppState, Project, overlay_key};
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard};
 use tauri::webview::PageLoadEvent;
 use tauri::{AppHandle, Emitter, Manager, State};
 use dsh_balance::DshBalance;
@@ -54,6 +56,45 @@ use tools::update::{ToolVersionInfo, UpgradeResult};
 use app_update::{AppUpdateInfo, AppUpgradeResult};
 use tools::{BinaryProbe, SessionRow, ToolId};
 use uuid::Uuid;
+
+static ANTIGRAVITY_ACCOUNT_OPERATION: Mutex<()> = Mutex::new(());
+
+fn lock_antigravity_account_operation() -> Result<MutexGuard<'static, ()>, String> {
+    ANTIGRAVITY_ACCOUNT_OPERATION
+        .try_lock()
+        .map_err(|_| "Antigravity 正在切换账号或启动终端，请稍后重试。".into())
+}
+
+#[tauri::command]
+async fn antigravity_manager_list() -> Result<antigravity_manager::ManagerState, String> {
+    tauri::async_runtime::spawn_blocking(antigravity_manager::list)
+        .await
+        .map_err(|_| "读取 Antigravity Tools 账号失败。".to_string())?
+}
+
+#[tauri::command]
+async fn antigravity_manager_launch() -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(antigravity_manager::launch)
+        .await
+        .map_err(|_| "启动 Antigravity Tools 失败。".to_string())?
+}
+
+#[tauri::command]
+async fn antigravity_manager_switch(
+    hub: State<'_, Arc<PtyHub>>,
+    account_id: String,
+) -> Result<antigravity_manager::ManagerState, String> {
+    let hub = hub.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let _operation = lock_antigravity_account_operation()?;
+        if hub.list().iter().any(|live| live.tool_id == ToolId::Antigravity) {
+            return Err("请先关闭 Dock 中的 Antigravity 终端，再切换 CLI 账号。".into());
+        }
+        antigravity_manager::switch(&account_id)
+    })
+    .await
+    .map_err(|_| "切换 Antigravity CLI 账号失败。".to_string())?
+}
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -100,6 +141,7 @@ struct ToolProbeMap {
     claude: BinaryProbe,
     pi: BinaryProbe,
     omp: BinaryProbe,
+    antigravity: BinaryProbe,
     dsh: BinaryProbe,
 }
 
@@ -728,6 +770,7 @@ async fn probe_tools(app: AppHandle) -> Result<ToolProbeMap, String> {
         claude: tools::probe_binary(ToolId::Claude, &state.settings),
         pi: tools::probe_binary(ToolId::Pi, &state.settings),
         omp: tools::probe_binary(ToolId::Omp, &state.settings),
+        antigravity: tools::probe_binary(ToolId::Antigravity, &state.settings),
         dsh: tools::probe_binary(ToolId::Dsh, &state.settings),
     })
     .await
@@ -891,9 +934,11 @@ async fn pty_open(
     let state = state::load_state(&app)?;
     let hub = hub.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let _auth_guard = if tool_id == ToolId::Claude {
-            Some(claude_accounts::lock_operation()?)
-        } else { None };
+        let _auth_guard = match tool_id {
+            ToolId::Claude => Some(claude_accounts::lock_operation()?),
+            ToolId::Antigravity => Some(lock_antigravity_account_operation()?),
+            _ => None,
+        };
         hub.open(app, &state, &project_id, tool_id, session_id, title, cols, rows, ui_theme.as_deref(), None)
     }).await.map_err(|_| "启动终端失败。".to_string())?
 }
@@ -1283,6 +1328,9 @@ pub fn run() {
             usage_dashboard,
             usage_logs,
             usage_export_ccswitch,
+            antigravity_manager_list,
+            antigravity_manager_launch,
+            antigravity_manager_switch,
             save_grok_account,
             switch_grok_account,
             delete_grok_account,

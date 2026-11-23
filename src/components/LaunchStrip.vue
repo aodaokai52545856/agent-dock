@@ -22,6 +22,9 @@ const proxyText = computed(() => {
 
 const title = computed(() => activeLive.value?.title ?? '未打开会话')
 const live = computed(() => Boolean(activeLive.value))
+const antigravityAccount = computed(() =>
+  activeLive.value?.toolId === 'antigravity' ? activeLive.value.account?.name || '账号未识别' : ''
+)
 </script>
 
 <template>
@@ -35,6 +38,10 @@ const live = computed(() => Boolean(activeLive.value))
       <span class="dot">·</span>
       <span>{{ activeLive ? toolLabel(activeLive.toolId) : selectedProject ? toolLabel(store.selectedTool) : '工具' }}</span>
       <span v-if="activeLive?.toolId==='omp'">{{ activeLive.kind==='ompRpc'?'封装模式':'原生模式' }}</span>
+      <template v-if="antigravityAccount">
+        <span class="dot">·</span>
+        <span class="account" :title="antigravityAccount">{{ antigravityAccount }}</span>
+      </template>
       <span class="dot">·</span>
       <span class="proxy" :class="{ on: selectedProject?.proxyEnabled }" :title="proxyText">{{ proxyText }}</span>
       <span class="dot">·</span>
@@ -114,6 +121,14 @@ const live = computed(() => Boolean(activeLive.value))
 }
 
 .proxy { min-width: 0; max-width: 28%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.account {
+  min-width: 0;
+  max-width: 35%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ad-antigravity);
+}
 .ticket > .dot { flex-shrink: 0; }
 
 .dot {

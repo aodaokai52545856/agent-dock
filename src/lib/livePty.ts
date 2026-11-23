@@ -1,6 +1,6 @@
 import { DSH_FIXED_SESSION_ID, DSH_FIXED_SESSION_TITLE } from './dsh.ts'
 import { pendingSessionId } from './liveBind.ts'
-import type { FocusedSession, LivePtyInfo, ToolId } from './types'
+import { TOOLS, type FocusedSession, type LivePtyInfo, type ToolId } from './types.ts'
 
 export type LivePtyGroup = {
   projectId: string
@@ -174,11 +174,5 @@ export function viewAfterPtyExit(
 }
 
 export function toolTint(toolId: ToolId) {
-  if (toolId === 'opencode') return 'var(--ad-opencode)'
-  if (toolId === 'kimi') return 'var(--ad-kimi)'
-  if (toolId === 'claude') return 'var(--ad-claude)'
-  if (toolId === 'omp') return 'var(--ad-omp)'
-  if (toolId === 'pi') return 'var(--ad-pi)'
-  if (toolId === 'dsh') return 'var(--ad-dsh)'
-  return 'var(--ad-grok)'
+  return TOOLS.find(({ id }) => id === toolId)?.tint ?? 'var(--ad-grok)'
 }

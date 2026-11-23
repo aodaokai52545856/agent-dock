@@ -340,7 +340,7 @@ impl PtyHub {
             })
             .map_err(|err| format!("无法创建终端：{err}"))?;
 
-        let mut cmd = if native_omp_command(tool_id, &exe) {
+        let mut cmd = if launches_directly(tool_id, &exe) {
             let mut cmd = CommandBuilder::new(&exe);
             cmd.args(&extra_args);
             cmd
@@ -598,10 +598,9 @@ fn now_millis() -> i64 {
         .unwrap_or(0)
 }
 
-fn native_omp_command(tool_id: ToolId, exe: &Path) -> bool {
-    // Keep shell dispatch for package-manager shims, but let an actual OMP
-    // executable own the console directly (including its raw input modes).
-    tool_id == ToolId::Omp && !matches!(
+fn launches_directly(tool_id: ToolId, exe: &Path) -> bool {
+    // Native TUIs own the console directly, including its raw input modes.
+    matches!(tool_id, ToolId::Omp | ToolId::Antigravity) && !matches!(
         exe.extension().and_then(|ext| ext.to_str()).map(str::to_ascii_lowercase).as_deref(),
         Some("cmd" | "bat" | "ps1")
     )
@@ -860,13 +859,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn native_omp_owns_its_console_while_shell_shims_keep_shell_dispatch() {
-        assert!(native_omp_command(ToolId::Omp, Path::new("C:/bin/omp.exe")));
-        assert!(native_omp_command(ToolId::Omp, Path::new("/usr/local/bin/omp")));
-        for name in ["omp.cmd", "omp.CMD", "omp.bat", "omp.ps1"] {
-            assert!(!native_omp_command(ToolId::Omp, Path::new(name)));
+    fn native_tuis_own_the_console_while_shell_shims_keep_shell_dispatch() {
+        assert!(launches_directly(ToolId::Omp, Path::new("C:/bin/omp.exe")));
+        assert!(launches_directly(ToolId::Omp, Path::new("/usr/local/bin/omp")));
+        assert!(launches_directly(ToolId::Antigravity, Path::new("C:/bin/agy.exe")));
+        assert!(launches_directly(ToolId::Antigravity, Path::new("/usr/local/bin/agy")));
+        for name in ["tool.cmd", "tool.CMD", "tool.bat", "tool.ps1"] {
+            assert!(!launches_directly(ToolId::Omp, Path::new(name)));
+            assert!(!launches_directly(ToolId::Antigravity, Path::new(name)));
         }
-        assert!(!native_omp_command(ToolId::Pi, Path::new("pi.exe")));
+        assert!(!launches_directly(ToolId::Pi, Path::new("pi.exe")));
     }
 
     #[test]

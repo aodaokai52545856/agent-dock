@@ -5,9 +5,9 @@ export function sessionSelectKey(toolId: string, sessionId: string) {
   return `${toolId}:${sessionId}`
 }
 
-/** Sessions the existing delete command can remove from disk. DeepSeek's fixed entry and not-yet-written rows cannot. */
+/** Antigravity history, DeepSeek's fixed entry and pending rows lack a disk delete action. */
 export function canPhysicallyDeleteSession(toolId: string, sessionId: string) {
-  return !isFixedDshSession(toolId, sessionId) && !isPendingSessionId(sessionId)
+  return toolId !== 'antigravity' && !isFixedDshSession(toolId, sessionId) && !isPendingSessionId(sessionId)
 }
 
 export function toggleSessionKey(keys: readonly string[], key: string) {

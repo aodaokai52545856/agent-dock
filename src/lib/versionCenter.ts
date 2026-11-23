@@ -15,7 +15,12 @@ export function taskRunning(task: VersionTask) { return task.status === 'queued'
 export function toolInstalled(row: ToolVersionInfo) {
   return row.found && row.localVersion !== '未安装' && row.compare !== '未通过检查' && (!row.checks?.length || row.checks.every(check => check.ok))
 }
-export function canUpgradeTool(row: ToolVersionInfo) { return row.toolId !== 'grokbuild' || row.found }
+export function canUpgradeTool(row: ToolVersionInfo) {
+  return (row.toolId !== 'grokbuild' && row.toolId !== 'antigravity') || row.found
+}
+export function canUninstallTool(row: ToolVersionInfo) {
+  return row.toolId !== 'antigravity' && toolInstalled(row)
+}
 
 export function createVersionCenter(backend: Backend) {
   const state = reactive({

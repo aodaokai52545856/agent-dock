@@ -1,3 +1,4 @@
+mod antigravity;
 pub(crate) mod claude;
 pub mod dsh;
 mod grokbuild;
@@ -23,6 +24,7 @@ pub enum ToolId {
     Claude,
     Pi,
     Omp,
+    Antigravity,
     Dsh,
 }
 
@@ -35,6 +37,7 @@ impl ToolId {
             ToolId::Claude => "claude",
             ToolId::Pi => "pi",
             ToolId::Omp => "omp",
+            ToolId::Antigravity => "antigravity",
             ToolId::Dsh => "dsh",
         }
     }
@@ -47,6 +50,7 @@ impl ToolId {
             "claude" => Some(Self::Claude),
             "pi" => Some(Self::Pi),
             "omp" => Some(Self::Omp),
+            "antigravity" => Some(Self::Antigravity),
             "dsh" => Some(Self::Dsh),
             _ => None,
         }
@@ -60,6 +64,7 @@ impl ToolId {
             ToolId::Claude => "Claude Code",
             ToolId::Pi => "Pi",
             ToolId::Omp => "OMP",
+            ToolId::Antigravity => "Antigravity",
             ToolId::Dsh => "DeepSeek Harness",
         }
     }
@@ -72,6 +77,7 @@ impl ToolId {
             ToolId::Claude => &settings.claude_path,
             ToolId::Pi => &settings.pi_path,
             ToolId::Omp => &settings.omp_path,
+            ToolId::Antigravity => &settings.antigravity_path,
             ToolId::Dsh => &settings.dsh_path,
         }
     }
@@ -84,6 +90,7 @@ impl ToolId {
             ToolId::Claude => &["claude"],
             ToolId::Pi => &["pi"],
             ToolId::Omp => &["omp"],
+            ToolId::Antigravity => &["agy"],
             ToolId::Dsh => &["dsh"],
         }
     }
@@ -178,6 +185,7 @@ pub fn list_sessions(tool: ToolId, cwd: &str, settings: &AppSettings) -> Result<
         ToolId::Claude => claude::list_sessions(cwd),
         ToolId::Pi => pi::list_sessions(cwd),
         ToolId::Omp => omp::list_sessions(cwd),
+        ToolId::Antigravity => antigravity::list_sessions(cwd),
         ToolId::Dsh => dsh::list_sessions(cwd),
     }
 }
@@ -197,7 +205,7 @@ pub fn rename_session(
         return Err("名称请控制在 80 个字以内".into());
     }
     match tool {
-        ToolId::Opencode | ToolId::Pi => Ok(RenameKind::Overlay),
+        ToolId::Opencode | ToolId::Pi | ToolId::Antigravity => Ok(RenameKind::Overlay),
         ToolId::Omp => omp::rename_session(cwd, session_id, title, _settings).map(|_| RenameKind::Native),
         ToolId::Dsh => Err("DeepSeek 入口不能改名。".into()),
         ToolId::Claude => claude::rename_session(cwd, session_id, title).map(|_| RenameKind::Native),
@@ -219,6 +227,7 @@ pub fn delete_session(
         ToolId::Claude => claude::delete_session(session_id, cwd),
         ToolId::Pi => pi::delete_session(cwd, session_id),
         ToolId::Omp => omp::delete_session(cwd, session_id, settings),
+        ToolId::Antigravity => Err("请在 Antigravity 终端中用 /resume 删除会话。".into()),
         ToolId::Dsh => dsh::delete_session(cwd, session_id),
     }
 }
@@ -229,6 +238,7 @@ pub fn resume_args(tool: ToolId, session_id: &str) -> Vec<String> {
         ToolId::Grokbuild | ToolId::Claude => vec!["--resume".into(), session_id.into()],
         ToolId::Kimi => vec!["--session".into(), session_id.into()],
         ToolId::Omp => vec!["--resume".into(), session_id.into()],
+        ToolId::Antigravity => vec!["--conversation".into(), session_id.into()],
         ToolId::Dsh => Vec::new(),
     }
 }
@@ -361,6 +371,7 @@ mod tests {
         assert_eq!(resume_args(ToolId::Kimi, "session_1"), vec!["--session", "session_1"]);
         assert_eq!(resume_args(ToolId::Claude, "abc-123"), vec!["--resume", "abc-123"]);
         assert_eq!(resume_args(ToolId::Pi, "sess-pi-1"), vec!["--session", "sess-pi-1"]);
+        assert_eq!(resume_args(ToolId::Antigravity, "conversation-id"), vec!["--conversation", "conversation-id"]);
         assert!(resume_args(ToolId::Dsh, "session_dsh_1").is_empty());
     }
 
@@ -375,6 +386,7 @@ mod tests {
             vec!["--fullscreen", "--resume", "abc"]
         );
         assert!(launch_args_for(ToolId::Opencode, None, None).is_empty());
+        assert!(launch_args_for(ToolId::Antigravity, None, None).is_empty());
         assert_eq!(
             launch_args_for(ToolId::Kimi, Some("session_1"), None),
             vec!["--session", "session_1"]

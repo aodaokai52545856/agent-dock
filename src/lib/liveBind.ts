@@ -1,5 +1,5 @@
 import { DSH_FIXED_SESSION_ID } from './dsh.ts'
-import type { LivePtyInfo, SessionRow, SessionAccount, ToolId } from './types'
+import { TOOLS, type LivePtyInfo, type SessionRow, type SessionAccount, type ToolId } from './types.ts'
 import { compareSessionRecency } from './sessionGroups.ts'
 
 export const PENDING_SESSION_PREFIX = '__pending:'
@@ -57,9 +57,7 @@ export function matchUnboundLiveToSessions(
   )
   const usedSession = new Set<string>()
   const binds: LiveBind[] = []
-  const tools: ToolId[] = ['opencode', 'grokbuild', 'kimi', 'claude', 'pi', 'omp', 'dsh']
-
-  for (const toolId of tools) {
+  for (const { id: toolId } of TOOLS) {
     const unbound = live
       .filter((item) => sameProjectTool(item, projectId, toolId) && !item.sessionId)
       .sort((a, b) => (b.openedAt ?? 0) - (a.openedAt ?? 0))
@@ -182,9 +180,10 @@ export function mergeLiveFromServer(server: LivePtyInfo[], local: LivePtyInfo[])
   return server.map((item) => {
     const prev = local.find((row) => row.ptyId === item.ptyId)
     if (!prev) return item
+    const refreshed = preserveLiveAccount(prev, item)
     if (prev.sessionId && !item.sessionId) {
       return {
-        ...item,
+        ...refreshed,
         sessionId: prev.sessionId,
         title: prev.title || item.title,
         key: prev.key || item.key,
@@ -193,11 +192,20 @@ export function mergeLiveFromServer(server: LivePtyInfo[], local: LivePtyInfo[])
       }
     }
     return {
-      ...item,
+      ...refreshed,
       sessionUpdatedAt: prev.sessionUpdatedAt,
       openedAt: item.openedAt ?? prev.openedAt
     }
   })
+}
+
+export function preserveLiveAccount(previous: LivePtyInfo, next: LivePtyInfo): LivePtyInfo {
+  if (next.toolId === 'antigravity' && previous.toolId === next.toolId &&
+      previous.ptyId === next.ptyId && previous.projectId === next.projectId &&
+      !next.account && previous.account) {
+    return { ...next, account: previous.account }
+  }
+  return next
 }
 
 

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
-import { createVersionCenter } from './versionCenter.ts'
-import { seedVersionRows } from './toolVersions.ts'
+import { canUninstallTool, canUpgradeTool, createVersionCenter } from './versionCenter.ts'
+import { idleVersionRow, seedVersionRows } from './toolVersions.ts'
 import type { AppUpdateInfo, VersionTask, VersionTaskSnapshot } from './types.ts'
 
 function deferred<T>() {
@@ -30,6 +30,14 @@ const task = (status: VersionTask['status'], extra: Partial<VersionTask> = {}): 
 })
 const snap = (revision: number, tasks: VersionTask[]): VersionTaskSnapshot => ({ revision, batchId: 'batch', readyVersion: tasks.find(task => task.status === 'ready')?.localVersion || null, tasks })
 async function test(name: string, run: () => Promise<void>) { await run(); console.log(`ok ${name}`) }
+
+await test('Antigravity offers upgrades with a local installation and uses the official guide for installation', async () => {
+  const missing = idleVersionRow('antigravity')
+  assert.equal(canUpgradeTool(missing), false)
+  const installed = { ...missing, found: true, localVersion: '1.0' }
+  assert.equal(canUpgradeTool(installed), true)
+  assert.equal(canUninstallTool(installed), false)
+})
 
 await test('OMP pending update survives remount without replacing the client installer',async()=>{
   const f=fixture();f.set({revision:4,batchId:'omp-batch',readyVersion:'0.1.20',readyTools:{omp:'18.16.0'},tasks:[task('ready',{target:'omp',localVersion:'18.16.0'})]})

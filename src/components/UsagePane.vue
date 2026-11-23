@@ -30,6 +30,13 @@ import ToolMark from './ToolMark.vue'
 import UsageTrend from './UsageTrend.vue'
 import UsageCalendar from './UsageCalendar.vue'
 
+const emit = defineEmits<{ 'antigravity-accounts': [] }>()
+const ANTIGRAVITY_SOURCES: Record<string, string> = {
+  agy_session: 'CC Switch · Antigravity CLI',
+  antigravity_session: 'CC Switch · Antigravity CLI',
+  antigravity_local: 'Antigravity 本机会话日志',
+}
+
 const METRICS: { id: UsageMetric; label: string }[] = [
   { id: 'cost', label: '总成本' },
   { id: 'requests', label: '总请求' },
@@ -93,6 +100,7 @@ const syncLabel = computed(() => {
 const pageCount = computed(() => Math.max(1, Math.ceil((logs.value.total || 0) / pageSize.value)))
 const appChoices = computed(() => {
   const apps = (dash.value?.apps ?? []).filter(app => !app.id.startsWith('claude:'))
+  if (!apps.some(app => app.id === 'antigravity')) apps.push({ id: 'antigravity', label: 'Antigravity' })
   if ((dash.value?.apps ?? []).some(app => app.id.startsWith('claude:')) && !apps.some(app => app.id === 'claude')) {
     return [...apps, { id: 'claude', label: 'Claude' }]
   }
@@ -100,6 +108,9 @@ const appChoices = computed(() => {
 })
 const claudeAccounts = computed(() => (dash.value?.apps ?? []).filter(app => app.id.startsWith('claude:')))
 const appFamily = computed(() => appFilter.value.startsWith('claude:') ? 'claude' : appFilter.value)
+const antigravityUnpriced = computed(() =>
+  appFamily.value === 'antigravity' && !!dash.value?.totalRequests && dash.value.models.every(row => row.unpriced)
+)
 const tokenParts = computed(() => [
   { label: '新增输入', value: dash.value?.inputTokens }, { label: '输出', value: dash.value?.outputTokens },
   { label: '缓存写入', value: dash.value?.cacheCreationTokens }, { label: '缓存命中', value: dash.value?.cacheReadTokens }
@@ -112,6 +123,11 @@ const logColumnCount = computed(() => showLogTokens.value ? 12 : 8)
 const logTokens = (row: UsageRecord) => row.inputTokens + row.outputTokens + row.cacheReadTokens + row.cacheCreationTokens
 const appTool = (id: string) => TOOLS.find(tool => tool.id === id)?.id
 const statusKind = (code: number) => code >= 200 && code < 400 ? 'success' : code >= 400 ? 'error' : 'unknown'
+const sourceLabel = (id: string) => (Object.hasOwn(ANTIGRAVITY_SOURCES, id) ? ANTIGRAVITY_SOURCES[id] : id) || '—'
+
+watch(antigravityUnpriced, unpriced => {
+  if (unpriced && metric.value === 'cost') metric.value = 'tokens'
+})
 
 function chooseApp(id: string) {
   appFilter.value = id
@@ -131,7 +147,10 @@ function metricText(id: UsageMetric) {
   const row = dash.value
   if (!row) return loading.value ? '…' : '—'
   if (!row.totalRequests) return '—'
-  if (id === 'cost') return row.totalCostUsd.toLocaleString('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  if (id === 'cost') {
+    if (antigravityUnpriced.value) return '未定价'
+    return row.totalCostUsd.toLocaleString('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  }
   if (id === 'requests') return formatExactTokens(row?.totalRequests)
   if (id === 'cache') return row.inputTokens + row.cacheReadTokens + row.cacheCreationTokens > 0 ? formatCacheHit(row.cacheHitPercent) : '—'
   return formatTokenCount(row?.totalTokens)
@@ -287,7 +306,7 @@ onUnmounted(() => {
 <template>
   <section class="pane" aria-label="使用量" @keydown.esc="closePopovers()">
     <header class="head">
-      <div class="page-title"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19V9m8 10V4m8 15v-7" /></svg><h1>使用量</h1><span class="help" title="统计本机会话与 Claude 独立账号的请求、Token 和估算成本。所有筛选条件统一作用于概览和明细。">?</span></div>
+      <div class="page-title"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19V9m8 10V4m8 15v-7" /></svg><h1>使用量</h1><span class="help" title="统计本机请求、Token 和已知成本。所有筛选条件统一作用于概览和明细。">?</span></div>
       <div class="head-actions"><span class="sync-time">更新于 {{ syncLabel }}</span><button type="button" class="btn btn-ghost btn-small" :disabled="loading" @click="reload(true)"><svg class="action-icon" :class="{ spinning: loading }" viewBox="0 0 16 16" aria-hidden="true"><path d="M13 6a5 5 0 1 0 0 4M13 2v4H9" /></svg>{{ loading ? '同步中…' : '立即同步' }}</button><button type="button" class="btn btn-ghost btn-small" :disabled="exporting" @click="exportToCcswitch">{{ exporting ? '写入中…' : '同步到 CC Switch' }}</button><button type="button" class="btn btn-ghost btn-small" @click="settingsOpen = true">设置</button></div>
     </header>
 
@@ -305,8 +324,30 @@ onUnmounted(() => {
     <div class="content">
       <p v-if="banner" class="notice" role="status">{{ banner }}</p>
       <div v-if="exportNotice" class="notice export-notice" role="status"><span>{{ exportNotice }}</span><button type="button" aria-label="关闭同步提示" @click="exportNotice = ''">×</button></div>
+      <div v-if="appFamily === 'antigravity'" class="notice antigravity-notice">
+        <span>统计本机 Antigravity 会话，合并 CC Switch 已导入的记录。</span>
+        <button type="button" class="btn btn-ghost btn-small" @click="emit('antigravity-accounts')">查看账号配额</button>
+      </div>
       <section class="overview" aria-label="用量概览" :aria-busy="loading">
-        <div class="metric-strip" role="group" aria-label="汇总指标"><button v-for="item in METRICS" :key="item.id" type="button" class="metric-cell" :aria-pressed="metric === item.id" @click="metric = item.id"><span>{{ item.label }} <span v-if="item.id === 'tokens'" class="help" title="新增输入 + 输出 + 缓存写入 + 缓存命中">?</span><span v-if="item.id === 'cache'" class="help" title="缓存命中 ÷（新增输入 + 缓存写入 + 缓存命中）">?</span></span><strong :title="item.id === 'tokens' ? formatExactTokens(dash?.totalTokens) : undefined">{{ metricText(item.id) }}</strong></button></div>
+        <div class="metric-strip" role="group" aria-label="汇总指标">
+          <button
+            v-for="item in METRICS"
+            :key="item.id"
+            type="button"
+            class="metric-cell"
+            :aria-pressed="metric === item.id"
+            :disabled="item.id === 'cost' && antigravityUnpriced"
+            @click="metric = item.id"
+          >
+            <span>
+              {{ item.label }}
+              <span v-if="item.id === 'tokens'" class="help" title="新增输入 + 输出 + 缓存写入 + 缓存命中">?</span>
+              <span v-if="item.id === 'cache'" class="help" title="缓存命中 ÷（新增输入 + 缓存写入 + 缓存命中）">?</span>
+              <span v-if="item.id === 'cost' && appFamily === 'antigravity'" class="help" title="合计只含已有价格的记录。">?</span>
+            </span>
+            <strong :title="item.id === 'tokens' ? formatExactTokens(dash?.totalTokens) : undefined">{{ metricText(item.id) }}</strong>
+          </button>
+        </div>
         <div v-if="showTokenParts" id="usage-token-parts" class="token-parts"><div v-for="part in tokenParts" :key="part.label"><span>{{ part.label }}</span><strong :title="formatExactTokens(part.value)">{{ dash?.totalRequests ? formatTokenCount(part.value) : '—' }}</strong></div></div>
         <div class="breakdown-divider"><button type="button" :aria-expanded="showTokenParts" aria-controls="usage-token-parts" :aria-label="showTokenParts ? '收起 Token 明细' : '展开 Token 明细'" :title="showTokenParts ? '收起 Token 明细' : '展开 Token 明细'" @click="showTokenParts = !showTokenParts"><svg viewBox="0 0 16 16" :class="{ rotated: showTokenParts }" aria-hidden="true"><path d="m4 6 4 4 4-4" /></svg></button></div>
         <UsageCalendar v-if="preset === 'all'" :key="appFilter + '|' + providerName + '|' + model" :rows="dash?.heatmap ?? []" :metric="metric" :end="end" :loading="loading" />
@@ -321,11 +362,29 @@ onUnmounted(() => {
         </div>
         <div v-if="tab === 'logs'" class="pager"><span>共 {{ formatExactTokens(logs.total) }} 条记录</span><label>每页<select v-model.number="pageSize" aria-label="每页记录数"><option v-for="size in [20, 50, 100]" :key="size" :value="size">{{ size }}</option></select>条</label><span class="page-position">{{ page + 1 }} / {{ pageCount }}</span><button type="button" class="btn btn-ghost btn-small" :disabled="page <= 0 || loading" @click="page = Math.max(0, page - 1)">上一页</button><button type="button" class="btn btn-ghost btn-small" :disabled="page + 1 >= pageCount || loading" @click="page += 1">下一页</button></div>
       </section>
-      <p class="source-note">本地会话统计 · 含 Claude 独立账号与 OMP profiles · OMP 费用读取原生记录，其他成本按价表估算</p>
+      <p class="source-note">本地会话及代理请求统计 · OMP 费用读取原生记录 · 部分记录按 CC Switch 价表估算</p>
     </div>
 
     <Teleport to="body"><div v-if="settingsOpen || selectedLog" class="ad-mask ad-mask--flush" @click.self="closeDrawers"><aside v-modal="closeDrawers" class="ad-drawer usage-drawer" role="dialog" aria-modal="true" :aria-label="selectedLog ? '请求详情' : '用量设置'" tabindex="-1"><header><h2>{{ selectedLog ? '请求详情' : '用量设置' }}</h2><button type="button" class="btn btn-ghost btn-small" @click="closeDrawers">关闭</button></header>
-      <template v-if="selectedLog"><p class="drawer-eyebrow">{{ formatLogTime(selectedLog.createdAt) }}<span class="status" :class="statusKind(selectedLog.statusCode)"><i />{{ selectedLog.statusCode }}</span></p><h3 class="request-model">{{ selectedLog.model || '未知模型' }}</h3><div class="request-totals"><div><span>真实消耗 Tokens</span><strong>{{ formatExactTokens(logTokens(selectedLog)) }}</strong></div><div><span>成本</span><strong>{{ selectedLog.unpriced ? '未定价' : formatSpendCost(selectedLog.costUsd) }}</strong></div></div><dl class="request-facts"><dt>应用 / 账号</dt><dd>{{ selectedLog.appLabel }}</dd><dt>供应商</dt><dd>{{ selectedLog.providerName || '—' }}</dd><dt>新增输入</dt><dd>{{ formatExactTokens(selectedLog.inputTokens) }}</dd><dt>输出</dt><dd>{{ formatExactTokens(selectedLog.outputTokens) }}</dd><dt>缓存写入</dt><dd>{{ formatExactTokens(selectedLog.cacheCreationTokens) }}</dd><dt>缓存命中</dt><dd>{{ formatExactTokens(selectedLog.cacheReadTokens) }}</dd><dt>会话 ID</dt><dd><code>{{ selectedLog.sessionId || '—' }}</code></dd><dt>请求 ID</dt><dd><code>{{ selectedLog.requestId }}</code></dd><dt>数据来源</dt><dd>{{ selectedLog.dataSource || '—' }}</dd></dl></template>
+      <template v-if="selectedLog">
+        <p class="drawer-eyebrow">{{ formatLogTime(selectedLog.createdAt) }}<span class="status" :class="statusKind(selectedLog.statusCode)"><i />{{ selectedLog.statusCode }}</span></p>
+        <h3 class="request-model">{{ selectedLog.model || '未知模型' }}</h3>
+        <div class="request-totals">
+          <div><span>真实消耗 Tokens</span><strong>{{ formatExactTokens(logTokens(selectedLog)) }}</strong></div>
+          <div><span>成本</span><strong>{{ selectedLog.unpriced ? '未定价' : formatSpendCost(selectedLog.costUsd) }}</strong></div>
+        </div>
+        <dl class="request-facts">
+          <dt>应用 / 账号</dt><dd>{{ selectedLog.appLabel }}</dd>
+          <dt>供应商</dt><dd>{{ selectedLog.providerName || '—' }}</dd>
+          <dt>新增输入</dt><dd>{{ formatExactTokens(selectedLog.inputTokens) }}</dd>
+          <dt>输出</dt><dd>{{ formatExactTokens(selectedLog.outputTokens) }}</dd>
+          <dt>缓存写入</dt><dd>{{ formatExactTokens(selectedLog.cacheCreationTokens) }}</dd>
+          <dt>缓存命中</dt><dd>{{ formatExactTokens(selectedLog.cacheReadTokens) }}</dd>
+          <dt>会话 ID</dt><dd><code>{{ selectedLog.sessionId || '—' }}</code></dd>
+          <dt>请求 ID</dt><dd><code>{{ selectedLog.requestId }}</code></dd>
+          <dt>数据来源</dt><dd>{{ sourceLabel(selectedLog.dataSource) }}</dd>
+        </dl>
+      </template>
       <template v-else><h3 class="section-label">自动同步</h3><p class="hint">定期扫描本机会话，更新统计和明细。</p><div class="intervals"><button v-for="ms in USAGE_REFRESH_MS" :key="ms" type="button" :aria-pressed="refreshMs === ms" @click="setRefresh(ms)">{{ ms / 1000 }} 秒</button></div><h3 class="section-label">同步到 CC Switch</h3><p class="hint">将 Claude 独立账号用量写入 CC Switch，供应商按账号区分。已有记录保持不变。</p><button type="button" class="btn btn-ghost btn-small" :disabled="exporting" @click="exportToCcswitch">{{ exporting ? '写入中…' : '同步独立账号用量' }}</button><h3 class="section-label">模型定价</h3><p class="hint">读取 CC Switch 的价表；价格可在 CC Switch 中修改。</p><div class="pricing-wrap"><table v-if="dash?.pricing.length"><thead><tr><th>模型</th><th class="num">输入 / M</th><th class="num">输出 / M</th><th class="num">命中 / M</th><th class="num">写入 / M</th></tr></thead><tbody><tr v-for="row in dash.pricing" :key="row.modelId"><td>{{ row.displayName || row.modelId }}</td><td class="num">{{ formatSpendCost(row.inputPerMillion) }}</td><td class="num">{{ formatSpendCost(row.outputPerMillion) }}</td><td class="num">{{ formatSpendCost(row.cacheReadPerMillion) }}</td><td class="num">{{ formatSpendCost(row.cacheCreationPerMillion) }}</td></tr></tbody></table><p v-else class="hint">暂无定价，请先在 CC Switch 中扫描或配置。</p></div></template>
     </aside></div></Teleport>
   </section>
@@ -372,6 +431,7 @@ h1 { margin: 0; font-size: 18px; font-weight: 600; line-height: 28px; }
 .content { flex: 1; min-height: 0; min-width: 0; overflow-y: auto; scrollbar-gutter: stable; padding: 0 24px 24px; display: flex; flex-direction: column; gap: 24px; }
 .content > * { flex-shrink: 0; }
 .notice { margin: 0; padding: 8px 12px; border: 1px solid var(--ad-border); border-radius: 6px; background: var(--ad-harbor); font-size: 12px; line-height: 20px; color: var(--ad-muted); }
+.antigravity-notice { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
 .export-notice { display: flex; gap: 12px; align-items: flex-start; }
 .export-notice button { margin-left: auto; font-size: 18px; line-height: 20px; color: var(--ad-muted); }
 .overview, .detail { border: 1px solid var(--ad-border); border-radius: 8px; background: var(--ad-harbor); min-width: 0; }

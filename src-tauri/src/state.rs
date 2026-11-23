@@ -40,6 +40,8 @@ pub struct AppSettings {
     #[serde(default)]
     pub omp_launch_mode: OmpLaunchMode,
     #[serde(default)]
+    pub antigravity_path: String,
+    #[serde(default)]
     pub dsh_path: String,
     #[serde(default = "crate::platform::default_shell")]
     pub powershell_path: String,
@@ -136,7 +138,7 @@ fn default_session_tool_filter() -> String {
 
 fn normalize_session_tool_filter(value: &str) -> String {
     match value {
-        "all" | "opencode" | "grokbuild" | "kimi" | "claude" | "pi" | "omp" | "dsh" => value.to_string(),
+        "all" | "opencode" | "grokbuild" | "kimi" | "claude" | "pi" | "omp" | "antigravity" | "dsh" => value.to_string(),
         _ => default_session_tool_filter(),
     }
 }
@@ -153,6 +155,7 @@ impl Default for AppSettings {
             omp_path: String::new(),
             omp_default_profile: String::new(),
             omp_launch_mode: OmpLaunchMode::default(),
+            antigravity_path: String::new(),
             dsh_path: String::new(),
             powershell_path: crate::platform::default_shell(),
             terminal_font_size: default_terminal_font_size(),
@@ -332,6 +335,7 @@ mod tests {
     fn session_tool_filter_keeps_live_opened_view() {
         assert_eq!(normalize_session_tool_filter("live"), "all");
         assert_eq!(normalize_session_tool_filter("grokbuild"), "grokbuild");
+        assert_eq!(normalize_session_tool_filter("antigravity"), "antigravity");
         assert_eq!(normalize_session_tool_filter("nope"), "all");
     }
 
@@ -345,5 +349,6 @@ mod tests {
         assert!(settings.grok_follow_glass);
         assert_eq!(settings.terminal_font_size, 14);
         assert_eq!(settings.cursor_api_key, "");
+        assert_eq!(settings.antigravity_path, "");
     }
 }

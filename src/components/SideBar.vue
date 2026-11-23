@@ -93,11 +93,17 @@ const visibleTools = computed(() => {
   return present
 })
 
-const groups = computed(() =>
-  visibleTools.value
-    .flatMap((tool) => accountSessionGroups(tool.id, visibleSessions.value.filter(
-        (item) => item.toolId === tool.id && (!liveFilter.value || isLive(item.id, item.toolId))
-      )).map((group) => ({
+const groups = computed(() => {
+  const sessions = visibleSessions.value
+    .filter((item) => !liveFilter.value || isLive(item.id, item.toolId))
+    .map((item) => {
+      if (item.toolId !== 'antigravity') return item
+      const account = findLiveForSession(item.id, item.toolId)?.account
+      return account ? { ...item, account } : item
+    })
+  return visibleTools.value
+    .flatMap((tool) => accountSessionGroups(tool.id, sessions.filter((item) => item.toolId === tool.id))
+      .map((group) => ({
         ...group,
         tool,
         error: liveFilter.value ? undefined : store.sessionErrors[tool.id]
@@ -106,10 +112,12 @@ const groups = computed(() =>
       group.error || store.sessionLoading[group.tool.id] ||
       (!store.sessionQuery.trim() && store.sessionToolFilter !== 'all')
     )))
-)
+})
 
 const showGroupHeads = computed(() =>
-  shouldShowSessionGroupHead(visibleTools.value.length, liveFilter.value) || groups.value.some((group) => group.tool.id === 'claude')
+  shouldShowSessionGroupHead(visibleTools.value.length, liveFilter.value) ||
+  groups.value.some((group) => group.tool.id === 'claude' ||
+    (group.tool.id === 'antigravity' && group.sessions.some((session) => session.account?.id)))
 )
 
 const liveCount = computed(() => liveOfProject(store.live, store.selectedProjectId).length)
@@ -265,7 +273,7 @@ function menuCanRename() {
 }
 
 function menuCanDelete() {
-  return Boolean(menu.value && !menuPending() && !menuFixedDsh())
+  return Boolean(menu.value && canPhysicallyDeleteSession(menu.value.toolId, menu.value.sessionId))
 }
 
 const visibleDeletable = computed(() => deletableSessionKeys(groups.value.flatMap((group) => group.sessions)))
@@ -844,6 +852,7 @@ onUnmounted(() => {
           class="ad-menu-item ad-menu-item--danger"
           :class="{ 'is-focus': menu.focus === 4 }"
           :disabled="!menuCanDelete()"
+          :title="menu.toolId === 'antigravity' ? '在 Antigravity 终端输入 /resume 管理会话' : undefined"
           @mouseenter="menu.focus = 4"
           @click="deleteSession"
         >

@@ -16,6 +16,7 @@ import CcswitchDialog from './components/CcswitchDialog.vue'
 import VersionDrawer from './components/VersionDrawer.vue'
 import DeepseekKeyDialog from './components/DeepseekKeyDialog.vue'
 import ClaudeAccountDialog from './components/ClaudeAccountDialog.vue'
+import AntigravityAccountDialog from './components/AntigravityAccountDialog.vue'
 import ClaudeContinueDialog from './components/ClaudeContinueDialog.vue'
 import GrokAccountDialog from './components/GrokAccountDialog.vue'
 import StatusBar from './components/StatusBar.vue'
@@ -68,11 +69,13 @@ import {
   saveProject,
   selectProject,
   selectedProject,
+  setToolProbes,
   showToast,
   store,
   watchPendingSession
 } from './lib/store'
 import { isPendingSessionId, resolveOpenTarget } from './lib/liveBind'
+import { canPhysicallyDeleteSession } from './lib/sessionBatch'
 import { refreshCodexThreads } from './lib/pipeline'
 import type { ClaudeContinuation, ProjectDraft, SessionDoc, ToolId, OmpLaunchMode } from './lib/types'
 import { appearanceFromSettings, resolvedTheme, systemPrefersLight } from './lib/appearance'
@@ -86,6 +89,7 @@ const versionOpen = ref(false)
 const ccswitchOpen = ref(false)
 const accountOpen = ref(false)
 const claudeAccountOpen = ref(false)
+const antigravityAccountOpen = ref(false)
 const claudeContinuation = ref<{ projectId: string; sessionId: string; title: string } | null>(null)
 const deepseekOpen = ref(false)
 const ccswitchBusy = ref(false)
@@ -285,6 +289,10 @@ function askCloseAll(projectId?: string) {
 }
 
 function askDeleteSession(sessionId: string, toolId: ToolId) {
+  if (toolId === 'antigravity') {
+    showToast('请在 Antigravity 终端输入 /resume 管理会话')
+    return
+  }
   if (isFixedDshSession(toolId, sessionId)) {
     showToast('DeepSeek 入口不能删除')
     return
@@ -313,7 +321,7 @@ function askDeleteSessions(items: { sessionId: string; toolId: ToolId }[]) {
         title: session?.title ?? item.sessionId
       }
     })
-    .filter((item) => !isFixedDshSession(item.toolId, item.sessionId) && !isPendingSessionId(item.sessionId))
+    .filter((item) => canPhysicallyDeleteSession(item.toolId, item.sessionId))
   if (!rows.length) {
     showToast('没有可以删除的会话')
     return
@@ -598,10 +606,15 @@ async function onCreateSession(payload: { projectId: string; toolId: ToolId; pro
 }
 
 async function onSaveSettings(settings: typeof store.settings) {
+  const antigravityPathChanged = settings.antigravityPath !== store.settings.antigravityPath
   try {
     await saveAppSettings(settings)
     settingsOpen.value = false
     showToast('设置已保存')
+    if (api.isTauri && antigravityPathChanged) {
+      void api.probeTools().then(setToolProbes).catch(() => {})
+      void refreshSessions({ silent: true })
+    }
   } catch (err) {
     showToast(err instanceof Error ? err.message : String(err))
   } finally {
@@ -724,6 +737,7 @@ const confirmCopy = () => {
       @versions="versionOpen = true"
       @accounts="accountOpen = true"
       @claude-accounts="claudeAccountOpen = true"
+      @antigravity-accounts="antigravityAccountOpen = true"
       @deepseek="deepseekOpen = true"
       @ccswitch-open="onCcswitchOpen"
       @ccswitch-install="onCcswitchInstall"
@@ -821,7 +835,7 @@ const confirmCopy = () => {
         <BridgePane />
       </div>
       <div v-show="store.appMode === 'usage'" class="workspace usage-ws">
-        <UsagePane />
+        <UsagePane @antigravity-accounts="antigravityAccountOpen = true" />
       </div>
       <div v-if="postToolOpened" v-show="store.appMode === 'postTool'" class="workspace usage-ws">
         <PostToolPane :active="store.appMode === 'postTool'" />
@@ -868,6 +882,7 @@ const confirmCopy = () => {
       @close="claudeAccountOpen = false"
       @switched="onClaudeSwitched"
     />
+    <AntigravityAccountDialog :open="antigravityAccountOpen" @close="antigravityAccountOpen = false" />
     <DeepseekKeyDialog :open="deepseekOpen" @close="deepseekOpen = false" />
     <ClaudeContinueDialog
       :open="!!claudeContinuation"

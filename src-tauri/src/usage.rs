@@ -1,5 +1,6 @@
-//! Usage dashboard: CC Switch request logs plus extra Claude account jsonl.
+//! Usage dashboard backed by CC Switch and local session records.
 
+use crate::antigravity_usage;
 use chrono::DateTime;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -329,7 +330,7 @@ fn stable_hash(line: &str) -> String {
 }
 
 const HOURLY_RANGE_SECS: i64 = 36 * 3600;
-const MSG_MISSING: &str = "CC Switch 数据库尚未就绪；本地 Claude 独立账号和 OMP 记录仍可查看";
+const MSG_MISSING: &str = "CC Switch 数据库尚未就绪，本地 Claude 独立账号、OMP 和 Antigravity 记录仍可查看";
 const MSG_BUSY: &str = "用量库正被 CC Switch 占用，请稍后重试";
 const MSG_SCHEMA: &str = "这份 CC Switch 数据库对不上，请升级 CC Switch";
 const MSG_EXPORT_NONE: &str = "没有可同步的副号用量";
@@ -533,7 +534,7 @@ fn read_logs(conn: &rusqlite::Connection) -> Result<Vec<UsageRecord>, DbStatus> 
         .query_map([], |row| {
             let request_id: String = row.get(0)?;
             let created_at: i64 = row.get(1)?;
-            let app_type: String = row.get(2)?;
+            let mut app_type: String = row.get(2)?;
             let provider_id: String = row.get(3)?;
             let model: String = row.get(4)?;
             let input: i64 = row.get(5)?;
@@ -544,16 +545,31 @@ fn read_logs(conn: &rusqlite::Connection) -> Result<Vec<UsageRecord>, DbStatus> 
             let session_id: Option<String> = row.get(10)?;
             let status_code: i64 = row.get(11)?;
             let data_source: String = row.get(12)?;
+            let legacy_antigravity = data_source == "antigravity_session";
+            if app_type == "agy" || legacy_antigravity {
+                app_type = antigravity_usage::APP_ID.into();
+            }
+            let provider_name = if app_type == antigravity_usage::APP_ID
+                && matches!(data_source.as_str(), "agy_session" | "antigravity_session")
+            {
+                antigravity_usage::SESSION_PROVIDER.into()
+            } else if provider_id.is_empty() {
+                format!("{} · 会话日志", app_type_label(&app_type))
+            } else {
+                provider_id
+            };
+            // The legacy Gemini importer stored inclusive input; the agy importer stores fresh input.
+            let input = if legacy_antigravity {
+                input.saturating_sub(cache_read.max(0))
+            } else {
+                input
+            };
             Ok(UsageRecord {
                 request_id,
                 created_at,
                 app_filter: app_type.clone(),
                 app_label: app_type_label(&app_type),
-                provider_name: if provider_id.is_empty() {
-                    format!("{} · 会话日志", app_type_label(&app_type))
-                } else {
-                    provider_id
-                },
+                provider_name,
                 model,
                 session_id: session_id.unwrap_or_default(),
                 input_tokens: input.max(0) as u64,
@@ -763,6 +779,7 @@ pub fn app_type_label(app_type: &str) -> String {
         "dsh" => "DeepSeek".into(),
         "codex" => "Codex".into(),
         "gemini" => "Gemini".into(),
+        antigravity_usage::APP_ID => antigravity_usage::APP_LABEL.into(),
         other => other.to_string(),
     }
 }
@@ -809,6 +826,12 @@ pub fn build_apps(db_records: &[UsageRecord], extras: &[ExtraClaudeProfile]) -> 
                 label: row.app_label.clone(),
             });
         }
+    }
+    if seen.insert(antigravity_usage::APP_ID.into()) {
+        apps.push(UsageAppChip {
+            id: antigravity_usage::APP_ID.into(),
+            label: antigravity_usage::APP_LABEL.into(),
+        });
     }
     apps.sort_by(|a, b| a.label.cmp(&b.label).then(a.id.cmp(&b.id)));
     for profile in extras {
@@ -1091,15 +1114,37 @@ pub fn take_snapshot(
         load_snapshot(ccswitch_db_path().as_deref(), &extras, ledger_path.as_deref());
     let (omp_records, omp_files) = crate::omp_usage::scan();
     records.extend(omp_records);
+    let (antigravity_records, antigravity_files) = antigravity_usage::scan();
+    merge_antigravity(&mut records, antigravity_records);
     let snap = UsageSnapshot {
         records,
         pricing,
         status,
-        files_scanned: files + omp_files,
+        files_scanned: files + omp_files + antigravity_files,
         extras,
     };
     *lock_mutex(&SNAPSHOT) = Some(snap.clone());
     snap
+}
+
+fn merge_antigravity(records: &mut Vec<UsageRecord>, local: Vec<UsageRecord>) {
+    let current_sessions: HashSet<String> = records
+        .iter()
+        .filter(|row| row.data_source == "agy_session")
+        .chain(local.iter())
+        .filter(|row| !row.session_id.is_empty())
+        .map(|row| row.session_id.clone())
+        .collect();
+    // The older Gemini importer used generation indexes, which cannot be matched to agy step indexes.
+    records.retain(|row| {
+        row.data_source != "antigravity_session" || !current_sessions.contains(&row.session_id)
+    });
+    let mut request_ids: HashSet<String> = records
+        .iter()
+        .filter(|row| row.app_filter == antigravity_usage::APP_ID)
+        .map(|row| row.request_id.clone())
+        .collect();
+    records.extend(local.into_iter().filter(|row| request_ids.insert(row.request_id.clone())));
 }
 
 pub fn dashboard_from_snapshot(snap: &UsageSnapshot, query: &UsageQuery) -> UsageDashboard {
@@ -1454,6 +1499,42 @@ mod tests {
         assert!(dash.apps.iter().any(|a| a.id == "claude"));
         assert!(dash.apps.iter().any(|a| a.id == "claude:work" && a.label == "Claude · 工作号"));
         assert!(dash.apps.iter().any(|a| a.id == "grokbuild"));
+    }
+
+    #[test]
+    fn antigravity_merges_transcript_and_cc_switch_without_double_counting() {
+        let db = rusqlite::Connection::open_in_memory().unwrap();
+        db.execute_batch(log_schema()).unwrap();
+        insert_log(&db, "agy:s:1", 1_700_000_100, "agy", "gemini-4-argon", 41, "0.50");
+        insert_log(&db, "old-mirror", 1_700_000_100, "gemini", "gemini-4-argon", 50, "0.50");
+        insert_log(&db, "old-only", 1_700_000_100, "gemini", "gemini-4-argon", 60, "0.60");
+        db.execute_batch(
+            "UPDATE proxy_request_logs SET data_source = 'agy_session' WHERE request_id = 'agy:s:1';
+             UPDATE proxy_request_logs SET data_source = 'antigravity_session', cache_read_tokens = 9
+             WHERE request_id IN ('old-mirror', 'old-only');
+             UPDATE proxy_request_logs SET session_id = 'old' WHERE request_id = 'old-only';",
+        ).unwrap();
+        let mut records = read_logs(&db).unwrap();
+        let mut local = records.iter().find(|row| row.request_id == "agy:s:1").unwrap().clone();
+        assert_eq!(local.app_filter, "antigravity");
+        assert_eq!(local.app_label, "Antigravity");
+        assert_eq!(local.provider_name, antigravity_usage::SESSION_PROVIDER);
+        local.data_source = "antigravity_local".into();
+        local.cost_usd = 0.0;
+        local.unpriced = true;
+        let mut new = local.clone();
+        new.request_id = "agy:s:2".into();
+
+        merge_antigravity(&mut records, vec![local, new]);
+
+        assert_eq!(records.len(), 3);
+        assert!(records.iter().all(|row| row.app_filter == "antigravity"));
+        assert!(records.iter().any(|row| row.request_id == "agy:s:2" && row.unpriced));
+        assert!(records.iter().any(|row| row.request_id == "agy:s:1" && row.cost_usd == 0.5));
+        let historical = records.iter().find(|row| row.request_id == "old-only").unwrap();
+        assert_eq!(historical.input_tokens, 51);
+        assert_eq!(total_tokens(historical), 61);
+        assert!(build_apps(&[], &[]).iter().any(|chip| chip.id == "antigravity"));
     }
 
     #[test]

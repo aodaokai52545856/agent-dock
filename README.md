@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  无边框深色桌面端 · 一窗接管 OpenCode / Grok / Kimi / Claude / Pi / OMP / DeepSeek<br>
+  无边框深色桌面端 · 一窗接管 OpenCode / Grok / Kimi / Claude / Pi / OMP / Antigravity / DeepSeek<br>
   编排把 <b>Cursor 开发</b> 与 <b>Codex 审查</b> 串成过闸流水线
 </p>
 
@@ -20,7 +20,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.1.23-111111?style=flat-square" alt="version">
+  <img src="https://img.shields.io/badge/version-0.1.24-111111?style=flat-square" alt="version">
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-0d0d0d?style=flat-square" alt="platform">
   <img src="https://img.shields.io/badge/stack-Tauri%202%20·%20Vue%203%20·%20Rust-141414?style=flat-square" alt="stack">
   <img src="https://img.shields.io/badge/license-Apache%202.0-3d9a6a?style=flat-square" alt="license">
@@ -29,7 +29,7 @@
 <p align="center">
   <a href="#下载">下载</a>
   ·
-  <a href="#v0123-新能力">新能力</a>
+  <a href="#v0124-新能力">新能力</a>
   ·
   <a href="#能力">能力</a>
   ·
@@ -65,6 +65,16 @@
 本机已经有 `opencode`、`grok`、`kimi`、`claude`、Pi、DeepSeek、Cursor、Codex，但它们散落在各自终端和窗口里：会话难找、代理不一致、开发和审查抢同一条 thread。
 
 **Agent Dock** 把它们收进一个 frameless 深色窗口。客户只装安装包即可运行，不必装 Rust。
+
+---
+
+<a id="v0124-新能力"></a>
+
+## v0.1.24 新能力
+
+- Antigravity CLI 支持在项目内启动、恢复历史会话，以及在版本面板检测和升级。工具入口使用 Google 官方图标。
+- 账号管理读取本机 Antigravity Tools 的账号和配额，支持切换新终端使用的 CLI 账号。终端顶部和侧栏显示已识别的会话账号。
+- 用量页支持按日期和模型查看 Antigravity 请求与 Token 明细，并合并 CC Switch 已导入的记录。
 
 ---
 
@@ -344,7 +354,7 @@
 
 ### 控制台
 
-左侧挂项目，按 OpenCode / Grok / Kimi / Claude Code / Pi / OMP / DeepSeek 扫描 session，点开即在内嵌终端续聊（DeepSeek 走 Web 嵌入）。
+左侧挂项目，按 OpenCode / Grok / Kimi / Claude Code / Pi / OMP / Antigravity / DeepSeek 扫描会话，点开即在内嵌终端续聊（DeepSeek 走 Web 嵌入）。
 
 | 能力 | 说明 |
 | --- | --- |
@@ -352,7 +362,10 @@
 | **城市时钟** | 顶部栏按城市看当地时间；搜索、大洲 / 国家分类；自选城市本机持久化 |
 | **Grok 多账号** | 切换账号会关掉旧 Grok 终端，避免混用身份 |
 | **Claude 多账号** | 独立目录登录、账号代理、多个账号同时运行；历史会话使用原账号恢复 |
+| **Antigravity CLI** | 选择项目后，通过「新建会话」打开 `agy`。Dock 自动探测常见安装位置，也支持在设置中指定路径。首次启动可在内嵌终端按提示登录，会话管理可用 `/resume`。[Google 安装指南](https://antigravity.google/docs/getting-started?tab=cli) |
+| **Antigravity 多账号** | 「账号管理 → Antigravity 账号」直接显示本机 Antigravity Tools 的账号、模型额度和重置时间。关闭 Dock 内的 `agy` 终端后，可调用 Tools 切换 CLI 账号。新增账号和刷新额度可在 Tools 中操作。[Antigravity Tools 下载](https://github.com/lbjlaq/Antigravity-Manager/releases/latest) |
 | **用量与花费** | 状态栏读取 Grok 额度与 token；DeepSeek 显示剩余人民币 |
+| **Antigravity 用量** | 「用量」可按日期和模型查看 Antigravity 数据。本地会话记录和 CC Switch 导入的同一请求按请求 ID 去重。 |
 | **CLI 版本** | 探测、升级、卸载本机工具；可安装并启动 CC Switch |
 | **DeepSeek 密钥** | 在 Dock 管理 `.credentials.yaml`，明文不进仓库 |
 | **外观** | 浅色 / 深色 / 跟随系统；强调色、字体、对比度、侧栏半透明、窗口透明度与毛玻璃 |
@@ -404,7 +417,7 @@ npm run tauri:dev
 
 **必须在对应系统上打包**，不能从 Windows 打出 `.dmg` / `.AppImage`。产物把界面打进二进制，不再监听开发端口，落到 `release/`。
 
-版本号读 `package.json` 的 `version`。当前 `0.1.23` 会打出 `AgentDock-0.1.23-Setup.exe` 等文件名。
+版本号读 `package.json` 的 `version`。当前 `0.1.24` 会打出 `AgentDock-0.1.24-Setup.exe` 等文件名。
 
 ```bash
 npm run pack          # 当前系统

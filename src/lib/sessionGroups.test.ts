@@ -80,6 +80,19 @@ test('unknown ownership stays separate and other tools keep their group', () => 
   assert.equal(accountSessionGroups('grokbuild', [grok])[0].id, 'grokbuild')
 })
 
+test('Antigravity labels known accounts and keeps unmarked history separate', () => {
+  const account = { id: 'work@example.test', name: 'work@example.test' }
+  const history: SessionRow = { ...row('history', 'a', 100), toolId: 'antigravity', account: null }
+  const active = { ...history, id: 'open', account }
+  const groups = accountSessionGroups('antigravity', [history, active])
+  assert.deepEqual(groups.find((group) => group.id === 'antigravity:work@example.test')?.sessions, [active])
+  assert.equal(groups.find((group) => group.id === 'antigravity:work@example.test')?.label, 'Antigravity · work@example.test')
+  assert.deepEqual(groups.find((group) => group.id === 'antigravity:unknown')?.sessions, [history])
+
+  const collapsed = parseCollapsedGroups('["antigravity:work@example.test","antigravity:"]')
+  assert.deepEqual([...collapsed], ['antigravity:work@example.test'])
+})
+
 test('equal conversation timestamps keep the same order across scans', () => {
   const a = row('a', 'one', 100)
   const b = row('b', 'one', 100)

@@ -1,4 +1,4 @@
-export type ToolId = 'opencode' | 'grokbuild' | 'kimi' | 'claude' | 'pi' | 'omp' | 'dsh'
+export type ToolId = 'opencode' | 'grokbuild' | 'kimi' | 'claude' | 'pi' | 'omp' | 'dsh' | 'antigravity'
 export type OmpLaunchMode = 'native' | 'wrapped'
 export function parseOmpLaunchMode(value:unknown):OmpLaunchMode { return value==='native'?'native':'wrapped' }
 
@@ -39,6 +39,7 @@ export interface AppSettings {
   ompDefaultProfile: string
   ompLaunchMode: OmpLaunchMode
   dshPath: string
+  antigravityPath: string
   powershellPath: string
   terminalFontSize: number
   uiFontSize: number
@@ -168,15 +169,7 @@ export interface BinaryProbe {
   message?: string | null
 }
 
-export interface ToolProbeMap {
-  opencode: BinaryProbe
-  grokbuild: BinaryProbe
-  kimi: BinaryProbe
-  claude: BinaryProbe
-  pi: BinaryProbe
-  omp: BinaryProbe
-  dsh: BinaryProbe
-}
+export type ToolProbeMap = Record<ToolId, BinaryProbe>
 
 export interface PtyOpened {
   account?: SessionAccount | null
@@ -359,6 +352,32 @@ export interface ClaudeContinuation {
   accountName: string
 }
 
+export interface AntigravityManagerQuota {
+  name: string
+  percentage: number
+  resetTime?: string | null
+}
+
+export interface AntigravityManagerAccount {
+  id: string
+  email: string
+  name?: string | null
+  subscription?: string | null
+  disabled: boolean
+  quotaUpdatedAt?: number | null
+  lastUsed?: number | null
+  quotas: AntigravityManagerQuota[]
+}
+
+export interface AntigravityManagerState {
+  accounts: AntigravityManagerAccount[]
+  currentAccountId?: string | null
+  dataDir?: string | null
+  managerPath?: string | null
+  canSwitch: boolean
+  switchHint?: string | null
+}
+
 export interface DshBalance {
   ok: boolean
   available: boolean | null
@@ -537,7 +556,8 @@ export const TOOL_OFFICIAL_URLS: Record<ToolId, string> = {
   claude: 'https://code.claude.com/docs/en/quickstart',
   pi: 'https://pi.dev',
   omp: 'https://omp.sh',
-  dsh: 'https://github.com/deepseek-ai/deepseek-harness'
+  dsh: 'https://github.com/deepseek-ai/deepseek-harness',
+  antigravity: 'https://antigravity.google/docs/getting-started?tab=cli'
 }
 
 export const TOOLS: { id: ToolId; label: string; hint: string; tint: string }[] = [
@@ -547,7 +567,8 @@ export const TOOLS: { id: ToolId; label: string; hint: string; tint: string }[] 
   { id: 'claude', label: 'Claude Code', hint: '启动 Claude Code', tint: 'var(--ad-claude)' },
   { id: 'omp', label: 'OMP', hint: '启动 oh-my-pi', tint: 'var(--ad-omp)' },
   { id: 'pi', label: 'Pi', hint: '启动 Pi', tint: 'var(--ad-pi)' },
-  { id: 'dsh', label: 'DeepSeek', hint: '打开 DeepSeek Web', tint: 'var(--ad-dsh)' }
+  { id: 'dsh', label: 'DeepSeek', hint: '打开 DeepSeek Web', tint: 'var(--ad-dsh)' },
+  { id: 'antigravity', label: 'Antigravity', hint: '启动 Google Antigravity CLI（agy）', tint: 'var(--ad-antigravity)' }
 ]
 
 export function toolLabel(id: ToolId): string {

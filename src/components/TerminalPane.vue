@@ -7,6 +7,7 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import * as api from '../lib/api'
 import { clampOverlayBox, isLayoutBusy, paneAnimating, paneDragging, windowMoving, windowResizing } from '../lib/layout'
 import { isMac, isWindows } from '../lib/platform'
+import { antigravityBannerAccount } from '../lib/antigravityBanner'
 import { isSignificantPtyChunk } from '../lib/livePulse'
 import { isDshWeb } from '../lib/livePty'
 import { markPtyExit, notePtyData, selectedProject, store } from '../lib/store'
@@ -38,6 +39,7 @@ type Host = {
   offData: { dispose: () => void }
   offSurface: { dispose: () => void }
   offClipboard: { dispose: () => void }
+  offAccount?: { dispose: () => void }
   stream: ReturnType<typeof createTermStream>
   recovery?: ReturnType<typeof createTermRecovery>
   follow?: ReturnType<typeof createTermFollow>
@@ -277,7 +279,36 @@ function ensureHost(ptyId: string) {
   const host: Host = { term, fit, el, offData, offSurface, offClipboard, stream, unseenOutput: false, lastCols: 0, lastRows: 0, lastW: 0, lastH: 0 }
   hosts.set(ptyId, host)
   configureOmpHost(ptyId, host)
+  configureAntigravityHost(ptyId, host)
   return host
+}
+
+function configureAntigravityHost(ptyId: string, host: Host) {
+  const live = liveForPty(ptyId)
+  if (host.offAccount || live?.toolId !== 'antigravity' || live.account) return
+
+  const { term } = host
+  const capture = () => {
+    const current = liveForPty(ptyId)
+    if (!current || current.account) {
+      host.offAccount?.dispose()
+      return
+    }
+    const buffer = term.buffer.active
+    const cursor = buffer.baseY + buffer.cursorY
+    const readFrom = (start: number) => antigravityBannerAccount(row => {
+      const index = start + row
+      // The current row can be partial when ConPTY splits a redraw.
+      return index === cursor ? '' : buffer.getLine(index)?.translateToString(true) ?? ''
+    }, Math.min(term.rows, 12))
+    const account = readFrom(buffer.baseY) ?? (buffer.baseY > 0 ? readFrom(0) : null)
+    if (!account) return
+
+    current.account = account
+    host.offAccount?.dispose()
+  }
+  host.offAccount = term.onWriteParsed(capture)
+  capture()
 }
 
 function configureOmpHost(ptyId: string, host: Host) {
@@ -542,6 +573,7 @@ function disposeHost(ptyId: string) {
   host.offData.dispose()
   host.offSurface.dispose()
   host.offClipboard.dispose()
+  host.offAccount?.dispose()
   host.offRecovery?.dispose()
   host.recovery?.dispose()
   host.follow?.dispose()
@@ -564,7 +596,10 @@ watch(
 // pty-data can arrive before pty_open returns its tool metadata. Upgrade an
 // existing host when that metadata arrives, instead of skipping setup forever.
 watch(() => store.live.map(item => `${item.ptyId}:${item.toolId}:${item.kind}`), () => {
-  hosts.forEach((host, id) => configureOmpHost(id, host))
+  hosts.forEach((host, id) => {
+    configureOmpHost(id, host)
+    configureAntigravityHost(id, host)
+  })
 })
 
 // A list refresh can observe an exit before the backend monitor emits it.

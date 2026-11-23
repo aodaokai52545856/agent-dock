@@ -26,6 +26,7 @@ test('only on-disk sessions can be batch deleted', () => {
   assert.equal(canPhysicallyDeleteSession('pi', 's1'), true)
   assert.equal(canPhysicallyDeleteSession('opencode', 's1'), true)
   assert.equal(canPhysicallyDeleteSession('dsh', DSH_FIXED_SESSION_ID), false)
+  assert.equal(canPhysicallyDeleteSession('antigravity', 'agy-session'), false)
   assert.equal(canPhysicallyDeleteSession('grokbuild', pendingSessionId('pty-1')), false)
 })
 
