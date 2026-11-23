@@ -40,6 +40,12 @@ pub struct ManagerQuota {
     pub name: String,
     pub percentage: u8,
     pub reset_time: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub group_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub group_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub window: Option<String>,
 }
 
 // This projection of the upstream storage format keeps credential fields out of Dock DTOs.
@@ -88,6 +94,7 @@ struct QuotaGroup {
 
 #[derive(Deserialize)]
 struct QuotaBucket {
+    bucket_id: Option<String>,
     display_name: Option<String>,
     window: String,
     remaining_fraction: f64,
@@ -162,7 +169,13 @@ fn find_manager() -> Option<PathBuf> {
             .find(|path| path.is_file())
             .or_else(|| platform::which_cmd("antigravity-tools"));
     }
-    #[cfg(all(not(windows), not(target_os = "macos")))]
+    #[cfg(target_os = "linux")]
+    {
+        crate::antigravity_tools_install::linux_appimage_path()
+            .filter(|path| path.is_file())
+            .or_else(|| platform::which_cmd("antigravity-tools"))
+    }
+    #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
     {
         platform::which_cmd("antigravity-tools")
     }
@@ -196,6 +209,14 @@ impl QuotaSnapshot {
             .unwrap_or_default()
             .into_iter()
             .flat_map(|group| {
+                // Derive the group identifier from the bucket ID prefix used by Antigravity Tools.
+                let group_id = group.buckets.iter().find_map(|bucket| {
+                    let bucket_id = bucket.bucket_id.as_deref()?.trim();
+                    let window_suffix = format!("-{}", bucket.window);
+                    let group_id = bucket_id.strip_suffix(&window_suffix).unwrap_or(bucket_id);
+                    (!group_id.is_empty()).then(|| group_id.to_owned())
+                });
+                let group_name = nonempty(Some(group.display_name.clone()));
                 group.buckets.into_iter().map(move |bucket| ManagerQuota {
                     name: nonempty(bucket.display_name)
                         .unwrap_or_else(|| format!("{} · {}", group.display_name, bucket.window)),
@@ -203,6 +224,9 @@ impl QuotaSnapshot {
                         .round()
                         .clamp(0.0, 100.0) as u8,
                     reset_time: nonempty(bucket.reset_time),
+                    group_id: group_id.clone(),
+                    group_name: group_name.clone(),
+                    window: nonempty(Some(bucket.window)),
                 })
             })
             .collect::<Vec<_>>();
@@ -215,6 +239,9 @@ impl QuotaSnapshot {
                 name: nonempty(model.display_name).unwrap_or(model.name),
                 percentage: model.percentage.clamp(0, 100) as u8,
                 reset_time: nonempty(model.reset_time),
+                group_id: None,
+                group_name: None,
+                window: None,
             })
             .collect()
     }
@@ -407,8 +434,13 @@ mod tests {
                     "quota_groups": [{
                         "display_name": "GEMINI",
                         "buckets": [
-                            {"window": "5h", "display_name": "Gemini 5H", "remaining_fraction": 0.871},
+                            {"bucket_id": "gemini-5h", "window": "5h", "display_name": "Five Hour Limit Remaining", "remaining_fraction": 0.871},
                             {"window": "weekly", "remaining_fraction": 0.12, "reset_time": "2026-11-30T00:00:00Z"}
+                        ]
+                    }, {
+                        "display_name": "Claude and GPT models",
+                        "buckets": [
+                            {"bucket_id": "3p-5h", "window": "5h", "display_name": "Five Hour Limit Remaining", "remaining_fraction": 0.7}
                         ]
                     }]
                 }
@@ -432,9 +464,30 @@ mod tests {
         assert_eq!(state.accounts.len(), 2);
         assert_eq!(state.accounts[0].quota_updated_at, Some(1_700_000_000_000));
         assert_eq!(state.accounts[0].quotas[0].percentage, 87);
+        assert_eq!(
+            state.accounts[0].quotas[0].group_name.as_deref(),
+            Some("GEMINI")
+        );
+        assert_eq!(state.accounts[0].quotas[0].window.as_deref(), Some("5h"));
+        assert_eq!(
+            state.accounts[0].quotas[0].group_id.as_deref(),
+            Some("gemini")
+        );
         assert_eq!(state.accounts[0].quotas[1].name, "GEMINI · weekly");
+        assert_eq!(
+            state.accounts[0].quotas[1].group_id.as_deref(),
+            Some("gemini")
+        );
+        assert_eq!(
+            state.accounts[0].quotas[2].name,
+            state.accounts[0].quotas[0].name
+        );
+        assert_eq!(state.accounts[0].quotas[2].group_id.as_deref(), Some("3p"));
         assert!(state.accounts[1].disabled);
         assert_eq!(state.accounts[1].quotas[0].percentage, 100);
+        assert!(state.accounts[1].quotas[0].group_id.is_none());
+        assert!(state.accounts[1].quotas[0].group_name.is_none());
+        assert!(state.accounts[1].quotas[0].window.is_none());
         assert!(!serde_json::to_string(&state)
             .unwrap()
             .contains("credential-marker"));

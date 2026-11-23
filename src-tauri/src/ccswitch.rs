@@ -623,13 +623,13 @@ fn request_json<T: for<'de> Deserialize<'de>>(url: &str, proxy_url: Option<&str>
     serde_json::from_str(&body).map_err(|_| "GitHub 最新版信息无法解析。".to_string())
 }
 
-fn http_agent(proxy_url: Option<&str>) -> Result<ureq::Agent, String> {
+pub(crate) fn http_agent(proxy_url: Option<&str>) -> Result<ureq::Agent, String> {
     let mut builder = ureq::AgentBuilder::new()
         .timeout_connect(Duration::from_secs(30))
         .timeout(Duration::from_secs(600));
     if let Some(url) = proxy_url.map(str::trim).filter(|item| !item.is_empty()) {
         let url = validate_proxy_url(url)?;
-        let proxy = ureq::Proxy::new(&url).map_err(|_| "代理地址无法用于下载 CC Switch。".to_string())?;
+        let proxy = ureq::Proxy::new(&url).map_err(|_| "代理地址无法用于下载。".to_string())?;
         builder = builder.proxy(proxy);
     }
     Ok(builder.build())
@@ -723,7 +723,7 @@ fn preferred_dir(saved: &str, fallback: PathBuf) -> PathBuf {
     }
 }
 
-fn progress(stage: &str, message: &str, received: u64, total: u64) -> Progress {
+pub(crate) fn progress(stage: &str, message: &str, received: u64, total: u64) -> Progress {
     Progress {
         stage: stage.into(),
         message: message.into(),

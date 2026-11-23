@@ -16,10 +16,13 @@ const emit = defineEmits<{
   deepseek: []
   'ccswitch-open': []
   'ccswitch-install': []
+  'antigravity-tools-open': []
+  'antigravity-tools-install': []
 }>()
 
 const fileOpen = ref(false)
-const ccswitchOpen = ref(false)
+const externalToolsOpen = ref(false)
+const externalToolsButton = ref<HTMLButtonElement | null>(null)
 const clockBurst = ref(0)
 const maximized = ref(false)
 let offResized: (() => void) | undefined
@@ -64,42 +67,42 @@ function shutClock() {
 
 function toggleFile() {
   const next = !fileOpen.value
-  ccswitchOpen.value = false
+  externalToolsOpen.value = false
   shutClock()
   fileOpen.value = next
 }
 
 function closeMenus() {
   fileOpen.value = false
-  ccswitchOpen.value = false
+  externalToolsOpen.value = false
   shutClock()
 }
 
-function toggleCcswitch() {
-  const next = !ccswitchOpen.value
+function toggleExternalTools() {
+  const next = !externalToolsOpen.value
   fileOpen.value = false
   shutClock()
-  ccswitchOpen.value = next
+  externalToolsOpen.value = next
+}
+
+function closeExternalTools() {
+  closeMenus()
+  externalToolsButton.value?.focus()
+}
+
+function runExternalToolAction(action: () => void) {
+  closeExternalTools()
+  action()
 }
 
 function onClockOpen() {
   fileOpen.value = false
-  ccswitchOpen.value = false
+  externalToolsOpen.value = false
 }
 
 function openVersions() {
   closeMenus()
   emit('versions')
-}
-
-function openCcswitchApp() {
-  closeMenus()
-  emit('ccswitch-open')
-}
-
-function openCcswitchInstall() {
-  closeMenus()
-  emit('ccswitch-install')
 }
 
 function openAccounts() {
@@ -127,7 +130,9 @@ function onDocClick() {
 }
 
 function onKey(event: KeyboardEvent) {
-  if (event.key === 'Escape') closeMenus()
+  if (event.key !== 'Escape') return
+  if (externalToolsOpen.value) closeExternalTools()
+  else closeMenus()
 }
 
 onMounted(() => {
@@ -189,17 +194,25 @@ onUnmounted(() => {
       <div class="file" @click.stop @mousedown.stop>
         <button
           type="button"
+          ref="externalToolsButton"
           class="file-btn"
-          :class="{ 'is-open': ccswitchOpen }"
-          aria-haspopup="menu"
-          :aria-expanded="ccswitchOpen"
-          @click="toggleCcswitch"
+          :class="{ 'is-open': externalToolsOpen }"
+          :aria-expanded="externalToolsOpen"
+          @click="toggleExternalTools"
         >
-          CC Switch
+          外部工具
         </button>
-        <div v-if="ccswitchOpen" class="ad-menu file-menu" role="menu">
-          <button type="button" class="ad-menu-item" role="menuitem" @click="openCcswitchApp">打开</button>
-          <button type="button" class="ad-menu-item" role="menuitem" @click="openCcswitchInstall">下载安装…</button>
+        <div v-if="externalToolsOpen" class="ad-menu file-menu">
+          <div class="external-tool" role="group" aria-label="CC Switch">
+            <span>CC Switch</span>
+            <button type="button" class="file-btn" aria-label="打开 CC Switch" @click="runExternalToolAction(() => emit('ccswitch-open'))">打开</button>
+            <button type="button" class="file-btn" aria-label="下载安装 CC Switch" @click="runExternalToolAction(() => emit('ccswitch-install'))">下载安装</button>
+          </div>
+          <div class="external-tool" role="group" aria-label="Antigravity Tools">
+            <span>Antigravity Tools</span>
+            <button type="button" class="file-btn" aria-label="打开 Antigravity Tools" @click="runExternalToolAction(() => emit('antigravity-tools-open'))">打开</button>
+            <button type="button" class="file-btn" aria-label="下载安装 Antigravity Tools" @click="runExternalToolAction(() => emit('antigravity-tools-install'))">下载安装</button>
+          </div>
         </div>
       </div>
       <div class="modes" role="tablist" aria-label="顶层模式" @mousedown.stop>
@@ -336,6 +349,31 @@ onUnmounted(() => {
   left: 0;
   z-index: 50;
   min-width: 176px;
+}
+
+.external-tool {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) auto auto;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 6px;
+  white-space: nowrap;
+}
+
+.external-tool + .external-tool {
+  border-top: 1px solid var(--ad-border);
+}
+
+.external-tool > span {
+  padding: 0 6px;
+  color: var(--ad-text);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.external-tool > button {
+  min-height: 30px;
+  padding-inline: 8px;
 }
 
 .modes {

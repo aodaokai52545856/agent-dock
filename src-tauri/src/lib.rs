@@ -1,4 +1,5 @@
 mod antigravity_manager;
+mod antigravity_tools_install;
 mod antigravity_usage;
 mod app_update;
 mod bridge;
@@ -77,6 +78,29 @@ async fn antigravity_manager_launch() -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(antigravity_manager::launch)
         .await
         .map_err(|_| "启动 Antigravity Tools 失败。".to_string())?
+}
+
+#[tauri::command]
+async fn antigravity_tools_latest(proxy_url: Option<String>) -> Result<ccswitch::Latest, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        antigravity_tools_install::fetch_latest(proxy_url.as_deref())
+    })
+    .await
+    .map_err(|_| "查询 Antigravity Tools 版本失败。".to_string())?
+}
+
+#[tauri::command]
+async fn antigravity_tools_install(
+    app: AppHandle,
+    proxy_url: Option<String>,
+) -> Result<antigravity_tools_install::InstallResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        antigravity_tools_install::install(proxy_url.as_deref(), |progress| {
+            let _ = app.emit("antigravity-tools-install-progress", &progress);
+        })
+    })
+    .await
+    .map_err(|_| "下载安装 Antigravity Tools 失败。".to_string())?
 }
 
 #[tauri::command]
@@ -1331,6 +1355,8 @@ pub fn run() {
             antigravity_manager_list,
             antigravity_manager_launch,
             antigravity_manager_switch,
+            antigravity_tools_latest,
+            antigravity_tools_install,
             save_grok_account,
             switch_grok_account,
             delete_grok_account,

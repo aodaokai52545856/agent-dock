@@ -356,6 +356,16 @@ export interface AntigravityManagerQuota {
   name: string
   percentage: number
   resetTime?: string | null
+  groupId?: string
+  groupName?: string
+  window?: string
+}
+
+export interface AntigravityToolsInstallResult {
+  path: string
+  version: string
+  log: string
+  launched: boolean
 }
 
 export interface AntigravityManagerAccount {

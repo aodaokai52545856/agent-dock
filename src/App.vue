@@ -13,6 +13,7 @@ import BridgePane from './components/BridgePane.vue'
 import BridgeSideBar from './components/BridgeSideBar.vue'
 import SideBar from './components/SideBar.vue'
 import CcswitchDialog from './components/CcswitchDialog.vue'
+import AntigravityToolsInstallDialog from './components/AntigravityToolsInstallDialog.vue'
 import VersionDrawer from './components/VersionDrawer.vue'
 import DeepseekKeyDialog from './components/DeepseekKeyDialog.vue'
 import ClaudeAccountDialog from './components/ClaudeAccountDialog.vue'
@@ -87,12 +88,14 @@ const editing = ref(false)
 const settingsOpen = ref(false)
 const versionOpen = ref(false)
 const ccswitchOpen = ref(false)
+const antigravityToolsInstallOpen = ref(false)
 const accountOpen = ref(false)
 const claudeAccountOpen = ref(false)
 const antigravityAccountOpen = ref(false)
 const claudeContinuation = ref<{ projectId: string; sessionId: string; title: string } | null>(null)
 const deepseekOpen = ref(false)
 const ccswitchBusy = ref(false)
+const antigravityToolsOpening = ref(false)
 const confirmOpen = ref(false)
 const confirmMode = ref<'remove' | 'close' | 'delete' | 'delete-many' | 'close-all'>('remove')
 const closingProjectId = ref('')
@@ -651,6 +654,25 @@ function onCcswitchInstall() {
   ccswitchOpen.value = true
 }
 
+function onAntigravityToolsInstall() {
+  antigravityAccountOpen.value = false
+  antigravityToolsInstallOpen.value = true
+}
+
+async function onAntigravityToolsOpen() {
+  if (antigravityToolsOpening.value) return
+  antigravityToolsOpening.value = true
+  try {
+    await api.launchAntigravityManager()
+    showToast('已打开 Antigravity Tools')
+  } catch (err) {
+    showToast(err instanceof Error ? err.message : String(err))
+    onAntigravityToolsInstall()
+  } finally {
+    antigravityToolsOpening.value = false
+  }
+}
+
 async function onGrokSwitched() {
   noteGrokAccountChange()
   const grokLive = store.live.filter((item) => item.toolId === 'grokbuild')
@@ -741,6 +763,8 @@ const confirmCopy = () => {
       @deepseek="deepseekOpen = true"
       @ccswitch-open="onCcswitchOpen"
       @ccswitch-install="onCcswitchInstall"
+      @antigravity-tools-open="onAntigravityToolsOpen"
+      @antigravity-tools-install="onAntigravityToolsInstall"
     />
     <div class="workspaces">
       <div v-show="store.appMode === 'console'" ref="consoleWs" class="workspace">
@@ -872,6 +896,10 @@ const confirmCopy = () => {
       @close="ccswitchOpen = false"
       @launched="showToast('已打开 CC Switch')"
     />
+    <AntigravityToolsInstallDialog
+      :open="antigravityToolsInstallOpen"
+      @close="antigravityToolsInstallOpen = false"
+    />
     <GrokAccountDialog
       :open="accountOpen"
       @close="accountOpen = false"
@@ -882,7 +910,11 @@ const confirmCopy = () => {
       @close="claudeAccountOpen = false"
       @switched="onClaudeSwitched"
     />
-    <AntigravityAccountDialog :open="antigravityAccountOpen" @close="antigravityAccountOpen = false" />
+    <AntigravityAccountDialog
+      :open="antigravityAccountOpen"
+      @close="antigravityAccountOpen = false"
+      @install="onAntigravityToolsInstall"
+    />
     <DeepseekKeyDialog :open="deepseekOpen" @close="deepseekOpen = false" />
     <ClaudeContinueDialog
       :open="!!claudeContinuation"

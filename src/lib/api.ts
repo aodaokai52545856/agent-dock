@@ -5,6 +5,7 @@ import { previewSpend } from './grokSpend'
 import { emptyUsageDashboard, emptyUsageLogs } from './usage'
 import type {
   AntigravityManagerState,
+  AntigravityToolsInstallResult,
   AppSettings,
   AppState,
   AppUpdateInfo,
@@ -730,7 +731,16 @@ export async function switchAntigravityManagerAccount(accountId: string): Promis
 }
 
 export async function launchAntigravityManager(): Promise<void> {
+  if (!isTauri) throw new Error('请在桌面端打开 Antigravity Tools')
   return invoke('antigravity_manager_launch')
+}
+
+export async function antigravityToolsLatest(proxyUrl?: string): Promise<CcswitchLatest> {
+  return invoke('antigravity_tools_latest', { proxyUrl: proxyUrl ?? null })
+}
+
+export async function installAntigravityTools(proxyUrl?: string): Promise<AntigravityToolsInstallResult> {
+  return invoke('antigravity_tools_install', { proxyUrl: proxyUrl ?? null })
 }
 
 const previewUsage = (): GrokUsage => {

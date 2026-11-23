@@ -29,7 +29,7 @@
 <p align="center">
   <a href="#下载">下载</a>
   ·
-  <a href="#v0124-新能力">新能力</a>
+  <a href="#v0125-新能力">新能力</a>
   ·
   <a href="#能力">能力</a>
   ·
@@ -65,6 +65,15 @@
 本机已经有 `opencode`、`grok`、`kimi`、`claude`、Pi、DeepSeek、Cursor、Codex，但它们散落在各自终端和窗口里：会话难找、代理不一致、开发和审查抢同一条 thread。
 
 **Agent Dock** 把它们收进一个 frameless 深色窗口。客户只装安装包即可运行，不必装 Rust。
+
+---
+
+<a id="v0125-新能力"></a>
+
+## v0.1.25 新能力
+
+- 标题栏新增「外部工具」菜单。CC Switch 和 Antigravity Tools 各有「打开」与「下载安装」入口。
+- Antigravity 账号弹窗默认选中并标记当前 CLI 账号，按模型组展示配额。套餐和配额周期使用中文。
 
 ---
 
@@ -366,7 +375,8 @@
 | **Antigravity 多账号** | 「账号管理 → Antigravity 账号」直接显示本机 Antigravity Tools 的账号、模型额度和重置时间。关闭 Dock 内的 `agy` 终端后，可调用 Tools 切换 CLI 账号。新增账号和刷新额度可在 Tools 中操作。[Antigravity Tools 下载](https://github.com/lbjlaq/Antigravity-Manager/releases/latest) |
 | **用量与花费** | 状态栏读取 Grok 额度与 token；DeepSeek 显示剩余人民币 |
 | **Antigravity 用量** | 「用量」可按日期和模型查看 Antigravity 数据。本地会话记录和 CC Switch 导入的同一请求按请求 ID 去重。 |
-| **CLI 版本** | 探测、升级、卸载本机工具；可安装并启动 CC Switch |
+| **CLI 版本** | 探测、升级、卸载本机工具 |
+| **外部工具** | 打开或下载安装 CC Switch 和 Antigravity Tools |
 | **DeepSeek 密钥** | 在 Dock 管理 `.credentials.yaml`，明文不进仓库 |
 | **外观** | 浅色 / 深色 / 跟随系统；强调色、字体、对比度、侧栏半透明、窗口透明度与毛玻璃 |
 
@@ -417,7 +427,7 @@ npm run tauri:dev
 
 **必须在对应系统上打包**，不能从 Windows 打出 `.dmg` / `.AppImage`。产物把界面打进二进制，不再监听开发端口，落到 `release/`。
 
-版本号读 `package.json` 的 `version`。当前 `0.1.24` 会打出 `AgentDock-0.1.24-Setup.exe` 等文件名。
+版本号读 `package.json` 的 `version`。例如 `0.1.25` 会打出 `AgentDock-0.1.25-Setup.exe` 等文件名。
 
 ```bash
 npm run pack          # 当前系统
