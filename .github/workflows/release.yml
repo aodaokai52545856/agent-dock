@@ -5,6 +5,9 @@ on:
   push:
     tags: ["v*"]
 
+permissions:
+  contents: read
+
 jobs:
   pack:
     strategy:
@@ -31,7 +34,54 @@ jobs:
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
       - run: npm ci
       - run: npm run ${{ matrix.pack }}
+      - name: Archive macOS application
+        if: matrix.pack == 'pack:mac'
+        run: |
+          version=$(node -p 'require("./package.json").version')
+          tar -czf "release/AgentDock-${version}.app.tar.gz" -C release "Agent Dock.app"
       - uses: actions/upload-artifact@v4
         with:
           name: agent-dock-${{ matrix.os }}
-          path: release/**
+          path: release/AgentDock-*
+          if-no-files-found: error
+
+  publish:
+    if: github.ref_type == 'tag'
+    needs: pack
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: agent-dock-*
+          merge-multiple: true
+          path: release
+      - name: Publish release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(node -p 'require("./package.json").version')
+          tag="v${version}"
+          if [[ "$GITHUB_REF_NAME" != "$tag" ]]; then
+            echo "Tag $GITHUB_REF_NAME does not match package version $version" >&2
+            exit 1
+          fi
+
+          assets=(
+            "release/AgentDock-${version}-Setup.exe"
+            "release/AgentDock-${version}.exe"
+            "release/AgentDock-${version}.dmg"
+            "release/AgentDock-${version}.app.tar.gz"
+            "release/AgentDock-${version}.AppImage"
+            "release/AgentDock-${version}.deb"
+          )
+          for asset in "${assets[@]}"; do
+            if [[ ! -s "$asset" ]]; then
+              echo "Missing release asset: $asset" >&2
+              exit 1
+            fi
+          done
+
+          gh release create "$tag" --verify-tag --title "Agent Dock $tag" --generate-notes "${assets[@]}"
