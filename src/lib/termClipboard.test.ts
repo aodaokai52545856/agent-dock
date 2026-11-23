@@ -1,9 +1,12 @@
 import assert from 'node:assert/strict'
 import {
+  antigravityFileInputs,
   attachTermClipboard,
   parseOsc52,
+  resolveAntigravityPaste,
   resolveClaudePaste,
   shouldCopySelection,
+  shouldInterceptAntigravityPaste,
   shouldInterceptPaste,
   type ClipKeyEvent
 } from './termClipboard.ts'
@@ -72,6 +75,26 @@ test('Claude paste sends text, or an image chord when the clipboard has only an 
   assert.deepEqual(resolveClaudePaste({ text: '  ', hasImage: true }, true), { kind: 'image', sequence: '\u001bv' })
   assert.deepEqual(resolveClaudePaste({ text: '', hasImage: true }, false), { kind: 'image', sequence: '\u0016' })
   assert.deepEqual(resolveClaudePaste({ text: '', hasImage: false }, true), { kind: 'skip' })
+})
+
+test('Antigravity owns the terminal paste shortcuts on each platform', () => {
+  const ctrlV = key({ key: 'v', code: 'KeyV', ctrlKey: true })
+  const cmdV = key({ key: 'v', code: 'KeyV', metaKey: true })
+  assert.equal(shouldInterceptAntigravityPaste(ctrlV, false), true)
+  assert.equal(shouldInterceptAntigravityPaste({ ...ctrlV, shiftKey: true }, false), true)
+  assert.equal(shouldInterceptAntigravityPaste(cmdV, true), true)
+  assert.equal(shouldInterceptAntigravityPaste(cmdV, false), false)
+  assert.equal(shouldInterceptAntigravityPaste({ ...ctrlV, altKey: true }, false), false)
+})
+
+test('Antigravity preserves pasted text and routes file and image clipboard data', () => {
+  const text = '第一行\nsecond line\n'
+  const files = ['C:\\项目 文档\\说明.md', 'C:\\图片\\截图.png']
+  assert.deepEqual(resolveAntigravityPaste({ text, hasImage: false }), { kind: 'text', text })
+  assert.deepEqual(resolveAntigravityPaste({ text, hasImage: true }), { kind: 'text', text })
+  assert.deepEqual(resolveAntigravityPaste({ text: '', hasImage: true }), { kind: 'image', sequence: '\x16' })
+  assert.deepEqual(resolveAntigravityPaste({ text, hasImage: true, files }), { kind: 'files', paths: files })
+  assert.deepEqual(antigravityFileInputs([...files, 'C:\\bad\nfilename.md'], true), ['@"C:/项目 文档/说明.md" ', 'C:/图片/截图.png'])
 })
 
 test('attachTermClipboard writes OSC 52 and host copy, and copies on mouseup', () => {
@@ -155,9 +178,10 @@ test('Ctrl+V asks the host to paste only while that host owns the chord', () => 
     onPaste() {
       pastes += 1
     },
-    pasteEnabled: () => enabled
+    interceptPaste: event => enabled && shouldInterceptAntigravityPaste(event, false)
   })
   assert.equal(keyHandler?.(pasteKey), false)
+  assert.equal(keyHandler?.({ ...pasteKey, repeat: true }), false)
   enabled = false
   assert.equal(keyHandler?.(pasteKey), true)
   assert.equal(keyHandler?.(key({ type: 'keyup', code: 'KeyV', key: 'v', ctrlKey: true })), true)

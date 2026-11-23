@@ -1,6 +1,7 @@
 import { version as appPackageVersion } from '../../package.json'
 import { isOmpRuntime, ompCommand, ompDraft, ompState } from './omp'
 import { invoke } from '@tauri-apps/api/core'
+import type { ClipboardPaste } from './termClipboard'
 import { previewSpend } from './grokSpend'
 import { emptyUsageDashboard, emptyUsageLogs } from './usage'
 import type {
@@ -114,7 +115,7 @@ export async function clipboardRead(): Promise<string> {
   return ''
 }
 
-export async function clipboardReadContents(): Promise<{ text: string; hasImage: boolean }> {
+export async function clipboardReadContents(): Promise<ClipboardPaste> {
   if (isTauri) {
     try {
       return await invoke('clipboard_read_contents')

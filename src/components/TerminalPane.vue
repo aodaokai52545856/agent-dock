@@ -2,7 +2,7 @@
 import { FitAddon } from '@xterm/addon-fit'
 import { Terminal } from '@xterm/xterm'
 import '@xterm/xterm/css/xterm.css'
-import { listen, type UnlistenFn } from '@tauri-apps/api/event'
+import { listen, TauriEvent, type UnlistenFn } from '@tauri-apps/api/event'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import * as api from '../lib/api'
 import { clampOverlayBox, isLayoutBusy, paneAnimating, paneDragging, windowMoving, windowResizing } from '../lib/layout'
@@ -10,10 +10,17 @@ import { isMac, isWindows } from '../lib/platform'
 import { antigravityBannerAccount } from '../lib/antigravityBanner'
 import { isSignificantPtyChunk } from '../lib/livePulse'
 import { isDshWeb } from '../lib/livePty'
-import { markPtyExit, notePtyData, selectedProject, store } from '../lib/store'
+import { markPtyExit, notePtyData, selectedProject, showToast, store } from '../lib/store'
 import { codeFontStack } from '../lib/appearance'
 import { canMeasure, createFitScheduler, rowsThatFit } from '../lib/termFit'
-import { attachTermClipboard, resolveClaudePaste } from '../lib/termClipboard'
+import {
+  antigravityFileInputs,
+  attachTermClipboard,
+  resolveAntigravityPaste,
+  resolveClaudePaste,
+  shouldInterceptAntigravityPaste,
+  shouldInterceptPaste
+} from '../lib/termClipboard'
 import { termMenuItems, type TermMenuAction } from '../lib/termMenu'
 import {
   ansiPaletteBlack,
@@ -51,9 +58,12 @@ type Host = {
   lastH: number
 }
 
+type FileDrop = { paths: string[]; position: { x: number; y: number } }
+
 const hosts = new Map<string, Host>()
 let unlistenData: UnlistenFn | undefined
 let unlistenExit: UnlistenFn | undefined
+let unlistenDrop: UnlistenFn | undefined
 let observer: ResizeObserver | undefined
 let mounted = false
 const workspaceEl = ref<HTMLElement | null>(null)
@@ -98,6 +108,7 @@ async function runTermMenu(action: TermMenuAction) {
     return
   }
   if (action === 'paste') {
+    host.term.focus()
     await pasteFromClipboard(id, host.term)
     return
   }
@@ -148,10 +159,19 @@ function toolForPty(ptyId: string) {
   return liveForPty(ptyId)?.toolId
 }
 
-async function pasteFromClipboard(ptyId: string, term: Terminal) {
+async function pasteFromClipboard(ptyId: string, term: Terminal, fallbackText = '') {
+  const tool = toolForPty(ptyId)
   try {
     const contents = await api.clipboardReadContents()
-    if (toolForPty(ptyId) === 'claude') {
+    if (hosts.get(ptyId)?.term !== term || store.activePtyId !== ptyId || store.appMode !== 'console') return
+    if (tool === 'antigravity') {
+      const action = resolveAntigravityPaste({ ...contents, text: contents.text || fallbackText })
+      if (action.kind === 'image') await api.ptyWrite(ptyId, action.sequence)
+      if (action.kind === 'text') await api.writeSessionText(ptyId, action.text.replaceAll('\x1b', ''))
+      if (action.kind === 'files') await pasteAntigravityFiles(ptyId, action.paths)
+      return
+    }
+    if (tool === 'claude') {
       const action = resolveClaudePaste(contents, isWindows)
       if (action.kind === 'image') {
         await api.ptyWrite(ptyId, action.sequence)
@@ -162,8 +182,31 @@ async function pasteFromClipboard(ptyId: string, term: Terminal) {
     }
     if (contents.text) term.paste(contents.text)
   } catch {
-    /* clipboard and pty write are best-effort */
+    if (tool === 'antigravity') showToast('未能粘贴到 Antigravity 终端')
   }
+}
+
+async function pasteAntigravityFiles(ptyId: string, paths: string[]) {
+  try {
+    for (const input of antigravityFileInputs(paths, isWindows)) {
+      if (store.activePtyId !== ptyId || store.appMode !== 'console' || !hosts.has(ptyId)) return
+      await api.writeSessionText(ptyId, input)
+    }
+  } catch {
+    showToast('未能将文件加入 Antigravity 终端')
+  }
+}
+
+function onFileDrop(payload: FileDrop) {
+  const id = store.activePtyId
+  if (!id || toolForPty(id) !== 'antigravity' || store.appMode !== 'console') return
+  const host = hosts.get(id)
+  // WebView2 reports physical pixels. Wry's WebKit backends report logical coordinates.
+  const scale = isWindows ? window.devicePixelRatio : 1
+  const target = document.elementFromPoint(payload.position.x / scale, payload.position.y / scale)
+  if (!host || !host.el.contains(target)) return
+  host.term.focus()
+  void pasteAntigravityFiles(id, payload.paths)
 }
 
 function canHost(ptyId: string) {
@@ -265,6 +308,12 @@ function ensureHost(ptyId: string) {
     void api.ptyWrite(ptyId, data)
   })
   const offSurface = bindTermSurface(term, ptyId)
+  el.addEventListener('paste', (event) => {
+    if (toolForPty(ptyId) !== 'antigravity') return
+    event.preventDefault()
+    event.stopPropagation()
+    void pasteFromClipboard(ptyId, term, event.clipboardData?.getData('text/plain'))
+  }, true)
   const offClipboard = attachTermClipboard(term, el, {
     write: (text) => {
       void api.clipboardWrite(text)
@@ -273,7 +322,12 @@ function ensureHost(ptyId: string) {
     onPaste: () => {
       void pasteFromClipboard(ptyId, term)
     },
-    pasteEnabled: () => toolForPty(ptyId) === 'claude'
+    interceptPaste: (event) => {
+      const tool = toolForPty(ptyId)
+      return tool === 'antigravity'
+        ? shouldInterceptAntigravityPaste(event, isMac)
+        : tool === 'claude' && shouldInterceptPaste(event, isMac)
+    }
   })
   const stream = createTermStream((data, done) => term.write(data, done))
   const host: Host = { term, fit, el, offData, offSurface, offClipboard, stream, unseenOutput: false, lastCols: 0, lastRows: 0, lastW: 0, lastH: 0 }
@@ -664,6 +718,10 @@ onMounted(async () => {
       markPtyExit(event.payload.ptyId)
     })
     if (!mounted) { unlistenExit(); return }
+    void listen<FileDrop>(TauriEvent.DRAG_DROP, ({ payload }) => onFileDrop(payload)).then((unlisten) => {
+      if (mounted) unlistenDrop = unlisten
+      else unlisten()
+    }).catch(() => {})
     // A reloaded webview cannot acknowledge frames delivered to the old page.
     await api.ptyResetOutput()
     if (!mounted) return
@@ -719,6 +777,7 @@ onUnmounted(() => {
   document.removeEventListener('visibilitychange', resumeActiveViewport)
   unlistenData?.()
   unlistenExit?.()
+  unlistenDrop?.()
   observer?.disconnect()
   fitScheduler.dispose()
   hosts.forEach((_, id) => disposeHost(id))

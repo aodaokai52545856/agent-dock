@@ -5,6 +5,8 @@ use serde::Serialize;
 pub struct ClipboardContents {
     pub text: String,
     pub has_image: bool,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub files: Vec<String>,
 }
 
 pub fn write_text(text: &str) -> Result<(), String> {
@@ -20,9 +22,23 @@ pub fn read_text() -> Result<String, String> {
 }
 
 pub fn read_contents() -> ClipboardContents {
+    let (text, files) = arboard::Clipboard::new()
+        .map(|mut clipboard| {
+            let text = clipboard.get_text().unwrap_or_default();
+            let files = clipboard
+                .get()
+                .file_list()
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|path| path.into_os_string().into_string().ok())
+                .collect();
+            (text, files)
+        })
+        .unwrap_or_default();
     ClipboardContents {
-        text: read_text().unwrap_or_default(),
+        text,
         has_image: has_image(),
+        files,
     }
 }
 

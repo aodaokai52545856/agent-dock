@@ -22,6 +22,7 @@ export type ClipKeyEvent = {
 export type ClipboardPaste = {
   text: string
   hasImage: boolean
+  files?: string[]
 }
 
 export type ResolvedPaste =
@@ -84,6 +85,12 @@ export function shouldInterceptPaste(event: ClipKeyEvent, mac: boolean) {
   return event.code === 'KeyV' || event.key === 'v' || event.key === 'V'
 }
 
+export function shouldInterceptAntigravityPaste(event: ClipKeyEvent, mac: boolean) {
+  if (event.type !== 'keydown' || event.altKey) return false
+  const modifier = mac ? event.ctrlKey !== event.metaKey : event.ctrlKey && !event.metaKey
+  return modifier && (event.code === 'KeyV' || event.key.toLowerCase() === 'v')
+}
+
 // Windows Claude binds image paste to alt+v. Terminals send that as ESC v, and
 // Claude treats the meta flag as alt. Other platforms bind ctrl+v (0x16).
 export function claudeImagePasteSequence(windows: boolean) {
@@ -96,6 +103,24 @@ export function resolveClaudePaste(input: ClipboardPaste, windows: boolean): Res
   }
   if (input.text) return { kind: 'text', text: input.text }
   return { kind: 'skip' }
+}
+
+export function resolveAntigravityPaste(input: ClipboardPaste): ResolvedPaste | { kind: 'files'; paths: string[] } {
+  if (input.files?.length) return { kind: 'files', paths: input.files }
+  if (input.text && (!input.hasImage || input.text.trim())) return { kind: 'text', text: input.text }
+  // The CLI can read native media formats absent from the WebView clipboard.
+  return { kind: 'image', sequence: '\u0016' }
+}
+
+const antigravityMediaPath = /\.(png|jpe?g|gif|webp|bmp|tiff?|svg|mp4|mov|webm|avi)$/i
+
+export function antigravityFileInputs(paths: string[], windows: boolean): string[] {
+  return paths.filter(path => path && !/[\u0000-\u001f\u007f]/.test(path)).map(path => {
+    const normalized = windows ? path.replaceAll('\\', '/') : path
+    const quoted = /\s|"/.test(normalized) ? JSON.stringify(normalized) : normalized
+    // Native paste recognizes image and video paths as attachments.
+    return antigravityMediaPath.test(normalized) ? quoted : `@${quoted} `
+  })
 }
 
 export function shouldCopySelection(event: ClipKeyEvent, hasSelection: boolean, mac: boolean) {
@@ -114,7 +139,7 @@ export function attachTermClipboard(
     write: (text: string) => void
     mac: boolean
     onPaste?: () => void
-    pasteEnabled?: () => boolean
+    interceptPaste?: (event: ClipKeyEvent) => boolean
   }
 ) {
   let disposed = false
@@ -132,9 +157,9 @@ export function attachTermClipboard(
       if (text) hooks.write(text)
       return false
     }
-    if (hooks.onPaste && shouldInterceptPaste(event, hooks.mac) && hooks.pasteEnabled?.() !== false) {
+    if (hooks.onPaste && hooks.interceptPaste?.(event)) {
       event.preventDefault?.()
-      hooks.onPaste()
+      if (!event.repeat) hooks.onPaste()
       return false
     }
     return true
