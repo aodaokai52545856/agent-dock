@@ -14,7 +14,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/aodaokai52545856/agent-dock/releases/tag/v0.1.23"><img src="https://img.shields.io/badge/⬇%20Download-v0.1.23-0A0A0A?style=for-the-badge&logo=github&logoColor=white" alt="Download v0.1.23"></a>
+  <a href="https://github.com/aodaokai52545856/agent-dock/releases/tag/v0.1.24"><img src="https://img.shields.io/badge/⬇%20Download-v0.1.24-0A0A0A?style=for-the-badge&logo=github&logoColor=white" alt="Download v0.1.24"></a>
   &nbsp;
   <a href="#快速开始"><img src="https://img.shields.io/badge/Quick_Start-启动-1a1a1a?style=for-the-badge" alt="Quick Start"></a>
 </p>
@@ -320,19 +320,19 @@
 
 ## 下载
 
-> **v0.1.23** · 跨平台安装包 · 无需本机 Rust
+> **v0.1.24** · 跨平台安装包 · 无需本机 Rust
 
 | 文件 | 平台 | 说明 | 大小约 |
 | :---: | :---: | --- | ---: |
-| [**AgentDock-0.1.23-Setup.exe**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.23/AgentDock-0.1.23-Setup.exe) | Windows | NSIS 安装包（推荐） | 构建后确定 |
-| [**AgentDock-0.1.23.exe**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.23/AgentDock-0.1.23.exe) | Windows | 绿色便携版 | 构建后确定 |
-| [**AgentDock-0.1.23.dmg**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.23/AgentDock-0.1.23.dmg) | macOS | 磁盘映像 | 构建后确定 |
-| [**AgentDock-0.1.23.app.tar.gz**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.23/AgentDock-0.1.23.app.tar.gz) | macOS | `.app` 压缩包 | 构建后确定 |
-| [**AgentDock-0.1.23.AppImage**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.23/AgentDock-0.1.23.AppImage) | Linux | 免安装可执行 | 构建后确定 |
-| [**AgentDock-0.1.23.deb**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.23/AgentDock-0.1.23.deb) | Linux | Debian / Ubuntu | 构建后确定 |
+| [**AgentDock-0.1.24-Setup.exe**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.24/AgentDock-0.1.24-Setup.exe) | Windows x64 | NSIS 安装包（推荐） | 9.5 MB |
+| [**AgentDock-0.1.24.exe**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.24/AgentDock-0.1.24.exe) | Windows x64 | 便携版 | 32.9 MB |
+| [**AgentDock-0.1.24.dmg**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.24/AgentDock-0.1.24.dmg) | macOS Apple Silicon | 磁盘映像 | 14.3 MB |
+| [**AgentDock-0.1.24.app.tar.gz**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.24/AgentDock-0.1.24.app.tar.gz) | macOS Apple Silicon | 应用压缩包 | 13.6 MB |
+| [**AgentDock-0.1.24.AppImage**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.24/AgentDock-0.1.24.AppImage) | Linux x64 | 免安装可执行 | 91.6 MB |
+| [**AgentDock-0.1.24.deb**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.24/AgentDock-0.1.24.deb) | Linux x64 | Debian / Ubuntu 安装包 | 14.6 MB |
 
 <p align="center">
-  <a href="https://github.com/aodaokai52545856/agent-dock/releases/tag/v0.1.23"><b>→ 打开 Releases · v0.1.23</b></a>
+  <a href="https://github.com/aodaokai52545856/agent-dock/releases/tag/v0.1.24"><b>→ 打开 Releases · v0.1.24</b></a>
 </p>
 
 **运行前提**
@@ -344,7 +344,7 @@
 | **CLI** | `opencode` / `grok` / `kimi` / `claude` 等自行安装并登录；Dock **不代登录** |
 | **编排** | 自动开发需 Cursor API Key；Codex 审查需本机已登录 Codex |
 
-> **macOS 提示：** CI 产物暂未 Apple 公证。若提示「已损坏」，终端执行 `xattr -cr ~/Downloads/AgentDock-0.1.23.dmg`，或对 app **右键 → 打开**。
+> **macOS 提示** · CI 产物暂未通过 Apple 公证。若提示「已损坏」，终端执行 `xattr -cr ~/Downloads/AgentDock-0.1.24.dmg`，或对 app **右键 → 打开**。
 
 ---
 
@@ -426,7 +426,7 @@ npm run pack:mac      # .app + .dmg
 npm run pack:linux    # .AppImage + .deb
 ```
 
-GitHub 打 tag `v*`，或手动跑 [`release`](.github/workflows/release.yml) workflow，会在 Windows / macOS / Ubuntu runner 上打包并上传 artifact。
+推送 `v*` 标签会触发 [`release`](.github/workflows/release.yml)，在 Windows、macOS 和 Ubuntu 上完成打包并将产物附到对应的 GitHub Release。也可从分支手动运行该工作流获取构建产物。
 
 ---
 
