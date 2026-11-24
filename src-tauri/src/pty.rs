@@ -1,4 +1,5 @@
 use crate::platform::{self, posix_single_quote};
+use crate::antigravity_terminal::ConversationLog;
 use crate::proxy::proxy_env;
 use crate::state::{AppState, find_project};
 use crate::tools::{self, ToolId};
@@ -107,6 +108,7 @@ struct LivePty {
     master: Arc<Mutex<Box<dyn portable_pty::MasterPty + Send>>>,
     writer: Arc<Mutex<Box<dyn Write + Send>>>,
     child: Box<dyn portable_pty::Child + Send + Sync>,
+    conversation_log: Option<ConversationLog>,
     output: Arc<OutputFlow>,
 }
 
@@ -180,10 +182,13 @@ impl PtyHub {
             if hub.stopped.load(Ordering::Acquire) { break; }
             let mut dead = Vec::new();
             let mut retired = Vec::new();
+            let mut changed = Vec::new();
             if let Ok(mut sessions) = hub.sessions.lock() {
                 for (id, pty) in sessions.iter_mut() {
                     if let Ok(Some(_)) = pty.child.try_wait() {
                         dead.push(id.clone());
+                    } else if sync_conversation(pty) {
+                        changed.push(live_info(pty));
                     }
                 }
                 for id in &dead {
@@ -191,6 +196,9 @@ impl PtyHub {
                 }
             }
             drop(retired);
+            for info in changed {
+                let _ = app.emit("antigravity-session-changed", info);
+            }
             for id in dead {
                 let _ = app.emit("pty-exit", PtyExit { pty_id: id });
             }
@@ -288,7 +296,16 @@ impl PtyHub {
         };
         {
             self.reap_dead();
-            let sessions = self.sessions.lock().expect("pty lock");
+            let mut sessions = self.sessions.lock().expect("pty lock");
+            // /resume may have switched the CLI since the last monitor tick. Recheck
+            // its reported ID before deciding whether to reuse a terminal.
+            if tool_id == ToolId::Antigravity && session_id.is_some() {
+                for pty in sessions.values_mut().filter(|p| p.project_id == project_id && p.tool_id == tool_id) {
+                    if sync_conversation(pty) {
+                        let _ = app.emit("antigravity-session-changed", live_info(pty));
+                    }
+                }
+            }
             if let Some(existing) = sessions.values().find(|pty| pty.key == key) {
                 return Ok(PtyOpened {
                     account: existing.account.clone(),
@@ -312,6 +329,9 @@ impl PtyHub {
             ));
         }
         let exe = tools::resolve_binary(tool_id, &state.settings)?;
+        let conversation_log = if tool_id == ToolId::Antigravity {
+            Some(ConversationLog::new().map_err(|err| format!("无法创建 Antigravity 会话日志：{err}"))?)
+        } else { None };
         let env_pairs = proxy_env(project.proxy_enabled, &project.proxy_url)?;
         let claude = if tool_id == ToolId::Claude {
             let mut base = std::env::vars().collect::<std::collections::BTreeMap<_, _>>();
@@ -320,6 +340,9 @@ impl PtyHub {
         } else { None };
         let extra_args = {
             let mut args = command_args.unwrap_or_else(|| tools::launch_args_for(tool_id, session_id.as_deref(), Some(&exe)));
+            if let Some(log) = &conversation_log {
+                args.extend(["--log-file".into(), log.path().to_string_lossy().into_owned()]);
+            }
             args.extend(claude_theme_args(tool_id, ui_theme));
             args
         };
@@ -439,6 +462,7 @@ impl PtyHub {
                     master: Arc::new(Mutex::new(pair.master)),
                     writer: Arc::new(Mutex::new(writer)),
                     child,
+                    conversation_log,
                     output: output.clone(),
                 },
             );
@@ -506,11 +530,11 @@ impl PtyHub {
             (pty.project_id.clone(), pty.tool_id)
         };
         let key = session_live_key(&project_id, tool_id, session_id);
-        if let Some(existing) = sessions
-            .values()
-            .find(|pty| pty.key == key && pty.id != pty_id)
-        {
-            return Ok(live_info(existing));
+        if tool_id == ToolId::Antigravity {
+            return Err("Antigravity 会话编号由终端确认".into());
+        }
+        if sessions.values().any(|pty| pty.key == key && pty.id != pty_id) {
+            return Err("这个会话已经在另一个终端里打开".into());
         }
         let pty = sessions
             .get_mut(pty_id)
@@ -547,6 +571,9 @@ impl PtyHub {
             (pty.project_id.clone(), pty.tool_id)
         };
         let key = session_live_key(&project_id, tool_id, session_id);
+        if tool_id == ToolId::Antigravity {
+            return Err("Antigravity 会话编号由终端确认".into());
+        }
         if sessions.values().any(|pty| pty.key == key && pty.id != pty_id) {
             return Err("这个会话已经在另一个终端里打开".into());
         }
@@ -573,6 +600,15 @@ impl PtyHub {
 
 pub fn session_live_key(project_id: &str, tool_id: ToolId, session_id: &str) -> String {
     format!("{}|{}|{session_id}", project_id, tool_id.as_str())
+}
+
+fn sync_conversation(pty: &mut LivePty) -> bool {
+    let Some(id) = pty.conversation_log.as_mut().and_then(ConversationLog::poll) else { return false };
+    if pty.session_id.as_ref() == Some(&id) { return false; }
+    pty.key = session_live_key(&pty.project_id, pty.tool_id, &id);
+    pty.title = format!("Antigravity · {}", &id[..8]);
+    pty.session_id = Some(id);
+    true
 }
 
 fn live_info(pty: &LivePty) -> LivePtyInfo {

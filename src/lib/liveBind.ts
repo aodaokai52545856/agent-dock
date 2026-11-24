@@ -20,6 +20,7 @@ export type LiveBind = {
 }
 
 export type OpenTarget =
+  | { action: 'gone' }
   | { action: 'switch'; ptyId: string }
   | { action: 'bind-and-switch'; ptyId: string; sessionId: string }
   | { action: 'open'; sessionId: string | null }
@@ -34,6 +35,12 @@ export function isPendingSessionId(sessionId: string) {
 
 export function ptyIdFromPending(sessionId: string) {
   return isPendingSessionId(sessionId) ? sessionId.slice(PENDING_SESSION_PREFIX.length) : ''
+}
+
+export function copyableSessionId(toolId: ToolId, id: string): string | null {
+  if (!id || isPendingSessionId(id) || toolId === 'dsh') return null
+  if (toolId === 'omp') return /^omp@[^:]+:(.+)$/.exec(id)?.[1] ?? null
+  return id
 }
 
 export function liveKey(projectId: string, toolId: ToolId, sessionId: string) {
@@ -58,6 +65,8 @@ export function matchUnboundLiveToSessions(
   const usedSession = new Set<string>()
   const binds: LiveBind[] = []
   for (const { id: toolId } of TOOLS) {
+    // agy reports the foreground conversation for each terminal, even after /resume.
+    if (toolId === 'antigravity') continue
     const unbound = live
       .filter((item) => sameProjectTool(item, projectId, toolId) && !item.sessionId)
       .sort((a, b) => (b.openedAt ?? 0) - (a.openedAt ?? 0))
@@ -101,9 +110,12 @@ export function resolveOpenTarget(
   const { projectId, toolId, sessionId } = opts
   if (sessionId && isPendingSessionId(sessionId)) {
     const ptyId = ptyIdFromPending(sessionId)
-    const pending = live.find((item) => item.ptyId === ptyId && item.alive !== false)
-    if (pending) return { action: 'switch', ptyId }
+    const pending = live.find((item) => item.ptyId === ptyId && sameProjectTool(item, projectId, toolId))
+    return pending ? { action: 'switch', ptyId } : { action: 'gone' }
   }
+
+  // The native open command checks the process log before reusing an agy window.
+  if (toolId === 'antigravity') return { action: 'open', sessionId }
 
   const same = live.filter((item) => sameProjectTool(item, projectId, toolId))
   if (toolId === 'dsh') {
@@ -181,6 +193,11 @@ export function mergeLiveFromServer(server: LivePtyInfo[], local: LivePtyInfo[])
     const prev = local.find((row) => row.ptyId === item.ptyId)
     if (!prev) return item
     const refreshed = preserveLiveAccount(prev, item)
+    if (item.toolId === 'antigravity') {
+      return prev.sessionId && prev.sessionId === item.sessionId
+        ? { ...refreshed, title: prev.title, sessionUpdatedAt: prev.sessionUpdatedAt }
+        : refreshed
+    }
     if (prev.sessionId && !item.sessionId) {
       return {
         ...refreshed,

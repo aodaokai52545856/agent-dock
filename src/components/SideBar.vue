@@ -3,7 +3,8 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { relativeTime } from '../lib/format'
 import { clampOverlayBox, endPaneAnim, layout, sidebarPaneWidth, toggleProjects } from '../lib/layout'
 import { isFixedDshSession } from '../lib/dsh'
-import { isPendingSessionId } from '../lib/liveBind'
+import { copyableSessionId, isPendingSessionId } from '../lib/liveBind'
+import { clipboardWrite } from '../lib/api'
 import {
   SESSION_GROUP_COLLAPSE_KEY,
   accountSessionGroups,
@@ -26,7 +27,7 @@ import {
   toggleSessionKey,
   toggleVisibleSelection
 } from '../lib/sessionBatch'
-import { findLiveForSession, isSessionScanning, projectSessionRows, setSessionLiveOnly, setSessionToolFilter, store, visibleSessions } from '../lib/store'
+import { findLiveForSession, isSessionScanning, projectSessionRows, setSessionLiveOnly, setSessionToolFilter, showToast, store, visibleSessions } from '../lib/store'
 import { isToolInstalled, sessionFilterBlock, TOOLS, type SessionToolFilter, type ToolId } from '../lib/types'
 import ToolMark from './ToolMark.vue'
 
@@ -58,7 +59,7 @@ const draft = defineModel<string>('draft', { default: '' })
 const menu = ref<{ x: number; y: number; sessionId: string; toolId: ToolId; focus: number } | null>(null)
 const projectMenu = ref<{ x: number; y: number; projectId: string } | null>(null)
 const MENU_WIDTH = 228
-const MENU_HEIGHT = 226
+const MENU_HEIGHT = 262
 const filterOpen = ref(false)
 const filterFocus = ref(0)
 const selecting = ref(false)
@@ -342,11 +343,26 @@ function menuCanContinueClaude() {
 
 function activateMenu(index: number) {
   if (index === 0 && menuCanRename()) renameSession()
-  if (index === 1 && menuCanContinueClaude()) continueClaudeSession()
-  else if (index === 1 && menuCanCite()) citeSession()
-  if (index === 2 && menuLive()) closeSession()
-  if (index === 3 && menuCanCloseAll()) closeAllSessions()
-  if (index === 4 && menuCanDelete()) deleteSession()
+  if (index === 1) void copySessionId()
+  if (index === 2 && menuCanContinueClaude()) continueClaudeSession()
+  else if (index === 2 && menuCanCite()) citeSession()
+  if (index === 3 && menuLive()) closeSession()
+  if (index === 4 && menuCanCloseAll()) closeAllSessions()
+  if (index === 5 && menuCanDelete()) deleteSession()
+}
+
+const menuCopyId = computed(() => {
+  if (!menu.value) return null
+  const { toolId, sessionId } = menu.value
+  const id = isPendingSessionId(sessionId) ? findLiveForSession(sessionId, toolId)?.sessionId : sessionId
+  return id ? copyableSessionId(toolId, id) : null
+})
+
+async function copySessionId() {
+  const id = menuCopyId.value
+  if (!id) return
+  closeMenu()
+  showToast(await clipboardWrite(id) ? '会话 ID 已复制' : '复制会话 ID 失败')
 }
 
 function citeSession() {
@@ -452,7 +468,7 @@ function onKey(event: KeyboardEvent) {
   }
   if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
     event.preventDefault()
-    const next = event.key === 'ArrowDown' ? (menu.value.focus + 1) % 5 : (menu.value.focus + 4) % 5
+    const next = event.key === 'ArrowDown' ? (menu.value.focus + 1) % 6 : (menu.value.focus + 5) % 6
     menu.value = { ...menu.value, focus: next }
     return
   }
@@ -810,14 +826,26 @@ onUnmounted(() => {
           <span>重命名</span>
           <span class="ad-menu-hint">F2</span>
         </button>
-        <div class="ad-menu-sep" role="separator" />
         <button
           type="button"
           role="menuitem"
           class="ad-menu-item"
           :class="{ 'is-focus': menu.focus === 1 }"
-          :disabled="!(menuCanCite() || menuCanContinueClaude())"
+          :disabled="!menuCopyId"
+          :title="menuCopyId ?? (menuPending() ? '终端尚未报告会话 ID' : '此工具没有独立会话 ID')"
           @mouseenter="menu.focus = 1"
+          @click="copySessionId"
+        >
+          <span>复制会话 ID</span>
+        </button>
+        <div class="ad-menu-sep" role="separator" />
+        <button
+          type="button"
+          role="menuitem"
+          class="ad-menu-item"
+          :class="{ 'is-focus': menu.focus === 2 }"
+          :disabled="!(menuCanCite() || menuCanContinueClaude())"
+          @mouseenter="menu.focus = 2"
           @click="menu.toolId === 'claude' ? continueClaudeSession() : citeSession()"
         >
           <span>{{ menu.toolId === 'claude' ? '用其他账号继续…' : '引用片段' }}</span>
@@ -827,9 +855,9 @@ onUnmounted(() => {
           type="button"
           role="menuitem"
           class="ad-menu-item"
-          :class="{ 'is-focus': menu.focus === 2 }"
+          :class="{ 'is-focus': menu.focus === 3 }"
           :disabled="!menuLive()"
-          @mouseenter="menu.focus = 2"
+          @mouseenter="menu.focus = 3"
           @click="closeSession"
         >
           <span>关闭会话</span>
@@ -838,9 +866,9 @@ onUnmounted(() => {
           type="button"
           role="menuitem"
           class="ad-menu-item"
-          :class="{ 'is-focus': menu.focus === 3 }"
+          :class="{ 'is-focus': menu.focus === 4 }"
           :disabled="!menuCanCloseAll()"
-          @mouseenter="menu.focus = 3"
+          @mouseenter="menu.focus = 4"
           @click="closeAllSessions()"
         >
           <span>关闭所有会话</span>
@@ -850,10 +878,10 @@ onUnmounted(() => {
           type="button"
           role="menuitem"
           class="ad-menu-item ad-menu-item--danger"
-          :class="{ 'is-focus': menu.focus === 4 }"
+          :class="{ 'is-focus': menu.focus === 5 }"
           :disabled="!menuCanDelete()"
           :title="menu.toolId === 'antigravity' ? '在 Antigravity 终端输入 /resume 管理会话' : undefined"
-          @mouseenter="menu.focus = 4"
+          @mouseenter="menu.focus = 5"
           @click="deleteSession"
         >
           <span>删除会话</span>

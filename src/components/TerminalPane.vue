@@ -10,7 +10,7 @@ import { isMac, isWindows } from '../lib/platform'
 import { antigravityBannerAccount } from '../lib/antigravityBanner'
 import { isSignificantPtyChunk } from '../lib/livePulse'
 import { isDshWeb } from '../lib/livePty'
-import { markPtyExit, notePtyData, selectedProject, showToast, store } from '../lib/store'
+import { antigravitySessionChanged, markPtyExit, notePtyData, rememberAntigravityAccount, selectedProject, showToast, store } from '../lib/store'
 import { codeFontStack } from '../lib/appearance'
 import { canMeasure, createFitScheduler, rowsThatFit } from '../lib/termFit'
 import {
@@ -37,7 +37,7 @@ import { createTermStream } from '../lib/termStream'
 import { createTermRecovery } from '../lib/termRecovery'
 import { createTermFollow } from '../lib/termFollow'
 import ToolMark from './ToolMark.vue'
-import { TOOLS, type ToolId } from '../lib/types'
+import { TOOLS, type LivePtyInfo, type ToolId } from '../lib/types'
 
 type Host = {
   term: Terminal
@@ -63,6 +63,7 @@ type FileDrop = { paths: string[]; position: { x: number; y: number } }
 const hosts = new Map<string, Host>()
 let unlistenData: UnlistenFn | undefined
 let unlistenExit: UnlistenFn | undefined
+let unlistenConversation: UnlistenFn | undefined
 let unlistenDrop: UnlistenFn | undefined
 let observer: ResizeObserver | undefined
 let mounted = false
@@ -359,6 +360,7 @@ function configureAntigravityHost(ptyId: string, host: Host) {
     if (!account) return
 
     current.account = account
+    rememberAntigravityAccount(current)
     host.offAccount?.dispose()
   }
   host.offAccount = term.onWriteParsed(capture)
@@ -722,6 +724,8 @@ onMounted(async () => {
       markPtyExit(event.payload.ptyId)
     })
     if (!mounted) { unlistenExit(); return }
+    unlistenConversation = await listen<LivePtyInfo>('antigravity-session-changed', ({ payload }) => antigravitySessionChanged(payload))
+    if (!mounted) { unlistenConversation(); return }
     void listen<FileDrop>(TauriEvent.DRAG_DROP, ({ payload }) => onFileDrop(payload)).then((unlisten) => {
       if (mounted) unlistenDrop = unlisten
       else unlisten()
@@ -781,6 +785,7 @@ onUnmounted(() => {
   document.removeEventListener('visibilitychange', resumeActiveViewport)
   unlistenData?.()
   unlistenExit?.()
+  unlistenConversation?.()
   unlistenDrop?.()
   observer?.disconnect()
   fitScheduler.dispose()

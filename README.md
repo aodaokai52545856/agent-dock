@@ -29,7 +29,7 @@
 <p align="center">
   <a href="#下载">下载</a>
   ·
-  <a href="#v0127-新能力">新能力</a>
+  <a href="#v0128-新能力">新能力</a>
   ·
   <a href="#能力">能力</a>
   ·
@@ -65,6 +65,16 @@
 本机已经有 `opencode`、`grok`、`kimi`、`claude`、Pi、DeepSeek、Cursor、Codex，但它们散落在各自终端和窗口里：会话难找、代理不一致、开发和审查抢同一条 thread。
 
 **Agent Dock** 把它们收进一个 frameless 深色窗口。客户只装安装包即可运行，不必装 Rust。
+
+---
+
+<a id="v0128-新能力"></a>
+
+## v0.1.28 新能力
+
+- 修复同时打开多个 Antigravity 会话时点开不同标题却显示相同内容的问题。Dock 按终端报告的会话 ID 切换和恢复对话。
+- 关闭终端后会保留已识别的账号归属。历史索引有遗漏时，Dock 会从仍在本机的会话文件和项目记录中补查。
+- 在侧栏右键会话即可复制原生会话 ID，也可以把 ID 粘贴到搜索框定位历史记录。
 
 ---
 
@@ -445,7 +455,7 @@ npm run tauri:dev
 
 **必须在对应系统上打包**，不能从 Windows 打出 `.dmg` / `.AppImage`。产物把界面打进二进制，不再监听开发端口，落到 `release/`。
 
-版本号读 `package.json` 的 `version`。例如 `0.1.27` 会打出 `AgentDock-0.1.27-Setup.exe` 等文件名。
+版本号读 `package.json` 的 `version`。例如 `0.1.28` 会打出 `AgentDock-0.1.28-Setup.exe` 等文件名。
 
 ```bash
 npm run pack          # 当前系统

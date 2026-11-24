@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import {
+  copyableSessionId,
   isPendingSessionId,
   keepLiveTitle,
   matchUnboundLiveToSessions,
@@ -48,17 +49,28 @@ test('new live pty binds to a session that appeared after it opened', () => {
   assert.deepEqual(binds, [{ ptyId: 'p1', sessionId: 'fresh', title: '修圆角', toolId: 'grokbuild' }])
 })
 
-test('Antigravity history opens a saved conversation or switches to its live terminal', () => {
+test('Antigravity only switches on a confirmed terminal ID, even with simultaneous updates', () => {
   const opts = { projectId: 'a', toolId: 'antigravity', sessionId: 'saved' } as const
   assert.deepEqual(resolveOpenTarget([], opts), { action: 'open', sessionId: 'saved' })
   const account = { id: 'work@example.test', name: 'work@example.test' }
   const pty = live({ ptyId: 'agy-pty', toolId: 'antigravity', account })
   const saved = session({ id: 'saved', toolId: 'antigravity', updatedAt: 1_000_500 })
-  assert.deepEqual(matchUnboundLiveToSessions([pty], [saved], 'a'), [{
-    ptyId: 'agy-pty', sessionId: 'saved', title: 'saved', toolId: 'antigravity'
-  }])
-  assert.deepEqual(resolveOpenTarget([{ ...pty, sessionId: saved.id }], opts), { action: 'switch', ptyId: 'agy-pty' })
+  const other = { ...pty, ptyId: 'other-pty' }
+  const another = { ...saved, id: 'another' }
+  assert.deepEqual(matchUnboundLiveToSessions([pty, other], [saved, another], 'a'), [])
+  assert.deepEqual(resolveOpenTarget([pty, other], { ...opts, sessionUpdatedAt: saved.updatedAt }), { action: 'open', sessionId: 'saved' })
+  const both = [{ ...pty, sessionId: saved.id }, { ...other, sessionId: another.id }]
+  assert.deepEqual(resolveOpenTarget(both, { ...opts, sessionId: another.id }), { action: 'open', sessionId: another.id })
+  assert.deepEqual(resolveOpenTarget(both, { ...opts, sessionId: pendingSessionId(other.ptyId) }), { action: 'switch', ptyId: other.ptyId })
+  assert.deepEqual(resolveOpenTarget([], { ...opts, sessionId: pendingSessionId(other.ptyId) }), { action: 'gone' })
   assert.deepEqual(pendingSessionRows([pty], [], 'a')[0]?.account, account)
+})
+
+test('copy uses the native conversation ID and never copies a terminal placeholder', () => {
+  assert.equal(copyableSessionId('antigravity', 'saved'), 'saved')
+  assert.equal(copyableSessionId('antigravity', pendingSessionId('some-pty')), null)
+  assert.equal(copyableSessionId('dsh', 'deepseek'), null)
+  assert.equal(copyableSessionId('omp', 'omp@d29yaw:part:two'), 'part:two')
 })
 
 test('OMP native terminals bind only journals from their own profile',()=>{
@@ -279,7 +291,7 @@ test('refreshLive retains the Antigravity identity on its own terminal', () => {
   const newTerminal = live({ ptyId: 'p2', toolId: 'antigravity', sessionId: 'saved' })
 
   const merged = mergeLiveFromServer([refreshed, newTerminal], [previous])
-  assert.equal(merged[0]?.sessionId, 'saved')
+  assert.equal(merged[0]?.sessionId, null)
   assert.deepEqual(merged[0]?.account, account)
   assert.equal(merged[1]?.account, undefined)
   assert.deepEqual(mergeLiveFromServer([{ ...refreshed, account: other }], [previous])[0]?.account, other)

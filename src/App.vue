@@ -490,6 +490,8 @@ function scrollOmpToBottom() {
   else termRef.value?.scrollToBottom()
 }
 
+let openRequest = 0
+
 async function openSession(sessionId?: string, toolId?: ToolId, profileId?: string, ompMode?:OmpLaunchMode) {
   const project = selectedProject.value
   if (!project) {
@@ -497,6 +499,9 @@ async function openSession(sessionId?: string, toolId?: ToolId, profileId?: stri
     return
   }
   const tool = toolId ?? store.selectedTool
+  const request = ++openRequest
+  const stillSelected = () => request === openRequest && store.selectedProjectId === project.id
+  paneLoading.value = false
   const requestedId = tool === 'dsh' ? DSH_FIXED_SESSION_ID : sessionId
   const session = requestedId ? store.sessions.find((item) => item.id === requestedId && item.toolId === tool) : undefined
   const target = resolveOpenTarget(store.live, {
@@ -506,12 +511,14 @@ async function openSession(sessionId?: string, toolId?: ToolId, profileId?: stri
     sessionUpdatedAt: session?.updatedAt,
     account: session?.account
   })
-  if (target.action === 'switch' || target.action === 'bind-and-switch') {
-    if (target.action === 'bind-and-switch') {
-      await bindLiveSession(target.ptyId, target.sessionId, session?.title)
-    }
+  if (target.action === 'gone') {
+    showToast('这个终端已关闭，请从全部会话打开已保存的记录')
+    return
+  }
+  if (target.action === 'switch' ||
+      (target.action === 'bind-and-switch' && await bindLiveSession(target.ptyId, target.sessionId, session?.title))) {
     const existing = store.live.find((item) => item.ptyId === target.ptyId)
-    if (!existing) return
+    if (!existing || !stillSelected()) return
     if (existing.ptyId === store.activePtyId && target.action === 'switch') return
     rememberOpened(existing)
     await finishPaneReady()
@@ -540,27 +547,26 @@ async function openSession(sessionId?: string, toolId?: ToolId, profileId?: stri
         systemPrefersLight()
       )
     })
-    store.selectedTool = tool
     rememberOpened({
       ptyId: opened.ptyId,
       key: opened.key,
       projectId: project.id,
       toolId: tool,
       sessionId: opened.sessionId ?? target.sessionId,
-      title: opened.title,
+      title: tool === 'antigravity' ? session?.title ?? opened.title : opened.title,
       account: opened.account,
       sessionUpdatedAt: session?.updatedAt,
       alive: true,
       openedAt: opened.openedAt ?? Date.now(),
       kind: opened.kind ?? (tool === 'dsh' ? 'web' : 'pty'),
       url: opened.url ?? null
-    })
+    }, stillSelected())
     if (!target.sessionId) watchPendingSession(opened.ptyId)
-    await finishPaneReady()
+    if (stillSelected()) await finishPaneReady()
   } catch (err) {
     showToast(err instanceof Error ? err.message : String(err))
   } finally {
-    paneLoading.value = false
+    if (request === openRequest) paneLoading.value = false
   }
 }
 

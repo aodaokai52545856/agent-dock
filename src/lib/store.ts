@@ -2,6 +2,7 @@ import { computed, reactive } from 'vue'
 import * as api from './api'
 import { rememberOmpMode } from './ompMode'
 import { forgetOmpSession } from './omp'
+import { rememberConversationAccount, rememberedConversationAccount } from './antigravityBanner'
 import { DSH_FIXED_SESSION_ID, DSH_FIXED_SESSION_TITLE } from './dsh'
 import { canPhysicallyDeleteSession } from './sessionBatch'
 import { compareSessionRecency } from './sessionGroups'
@@ -446,6 +447,10 @@ function settlePtyDone(ptyId: string) {
   if (row.watch.phase === 'busy' && settled.watch.phase === 'idle') {
     const live = store.live.find((item) => item.ptyId === ptyId && item.alive !== false)
     archiveSessionArtifacts(live)
+    // agy may write its generated title after reporting the conversation ID.
+    if (live?.toolId === 'antigravity' && live.projectId === store.selectedProjectId) {
+      void refreshSessions({ silent: true })
+    }
   }
   if (!settled.notify) return
   const live = store.live.find((item) => item.ptyId === ptyId && item.alive !== false)
@@ -735,6 +740,18 @@ async function refreshSessionsNow(opts?: { silent?: boolean }) {
 
 function applyToolScan(toolId: ToolId, result: Awaited<ReturnType<typeof api.listSessions>>) {
   if (result.ok) {
+    if (toolId === 'antigravity') {
+      const storage = sessionViewStorage()
+      for (const row of result.sessions) {
+        const live = findLiveForSession(row.id, toolId)
+        row.account ??= live?.account ?? rememberedConversationAccount(storage, row.id)
+        if (live) {
+          live.title = row.title
+          live.sessionUpdatedAt = row.updatedAt
+          if (live.ptyId === store.activePtyId) store.focusedSession = focusedFromLive(live)
+        }
+      }
+    }
     delete store.sessionErrors[toolId]
     store.sessions = [...store.sessions.filter((item) => item.toolId !== toolId), ...result.sessions].sort(
       compareSessionRecency
@@ -1074,7 +1091,7 @@ export function markPtyExit(ptyId: string, opts?: { userClosed?: boolean; skipRe
   if (!opts?.skipRefresh) void refreshSessions({ silent: true })
 }
 
-export function rememberOpened(info: LivePtyInfo) {
+export function rememberOpened(info: LivePtyInfo, activate = true) {
   rememberOmpMode(info)
   const idx = store.live.findIndex((item) => item.ptyId === info.ptyId)
   const previous = store.live[idx]
@@ -1082,7 +1099,30 @@ export function rememberOpened(info: LivePtyInfo) {
   const next = { ...(previous ? preserveLiveAccount(previous, info) : info), openedAt, alive: true }
   if (idx >= 0) store.live[idx] = next
   else store.live.push(next)
-  activateLiveItem(next)
+  if (activate) activateLiveItem(next)
+  rememberAntigravityAccount(next)
+}
+
+export function rememberAntigravityAccount(live: LivePtyInfo) {
+  if (live.toolId !== 'antigravity' || !live.sessionId || !live.account) return
+  rememberConversationAccount(sessionViewStorage(), live.sessionId, live.account)
+  if (live.projectId !== store.selectedProjectId) return
+  const row = store.sessions.find(row => row.toolId === live.toolId && row.id === live.sessionId)
+  if (row) row.account = live.account
+}
+
+export function antigravitySessionChanged(info: LivePtyInfo) {
+  const live = store.live.find(item => item.ptyId === info.ptyId)
+  if (!live || live.toolId !== 'antigravity' || !info.sessionId) return
+  const here = live.projectId === store.selectedProjectId
+  const row = here && store.sessions.find(row => row.toolId === live.toolId && row.id === info.sessionId)
+  live.sessionId = info.sessionId
+  live.key = info.key
+  live.title = row ? row.title : info.title
+  live.sessionUpdatedAt = row ? row.updatedAt : undefined
+  rememberAntigravityAccount(live)
+  if (store.activePtyId === live.ptyId) store.focusedSession = focusedFromLive(live)
+  if (here) void refreshSessions({ silent: true })
 }
 
 const pendingWatchers = new Map<string, number>()
@@ -1096,6 +1136,16 @@ function stopPendingWatch(ptyId: string) {
 
 export function watchPendingSession(ptyId: string) {
   stopPendingWatch(ptyId)
+  if (store.live.some(item => item.ptyId === ptyId && item.toolId === 'antigravity')) {
+    // The listener handles subsequent changes. Read once for an event that raced pty_open.
+    void api.listLivePtys().then(list => {
+      const info = list.find(item => item.ptyId === ptyId)
+      if (info?.sessionId && store.live.some(item => item.ptyId === ptyId && !item.sessionId)) {
+        antigravitySessionChanged(info)
+      }
+    }).catch(() => {})
+    return
+  }
   const tick = () => {
     const live = store.live.find((item) => item.ptyId === ptyId)
     if (!live?.alive || live.sessionId) {
@@ -1110,34 +1160,20 @@ export function watchPendingSession(ptyId: string) {
 
 export async function bindLiveSession(ptyId: string, sessionId: string, title?: string) {
   const current = store.live.find((item) => item.ptyId === ptyId)
-  if (!current) return
-  current.sessionId = sessionId
-  rememberOmpMode(current)
-  current.key = liveKey(current.projectId, current.toolId, sessionId)
-  if (title?.trim()) current.title = title.trim()
-  if (store.activePtyId === ptyId) {
-    store.focusedSession = focusedFromLive(current)
-  }
-  if (!api.isTauri) return
+  if (!current || current.toolId === 'antigravity') return false
   try {
-    const bound = await api.ptyBindSession(ptyId, sessionId, title ?? null)
-    const targetId = bound.ptyId || ptyId
-    const idx = store.live.findIndex((item) => item.ptyId === targetId)
-    if (idx >= 0) {
-      const previous = store.live[idx]
-      store.live[idx] = {
-        ...previous,
-        ...preserveLiveAccount(previous, bound),
-        openedAt: bound.openedAt ?? previous.openedAt
-      }
-    }
-    if (targetId !== ptyId) {
-      store.activePtyId = targetId
-    }
-    const live = store.live.find((item) => item.ptyId === store.activePtyId)
-    if (live) store.focusedSession = focusedFromLive(live)
+    const bound = api.isTauri
+      ? await api.ptyBindSession(ptyId, sessionId, title ?? null)
+      : { ...current, sessionId, title: title || current.title, key: liveKey(current.projectId, current.toolId, sessionId) }
+    const idx = store.live.findIndex(item => item.ptyId === ptyId)
+    if (bound.ptyId !== ptyId || bound.sessionId !== sessionId || idx < 0) return false
+    const next = { ...store.live[idx], ...bound }
+    store.live[idx] = next
+    rememberOmpMode(next)
+    if (store.activePtyId === ptyId) store.focusedSession = focusedFromLive(next)
+    return true
   } catch {
-    /* keep the local bind until the next live list */
+    return false
   }
 }
 
@@ -1157,7 +1193,7 @@ async function reconcileLiveBinds(projectId: string) {
   for (const bind of binds) {
     const live = store.live.find((item) => item.ptyId === bind.ptyId)
     const title = keepLiveTitle(live?.title, bind.title)
-    await bindLiveSession(bind.ptyId, bind.sessionId, title)
+    if (!await bindLiveSession(bind.ptyId, bind.sessionId, title)) continue
     if (title !== bind.title) {
       try {
         await api.renameSession(projectId, bind.toolId, bind.sessionId, title)

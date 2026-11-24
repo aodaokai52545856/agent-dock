@@ -1,4 +1,5 @@
 mod antigravity_manager;
+mod antigravity_terminal;
 mod antigravity_tools_install;
 mod antigravity_usage;
 mod app_update;
