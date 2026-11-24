@@ -1,4 +1,4 @@
-// Local Vite + real xterm. All PTY traffic is synthetic; no model requests.
+// OMP and Antigravity scrolling in real xterm with synthetic PTY traffic.
 async page => {
   const errors = []
   page.on('pageerror', e => errors.push(e.message))
@@ -8,7 +8,7 @@ async page => {
   await page.evaluate(async () => {
     const callbacks = new Map(), listeners = new Map()
     let serial = 0
-    const smoke = window.__scrollRegression = { sizes: [], input: [], repaint: null }
+    const smoke = window.__scrollRegression = { ptyId: 'early-omp', sizes: [], input: [], repaint: null }
     window.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener() {} }
     window.__TAURI_INTERNALS__ = {
       transformCallback: fn => { callbacks.set(++serial, fn); return serial },
@@ -16,8 +16,10 @@ async page => {
       invoke: async (command, args) => {
         if (command === 'plugin:event|listen') { listeners.set(args.event, callbacks.get(args.handler)); return args.handler }
         if (command === 'plugin:event|unlisten') return
-        if (command === 'pty_write') { smoke.input.push(args.data); return }
+        if (command === 'pty_reset_output') return
+        if (command === 'pty_write') { if (args.ptyId === smoke.ptyId) smoke.input.push(args.data); return }
         if (command === 'pty_resize') {
+          if (args.ptyId !== smoke.ptyId) return
           smoke.sizes.push([args.cols, args.rows])
           if (smoke.repaint?.cols === args.cols) {
             const data = smoke.repaint.data; smoke.repaint = null; smoke.write(data)
@@ -35,7 +37,7 @@ async page => {
     const pane = ref(null)
     createApp({ render: () => h('div', { style: { display: store.appMode === 'console' ? 'flex' : 'none', flex: '1', minWidth: '0', minHeight: '0' } }, [h(Pane, { ref: pane, fontSize: 14 })]) }).mount('#app')
     await nextTick()
-    smoke.write = data => listeners.get('pty-data')({ payload: { ptyId: 'early-omp', data } })
+    smoke.write = data => listeners.get('pty-data')({ payload: { ptyId: smoke.ptyId, data } })
     // The backend starts emitting before the pty_open response registers live metadata.
     smoke.write('EARLY_NATIVE_OUTPUT\r\n')
     smoke.host = pane.value.ensureHost('early-omp')
@@ -200,6 +202,101 @@ async page => {
   await page.mouse.wheel(0, 10000)
   await page.waitForTimeout(150)
   if (!await page.evaluate(() => window.__scrollRegression.host.follow.isFollowing())) throw new Error('Returning from scrollbar history to the bottom did not resume following')
+
+  await page.evaluate(() => {
+    const s = window.__scrollRegression
+    s.ptyId = 'antigravity'
+    s.sizes.length = 0
+    s.input.length = 0
+    s.store.live.push({ ptyId: s.ptyId, toolId: 'antigravity', kind: 'pty', projectId: 'fixture', key: 'agy', alive: true })
+    s.store.activePtyId = s.ptyId
+    s.host = s.pane.ensureHost(s.ptyId)
+    const history = Array.from({ length: 150 }, (_, i) => `ANTIGRAVITY_HISTORY_${i}\r\n`).join('')
+    s.write(history + 'ANTIGRAVITY_LATEST\r\nDRAFT_PROMPT')
+  })
+  await page.waitForFunction(() => {
+    const s = window.__scrollRegression
+    return s.sizes.length > 0 && s.screen().includes('DRAFT_PROMPT')
+  })
+  await page.evaluate(() => { window.__scrollRegression.sizes.length = 0 })
+
+  async function hideAntigravity(surface) {
+    await page.evaluate(surface => {
+      const s = window.__scrollRegression
+      if (surface === 'window') window.dispatchEvent(new Event('blur'))
+      else if (surface === 'visibility') {
+        Object.defineProperty(document, 'hidden', { configurable: true, value: true })
+        document.dispatchEvent(new Event('visibilitychange'))
+      } else if (surface === 'tab') s.store.appMode = 'usage'
+      else s.store.activePtyId = 'early-omp'
+    }, surface)
+    await page.evaluate(async () => {
+      const s = window.__scrollRegression
+      // Model xterm reporting the top during a native repaint while hidden.
+      s.host.term.scrollToTop()
+      await new Promise(resolve => {
+        const parsed = s.host.term.onWriteParsed(() => { parsed.dispose(); resolve() })
+        s.write('\x1b[?1049hANTIGRAVITY_REPAINT\x1b[?1049l')
+      })
+    })
+    await page.waitForFunction(() => {
+      const buffer = window.__scrollRegression.host.term.buffer.active
+      return buffer.type === 'normal' && buffer.viewportY === 0
+    })
+  }
+
+  async function showAntigravity(surface) {
+    await page.evaluate(surface => {
+      const s = window.__scrollRegression
+      if (surface === 'window') window.dispatchEvent(new Event('focus'))
+      else if (surface === 'visibility') {
+        delete document.hidden
+        document.dispatchEvent(new Event('visibilitychange'))
+      } else if (surface === 'tab') s.store.appMode = 'console'
+      else s.store.activePtyId = s.ptyId
+    }, surface)
+  }
+
+  const surfaces = ['window', 'visibility', 'tab', 'session']
+  for (const surface of surfaces) {
+    await hideAntigravity(surface)
+    await showAntigravity(surface)
+    await page.waitForFunction(() => {
+      const s = window.__scrollRegression
+      const buffer = s.host.term.buffer.active
+      return buffer.viewportY === buffer.baseY && s.screen().includes('DRAFT_PROMPT')
+    }, undefined, { timeout: 1500 }).catch(() => { throw new Error(`Antigravity lost the latest output when returning to the ${surface}`) })
+  }
+
+  await page.mouse.move(500, 300)
+  await page.mouse.wheel(0, -480)
+  await page.waitForFunction(() => {
+    const buffer = window.__scrollRegression.host.term.buffer.active
+    return buffer.viewportY > 0 && buffer.viewportY < buffer.baseY
+  })
+  const historyLine = await page.evaluate(() => window.__scrollRegression.screen().split('\n')[0])
+  for (const surface of surfaces) {
+    await hideAntigravity(surface)
+    await showAntigravity(surface)
+    await page.waitForFunction(line => window.__scrollRegression.screen().startsWith(line + '\n'), historyLine, { timeout: 1500 })
+      .catch(() => { throw new Error(`Antigravity lost the history position when returning to the ${surface}`) })
+  }
+
+  if (await page.evaluate(() => { const s = window.__scrollRegression; return s.input.length || s.sizes.length })) {
+    throw new Error('Antigravity scroll restoration sent terminal input or triggered a repaint')
+  }
+
+  await page.evaluate(() => window.__scrollRegression.write('\x1b[?1049hANTIGRAVITY_ALT_VIEW'))
+  await page.waitForFunction(() => window.__scrollRegression.host.term.buffer.active.type === 'alternate')
+  await page.mouse.wheel(0, -480)
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+  await page.evaluate(() => window.__scrollRegression.write('\x1b[?1049l'))
+  await page.waitForFunction(() => window.__scrollRegression.host.term.buffer.active.type === 'normal')
+  await hideAntigravity('window')
+  await showAntigravity('window')
+  await page.waitForFunction(line => window.__scrollRegression.screen().startsWith(line + '\n'), historyLine, { timeout: 1500 })
+    .catch(() => { throw new Error('Antigravity alternate-screen scrolling replaced the saved history position') })
+
   if (errors.length) throw new Error(errors.join('\n'))
-  return { ok: true, cases: ['output-before-metadata', 'follow-streaming-output', 'resume-hidden-output', 'resume-dock-tab-output', 'preserve-manual-history', 'short-answer-bottom-recovery', 'periodic-control-output', 'no-repaint-loop', 'free-spinning-wheel-no-repaint', 'deduplicate-answer-recovery', 'recover-new-short-answer-once', 'idle-buffer-restore', 'visible-scrollbar', 'scrollbar-pauses-follow', 'restore-idle-history-marker'] }
+  return { ok: true, cases: ['output-before-metadata', 'follow-streaming-output', 'resume-hidden-output', 'resume-dock-tab-output', 'preserve-manual-history', 'short-answer-bottom-recovery', 'periodic-control-output', 'no-repaint-loop', 'free-spinning-wheel-no-repaint', 'deduplicate-answer-recovery', 'recover-new-short-answer-once', 'idle-buffer-restore', 'visible-scrollbar', 'scrollbar-pauses-follow', 'restore-idle-history-marker', 'antigravity-restore-live-output', 'antigravity-restore-history', 'antigravity-restore-without-repaint', 'antigravity-alternate-screen-preserves-history'] }
 }

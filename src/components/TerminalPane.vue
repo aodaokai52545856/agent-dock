@@ -50,7 +50,7 @@ type Host = {
   stream: ReturnType<typeof createTermStream>
   recovery?: ReturnType<typeof createTermRecovery>
   follow?: ReturnType<typeof createTermFollow>
-  offRecovery?: { dispose: () => void }
+  offViewport?: { dispose: () => void }
   unseenOutput: boolean
   lastCols: number
   lastRows: number
@@ -278,7 +278,7 @@ function ensureHost(ptyId: string) {
   if (!canHost(ptyId)) return undefined
   const existing = hosts.get(ptyId)
   if (existing) {
-    configureOmpHost(ptyId, existing)
+    configureViewportHost(ptyId, existing)
     return existing
   }
   const el = document.createElement('div')
@@ -332,7 +332,7 @@ function ensureHost(ptyId: string) {
   const stream = createTermStream((data, done) => term.write(data, done))
   const host: Host = { term, fit, el, offData, offSurface, offClipboard, stream, unseenOutput: false, lastCols: 0, lastRows: 0, lastW: 0, lastH: 0 }
   hosts.set(ptyId, host)
-  configureOmpHost(ptyId, host)
+  configureViewportHost(ptyId, host)
   configureAntigravityHost(ptyId, host)
   return host
 }
@@ -365,14 +365,16 @@ function configureAntigravityHost(ptyId: string, host: Host) {
   capture()
 }
 
-function configureOmpHost(ptyId: string, host: Host) {
-  if (host.follow || toolForPty(ptyId) !== 'omp') return
+function configureViewportHost(ptyId: string, host: Host) {
+  const toolId = toolForPty(ptyId)
+  if (host.follow || (toolId !== 'omp' && toolId !== 'antigravity')) return
   const { term, el } = host
   const atBottom = () => term.buffer.active.viewportY === term.buffer.active.baseY
+  const inNormalBuffer = () => term.buffer.active.type === 'normal'
   const visible = () => store.appMode === 'console' && store.activePtyId === ptyId
     && !document.hidden && !el.classList.contains('is-hidden') && el.clientHeight > 0
   const follow = createTermFollow({
-    canFollow: () => visible() && !term.hasSelection() && term.buffer.active.type === 'normal',
+    canFollow: () => visible() && !term.hasSelection() && inNormalBuffer(),
     atBottom,
     scrollToBottom: () => term.scrollToBottom(),
     scheduleFrame: cb => requestAnimationFrame(cb),
@@ -386,10 +388,10 @@ function configureOmpHost(ptyId: string, host: Host) {
   host.follow = follow
   paintHost(el, ptyId)
   term.options.theme = theme(ptyId)
-  if (isWindows) {
+  if (isWindows && toolId === 'omp') {
     const recovery = createTermRecovery({
       canRecover: () => visible() && !follow.isSuspended() && follow.isFollowing() && !isLayoutBusy() && !term.hasSelection()
-        && term.buffer.active.type === 'normal',
+        && inNormalBuffer(),
       recover: () => redrawHost(ptyId, host, false),
       scheduleTimeout: (cb, ms) => window.setTimeout(cb, ms),
       cancelTimeout: id => window.clearTimeout(id)
@@ -398,10 +400,11 @@ function configureOmpHost(ptyId: string, host: Host) {
   }
   let userFrame: number | undefined
   const observeUserScroll = (down: boolean) => {
+    if (!inNormalBuffer()) return
     if (userFrame !== undefined) cancelAnimationFrame(userFrame)
     userFrame = requestAnimationFrame(() => {
       userFrame = undefined
-      if (!visible() || follow.isSuspended()) return
+      if (!visible() || follow.isSuspended() || !inNormalBuffer()) return
       const wasFollowing = follow.isFollowing()
       // DOM and buffer positions can disagree after a TUI repaint. A downward
       // gesture at the physical bottom explicitly asks to return to live output.
@@ -415,11 +418,12 @@ function configureOmpHost(ptyId: string, host: Host) {
     })
   }
   const onWheel = (event: WheelEvent) => {
+    if (!inNormalBuffer()) return
     if (event.deltaY < 0 && term.buffer.active.baseY > 0) follow.pause()
     if (event.deltaY !== 0) observeUserScroll(event.deltaY > 0)
   }
   const onKey = (event: KeyboardEvent) => {
-    if (!event.shiftKey) return
+    if (!event.shiftKey || !inNormalBuffer()) return
     if (event.key === 'PageUp' || event.key === 'Home') follow.pause()
     if (event.key === 'PageDown' || event.key === 'End') observeUserScroll(true)
   }
@@ -433,14 +437,14 @@ function configureOmpHost(ptyId: string, host: Host) {
   const viewport = el.querySelector('.xterm-viewport') as HTMLElement | null
   let scrollbarDragging = false
   const onPointerDown = (event: MouseEvent) => {
-    if (!viewport || scrollbarDragging) return
+    if (!viewport || scrollbarDragging || !inNormalBuffer()) return
     const bounds = viewport.getBoundingClientRect()
     if (event.clientX < bounds.left + viewport.clientLeft + viewport.clientWidth || event.clientX > bounds.right) return
     scrollbarDragging = true
     follow.pause()
   }
   const onViewportScroll = () => {
-    if (!visible() || follow.isSuspended()) return
+    if (!visible() || follow.isSuspended() || !inNormalBuffer()) return
     if (scrollbarDragging || term.hasSelection()) follow.userScroll()
     else follow.refresh()
   }
@@ -457,7 +461,7 @@ function configureOmpHost(ptyId: string, host: Host) {
   window.addEventListener('pointercancel', onPointerUp)
   el.addEventListener('wheel', onWheel, { capture: true, passive: true })
   el.addEventListener('keydown', onKey, true)
-  host.offRecovery = {
+  host.offViewport = {
     dispose() {
       if (userFrame !== undefined) cancelAnimationFrame(userFrame)
       offParsed.dispose()
@@ -628,7 +632,7 @@ function disposeHost(ptyId: string) {
   host.offSurface.dispose()
   host.offClipboard.dispose()
   host.offAccount?.dispose()
-  host.offRecovery?.dispose()
+  host.offViewport?.dispose()
   host.recovery?.dispose()
   host.follow?.dispose()
   host.stream.dispose()
@@ -651,7 +655,7 @@ watch(
 // existing host when that metadata arrives, instead of skipping setup forever.
 watch(() => store.live.map(item => `${item.ptyId}:${item.toolId}:${item.kind}`), () => {
   hosts.forEach((host, id) => {
-    configureOmpHost(id, host)
+    configureViewportHost(id, host)
     configureAntigravityHost(id, host)
   })
 })

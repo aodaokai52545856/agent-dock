@@ -127,7 +127,7 @@ function isGroupCollapsed(id: SessionGroupId) {
 }
 
 function hideGroupBody(id: SessionGroupId) {
-  return groupBodyHidden(isGroupCollapsed(id), store.sessionQuery)
+  return showGroupHeads.value && groupBodyHidden(isGroupCollapsed(id), store.sessionQuery)
 }
 
 function toggleGroup(id: SessionGroupId) {
