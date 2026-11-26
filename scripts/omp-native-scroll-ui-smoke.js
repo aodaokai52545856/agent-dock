@@ -4,17 +4,24 @@ async page => {
   page.on('pageerror', e => errors.push(e.message))
   await page.setViewportSize({ width: 1200, height: 760 })
   await page.route('**/omp-scroll-regression', route => route.fulfill({ contentType: 'text/html', body: '<!doctype html><html><body style="margin:0"><div id="app" style="height:100vh;display:flex"></div></body></html>' }))
-  await page.goto('http://localhost:1423/omp-scroll-regression')
+  await page.goto('http://127.0.0.1:1423/omp-scroll-regression')
   await page.evaluate(async () => {
     const callbacks = new Map(), listeners = new Map()
     let serial = 0
     const smoke = window.__scrollRegression = { ptyId: 'early-omp', sizes: [], input: [], repaint: null }
     window.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener() {} }
     window.__TAURI_INTERNALS__ = {
+      metadata: { currentWindow: { label: 'main' }, currentWebview: { label: 'main' } },
       transformCallback: fn => { callbacks.set(++serial, fn); return serial },
       unregisterCallback: id => callbacks.delete(id),
       invoke: async (command, args) => {
-        if (command === 'plugin:event|listen') { listeners.set(args.event, callbacks.get(args.handler)); return args.handler }
+        if (command === 'plugin:event|listen') {
+          const windowEvent = ['tauri://focus', 'tauri://blur', 'agent-dock-window-activation'].includes(args.event)
+          if (!windowEvent || (args.target.kind === 'Window' && args.target.label === 'main')) {
+            listeners.set(args.event, callbacks.get(args.handler))
+          }
+          return args.handler
+        }
         if (command === 'plugin:event|unlisten') return
         if (command === 'pty_reset_output') return
         if (command === 'pty_write') { if (args.ptyId === smoke.ptyId) smoke.input.push(args.data); return }
@@ -38,6 +45,8 @@ async page => {
     createApp({ render: () => h('div', { style: { display: store.appMode === 'console' ? 'flex' : 'none', flex: '1', minWidth: '0', minHeight: '0' } }, [h(Pane, { ref: pane, fontSize: 14 })]) }).mount('#app')
     await nextTick()
     smoke.write = data => listeners.get('pty-data')({ payload: { ptyId: smoke.ptyId, data } })
+    smoke.nativeFocus = focused => listeners.get(focused ? 'tauri://focus' : 'tauri://blur')?.({ payload: null })
+    smoke.activateWindow = active => listeners.get('agent-dock-window-activation')?.({ payload: active })
     // The backend starts emitting before the pty_open response registers live metadata.
     smoke.write('EARLY_NATIVE_OUTPUT\r\n')
     smoke.host = pane.value.ensureHost('early-omp')
@@ -223,33 +232,40 @@ async page => {
   async function hideAntigravity(surface) {
     await page.evaluate(surface => {
       const s = window.__scrollRegression
-      if (surface === 'window') window.dispatchEvent(new Event('blur'))
-      else if (surface === 'visibility') {
+      if (surface === 'window' || surface === 'desktop') window.dispatchEvent(new Event('blur'))
+      else if (surface === 'visibility' || surface === 'minimized') {
+        s.nativeFocus(false)
         Object.defineProperty(document, 'hidden', { configurable: true, value: true })
         document.dispatchEvent(new Event('visibilitychange'))
       } else if (surface === 'tab') s.store.appMode = 'usage'
       else s.store.activePtyId = 'early-omp'
+      if (surface === 'desktop') s.nativeFocus(false)
     }, surface)
     await page.evaluate(async () => {
       const s = window.__scrollRegression
-      // Model xterm reporting the top during a native repaint while hidden.
-      s.host.term.scrollToTop()
       await new Promise(resolve => {
         const parsed = s.host.term.onWriteParsed(() => { parsed.dispose(); resolve() })
         s.write('\x1b[?1049hANTIGRAVITY_REPAINT\x1b[?1049l')
       })
+      // Apply the displaced viewport after xterm finishes activating and
+      // laying out the normal buffer. Buffer activation itself can scroll it.
+      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))
+      s.host.term.scrollToTop()
     })
     await page.waitForFunction(() => {
       const buffer = window.__scrollRegression.host.term.buffer.active
       return buffer.type === 'normal' && buffer.viewportY === 0
-    })
+    }, undefined, { timeout: 1500 }).catch(() => { throw new Error(`Could not park the hidden Antigravity viewport at the top for ${surface}`) })
   }
 
   async function showAntigravity(surface) {
     await page.evaluate(surface => {
       const s = window.__scrollRegression
       if (surface === 'window') window.dispatchEvent(new Event('focus'))
-      else if (surface === 'visibility') {
+      // WebView2 can reactivate the parent window before the page gets input focus.
+      else if (surface === 'desktop') s.nativeFocus(true)
+      else if (surface === 'visibility' || surface === 'minimized') {
+        if (surface === 'minimized') s.nativeFocus(true)
         delete document.hidden
         document.dispatchEvent(new Event('visibilitychange'))
       } else if (surface === 'tab') s.store.appMode = 'console'
@@ -257,16 +273,86 @@ async page => {
     }, surface)
   }
 
-  const surfaces = ['window', 'visibility', 'tab', 'session']
+  const surfaces = ['window', 'desktop', 'visibility', 'minimized', 'tab', 'session']
   for (const surface of surfaces) {
     await hideAntigravity(surface)
     await showAntigravity(surface)
     await page.waitForFunction(() => {
       const s = window.__scrollRegression
       const buffer = s.host.term.buffer.active
-      return buffer.viewportY === buffer.baseY && s.screen().includes('DRAFT_PROMPT')
+      const viewport = s.host.el.querySelector('.xterm-viewport')
+      return buffer.viewportY === buffer.baseY && viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop <= 1
+        && s.host.el.querySelector('.xterm-rows').textContent.includes('DRAFT_PROMPT')
     }, undefined, { timeout: 1500 }).catch(() => { throw new Error(`Antigravity lost the latest output when returning to the ${surface}`) })
   }
+
+  // A wheel callback queued before blur can run for the first time AFTER focus.
+  // The last gesture was down at the bottom; a transient row 0 is not history intent.
+  await page.evaluate(() => {
+    const s = window.__scrollRegression
+    const viewport = s.host.el.querySelector('.xterm-viewport')
+    viewport.dispatchEvent(new WheelEvent('wheel', { bubbles: true, deltaY: 1 }))
+    window.dispatchEvent(new Event('blur'))
+    s.host.term.scrollToTop()
+    viewport.scrollTop = 0
+    window.dispatchEvent(new Event('focus'))
+  })
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+  await page.waitForFunction(() => {
+    const s = window.__scrollRegression
+    const buffer = s.host.term.buffer.active
+    return s.host.follow.isFollowing() && buffer.viewportY === buffer.baseY && s.host.el.querySelector('.xterm-rows').textContent.includes('DRAFT_PROMPT')
+  }, undefined, { timeout: 1500 }).catch(() => { throw new Error('A queued wheel callback pinned Antigravity at the top after refocus') })
+
+  // A minimized window can gain native focus before its terminal is measurable.
+  await page.evaluate(() => {
+    const s = window.__scrollRegression
+    s.nativeFocus(false)
+    s.host.el.closest('.workspace').style.display = 'none'
+    s.host.term.scrollToTop()
+    s.nativeFocus(true)
+  })
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+  await page.evaluate(() => { window.__scrollRegression.host.el.closest('.workspace').style.removeProperty('display') })
+  await page.waitForFunction(() => {
+    const s = window.__scrollRegression
+    return s.host.el.querySelector('.xterm-rows').textContent.includes('DRAFT_PROMPT')
+  }, undefined, { timeout: 1500 }).catch(() => { throw new Error('An idle Antigravity session lost its position when layout returned after focus') })
+
+  // A WebView can restore the scrollbar without a scroll event reaching xterm.
+  // Its model then already reports the bottom, so scrollToBottom() is a no-op.
+  await page.evaluate(async () => {
+    const s = window.__scrollRegression
+    s.nativeFocus(false)
+    const viewport = s.host.el.querySelector('.xterm-viewport')
+    const ignoreHiddenScroll = event => event.stopImmediatePropagation()
+    viewport.addEventListener('scroll', ignoreHiddenScroll, true)
+    viewport.scrollTop = 0
+    await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))
+    viewport.removeEventListener('scroll', ignoreHiddenScroll, true)
+    const buffer = s.host.term.buffer.active
+    if (viewport.scrollTop !== 0 || buffer.viewportY !== buffer.baseY) throw new Error('Failed to simulate a stale WebView scrollbar')
+    s.nativeFocus(true)
+  })
+  await page.waitForFunction(() => {
+    const viewport = window.__scrollRegression.host.el.querySelector('.xterm-viewport')
+    return viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop <= 1
+  }, undefined, { timeout: 1500 }).catch(() => { throw new Error('The WebView scrollbar stayed at the top while xterm reported the bottom') })
+
+  await page.evaluate(async () => {
+    const s = window.__scrollRegression, term = s.host.term
+    term.select(0, term.buffer.active.baseY, 5)
+    s.selectedText = term.getSelection()
+    s.nativeFocus(false)
+    term.scrollToTop()
+    await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))
+    s.nativeFocus(true)
+  })
+  await page.waitForFunction(() => {
+    const s = window.__scrollRegression
+    return s.selectedText && s.host.term.getSelection() === s.selectedText && s.host.term.buffer.active.viewportY === s.host.term.buffer.active.baseY
+  }, undefined, { timeout: 1500 }).catch(() => { throw new Error('A text selection required a click to restore the terminal viewport') })
+  await page.evaluate(() => window.__scrollRegression.host.term.clearSelection())
 
   await page.mouse.move(500, 300)
   await page.mouse.wheel(0, -480)
@@ -278,12 +364,12 @@ async page => {
   for (const surface of surfaces) {
     await hideAntigravity(surface)
     await showAntigravity(surface)
-    await page.waitForFunction(line => window.__scrollRegression.screen().startsWith(line + '\n'), historyLine, { timeout: 1500 })
+    await page.waitForFunction(line => window.__scrollRegression.host.el.querySelector('.xterm-rows > div').textContent.trimEnd() === line, historyLine, { timeout: 1500 })
       .catch(() => { throw new Error(`Antigravity lost the history position when returning to the ${surface}`) })
   }
 
   if (await page.evaluate(() => { const s = window.__scrollRegression; return s.input.length || s.sizes.length })) {
-    throw new Error('Antigravity scroll restoration sent terminal input or triggered a repaint')
+    throw new Error('Antigravity scroll restoration sent terminal input or resized the PTY')
   }
 
   await page.evaluate(() => window.__scrollRegression.write('\x1b[?1049hANTIGRAVITY_ALT_VIEW'))
@@ -297,6 +383,50 @@ async page => {
   await page.waitForFunction(line => window.__scrollRegression.screen().startsWith(line + '\n'), historyLine, { timeout: 1500 })
     .catch(() => { throw new Error('Antigravity alternate-screen scrolling replaced the saved history position') })
 
+  // On Windows the HWND returns to the foreground, but WebView2 can report
+  // only a late blur. The page remains visible throughout an application switch.
+  await page.evaluate(() => {
+    const s = window.__scrollRegression
+    s.activateWindow(true)
+    s.nativeFocus(false)
+  })
+  await page.mouse.wheel(0, -200)
+  await page.waitForFunction(line => {
+    const s = window.__scrollRegression
+    return !s.host.follow.isSuspended() && s.host.el.querySelector('.xterm-rows > div').textContent.trimEnd() !== line
+  }, historyLine, { timeout: 1500 })
+  const parked = await page.evaluate(() => {
+    const el = window.__scrollRegression.host.el
+    return { line: el.querySelector('.xterm-rows > div').textContent.trimEnd(), top: el.querySelector('.xterm-viewport').scrollTop }
+  })
+  await page.evaluate(() => {
+    const s = window.__scrollRegression
+    s.activateWindow(false)
+    s.nativeFocus(false)
+    s.host.el.querySelector('.xterm-viewport').scrollTop = 0
+  })
+  await page.waitForFunction(() => window.__scrollRegression.host.term.buffer.active.viewportY === 0)
+  await page.evaluate(() => {
+    const s = window.__scrollRegression
+    s.activateWindow(true)
+    window.dispatchEvent(new Event('blur'))
+    s.nativeFocus(false)
+  })
+  await page.waitForFunction(expected => {
+    const s = window.__scrollRegression, el = s.host.el
+    return !s.host.follow.isSuspended() && el.querySelector('.xterm-rows > div').textContent.trimEnd() === expected.line
+      && Math.abs(el.querySelector('.xterm-viewport').scrollTop - expected.top) < 16
+  }, parked, { timeout: 1500 }).catch(() => { throw new Error('Switching desktop applications lost the parked history line after a late child blur') })
+
   if (errors.length) throw new Error(errors.join('\n'))
-  return { ok: true, cases: ['output-before-metadata', 'follow-streaming-output', 'resume-hidden-output', 'resume-dock-tab-output', 'preserve-manual-history', 'short-answer-bottom-recovery', 'periodic-control-output', 'no-repaint-loop', 'free-spinning-wheel-no-repaint', 'deduplicate-answer-recovery', 'recover-new-short-answer-once', 'idle-buffer-restore', 'visible-scrollbar', 'scrollbar-pauses-follow', 'restore-idle-history-marker', 'antigravity-restore-live-output', 'antigravity-restore-history', 'antigravity-restore-without-repaint', 'antigravity-alternate-screen-preserves-history'] }
+  return { ok: true, cases: [
+    'output-before-metadata', 'follow-streaming-output', 'resume-hidden-output', 'resume-dock-tab-output',
+    'preserve-manual-history', 'short-answer-bottom-recovery', 'periodic-control-output', 'no-repaint-loop',
+    'free-spinning-wheel-no-repaint', 'deduplicate-answer-recovery', 'recover-new-short-answer-once',
+    'idle-buffer-restore', 'visible-scrollbar', 'scrollbar-pauses-follow', 'restore-idle-history-marker',
+    'antigravity-restore-live-output', 'antigravity-restore-history', 'antigravity-native-window-focus',
+    'antigravity-cancel-stale-gesture', 'antigravity-resume-after-layout', 'antigravity-restore-scrollbar',
+    'antigravity-preserve-selection', 'antigravity-restore-without-repaint', 'antigravity-alternate-screen-preserves-history',
+    'antigravity-top-level-window-activation'
+  ] }
 }

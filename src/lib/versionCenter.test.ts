@@ -34,9 +34,39 @@ async function test(name: string, run: () => Promise<void>) { await run(); conso
 await test('Antigravity offers upgrades with a local installation and uses the official guide for installation', async () => {
   const missing = idleVersionRow('antigravity')
   assert.equal(canUpgradeTool(missing), false)
+  assert.equal(canUpgradeTool(missing, true), true)
+  assert.equal(canUpgradeTool({ ...missing, compare: '未安装' }, true), false)
   const installed = { ...missing, found: true, localVersion: '1.0' }
   assert.equal(canUpgradeTool(installed), true)
   assert.equal(canUninstallTool(installed), false)
+})
+
+await test('Antigravity joins the upgrade batch and leaves it when the installed version is confirmed', async () => {
+  const f = fixture(), center = createVersionCenter(f.backend)
+  await center.check('antigravity')
+  const targets = center.updatable.value.map(row => row.toolId)
+  assert.deepEqual(targets, ['antigravity'])
+  f.backend.startVersionTasks = async (requested, action, proxy) => {
+    assert.deepEqual(requested, targets)
+    assert.equal(action, 'upgrade')
+    assert.equal(proxy, 'http://proxy')
+    return snap(1, [task('running', { target: 'antigravity' })])
+  }
+  center.state.proxyUrl = 'http://proxy'
+  await center.start(targets, 'upgrade')
+  center.accept(snap(2, [task('succeeded', { target: 'antigravity' })]))
+  assert.deepEqual(center.updatable.value, [])
+  assert.equal(center.state.rows.find(row => row.toolId === 'antigravity')?.compare, '已是最新')
+})
+
+await test('a direct Antigravity upgrade refreshes both versions when there was no cached check', async () => {
+  const f = fixture(), center = createVersionCenter(f.backend)
+  await center.sync()
+  const row = { ...idleVersionRow('antigravity'), found: true, localVersion: '1.5.17', latestVersion: '1.5.17', compare: '已是最新' }
+  f.backend.listToolVersions = async () => [row]
+  center.accept(snap(1, [task('succeeded', { target: 'antigravity', localVersion: '1.5.17' })]))
+  await Promise.resolve()
+  assert.deepEqual(center.state.rows.find(r => r.toolId === 'antigravity'), row)
 })
 
 await test('OMP pending update survives remount without replacing the client installer',async()=>{

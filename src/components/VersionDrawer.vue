@@ -32,6 +32,7 @@ watch(() => props.open, open => {
 }, { immediate: true })
 
 const lastTask = (target: string) => history.value.find(task => task.target === target)
+const canRunUpgrade = (row: ToolVersionInfo) => canUpgradeTool(row, store.probes?.[row.toolId]?.found)
 const targetLabel = (target: string) => target === 'app' ? 'Agent Dock' : toolLabel(target as ToolId)
 const taskLabel = (task: VersionTask) => ({ upgrade: task.target === 'antigravity' ? '升级' : '安装 / 升级', uninstall: '卸载', download: '下载更新', apply: '安装更新' })[task.action]
 const bytes = (value: number) => `${(value / 1024 / 1024).toFixed(1)} MB`
@@ -143,8 +144,8 @@ async function copy(text: string) { showToast(await api.clipboardWrite(text) ? '
                     <td><span class="status" :class="statusClass(statusLabel(row.toolId, row.compare))">{{ statusLabel(row.toolId, row.compare) }}</span></td>
                     <td><div class="row-actions">
                       <button type="button" class="btn btn-ghost btn-small" :disabled="busy" @click="versionCenter.check(row.toolId)">检测</button>
-                      <button v-if="row.toolId === 'antigravity' && !row.found" type="button" class="btn btn-ghost btn-small" @click="api.openExternal(TOOL_OFFICIAL_URLS.antigravity)">安装指南 ↗</button>
-                      <button v-else type="button" class="btn btn-ghost btn-small" :disabled="busy || !canUpgradeTool(row)" @click="state.snapshot.readyTools?.[row.toolId] ? (ompApplyConfirm = true) : versionCenter.start([row.toolId], 'upgrade')">{{ actionLabel(row) }}</button>
+                      <button v-if="row.toolId === 'antigravity' && !canRunUpgrade(row)" type="button" class="btn btn-ghost btn-small" @click="api.openExternal(TOOL_OFFICIAL_URLS.antigravity)">安装指南 ↗</button>
+                      <button v-else type="button" class="btn btn-ghost btn-small" :disabled="busy || !canRunUpgrade(row)" @click="state.snapshot.readyTools?.[row.toolId] ? (ompApplyConfirm = true) : versionCenter.start([row.toolId], 'upgrade')">{{ actionLabel(row) }}</button>
                       <button v-if="row.toolId === 'omp' && state.snapshot.readyTools?.omp && lastTask('omp')?.status === 'failed'" type="button" class="text-btn" :disabled="busy" @click="versionCenter.start(['omp'], 'upgrade')">重新下载</button>
                       <button type="button" class="text-btn detail-toggle" :aria-label="`${toolLabel(row.toolId)}详情`" :aria-expanded="expanded === row.toolId" @click="expanded = expanded === row.toolId ? '' : row.toolId">详情 <span aria-hidden="true">{{ expanded === row.toolId ? '⌃' : '⌄' }}</span></button>
                     </div></td>

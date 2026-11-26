@@ -1,5 +1,5 @@
 import { computed, reactive } from 'vue'
-import { seedVersionRows, patchVersionRow } from './toolVersions.ts'
+import { isVersionIdle, seedVersionRows, patchVersionRow } from './toolVersions.ts'
 import { TOOLS, type AppUpdateInfo, type ToolId, type ToolVersionInfo, type VersionAction, type VersionTask, type VersionTaskSnapshot } from './types.ts'
 
 interface Backend {
@@ -15,8 +15,9 @@ export function taskRunning(task: VersionTask) { return task.status === 'queued'
 export function toolInstalled(row: ToolVersionInfo) {
   return row.found && row.localVersion !== '未安装' && row.compare !== '未通过检查' && (!row.checks?.length || row.checks.every(check => check.ok))
 }
-export function canUpgradeTool(row: ToolVersionInfo) {
-  return (row.toolId !== 'grokbuild' && row.toolId !== 'antigravity') || row.found
+export function canUpgradeTool(row: ToolVersionInfo, probedInstalled = false) {
+  if (row.toolId === 'antigravity') return row.found || (isVersionIdle(row.compare) && probedInstalled)
+  return row.toolId !== 'grokbuild' || row.found
 }
 export function canUninstallTool(row: ToolVersionInfo) {
   return row.toolId !== 'antigravity' && toolInstalled(row)
@@ -68,7 +69,15 @@ export function createVersionCenter(backend: Backend) {
     const current = snapshot.tasks.filter(task => task.batchId === snapshot.batchId)
     if (current.length && current.every(task => !taskRunning(task)) && snapshot.batchId !== notifiedBatch) {
       notifiedBatch = snapshot.batchId
-      if (!initial) { state.unread = !state.panelOpen; backend.settled?.(current) }
+      if (!initial) {
+        state.unread = !state.panelOpen
+        backend.settled?.(current)
+        // A direct upgrade can finish before the first check, or install a newer release than the cached one.
+        if (current.some(task => task.target === 'antigravity' && task.status === 'succeeded') &&
+            state.rows.find(row => row.toolId === 'antigravity')?.compare === '待检测' && !state.checking.antigravity) {
+          void checkTarget('antigravity', state.proxyUrl.trim())
+        }
+      }
     }
   }
 
@@ -92,24 +101,28 @@ export function createVersionCenter(backend: Backend) {
   }
   function close() { state.panelOpen = false }
 
+  async function checkTarget(id: ToolId | 'app', proxy: string) {
+    state.checking[id] = true
+    delete state.errors[id]
+    try {
+      if (id === 'app') {
+        state.app = await backend.checkAppUpdate(proxy)
+        state.appVersion = state.app.localVersion || state.appVersion
+      } else {
+        const result = await backend.listToolVersions(proxy, id)
+        const row = result.find(row => row.toolId === id)
+        if (!row) throw new Error('未返回版本信息，请重试')
+        state.rows = patchVersionRow(state.rows, row)
+      }
+    } catch (error) { state.errors[id] = message(error) }
+    finally { state.checking[id] = false }
+  }
   async function check(target: ToolId | 'app' | 'all') {
     if (busy.value) return
-    const targets = target === 'all' ? ['app', ...TOOLS.map(tool => tool.id)] : [target]
+    const targets = target === 'all' ? ['app' as const, ...TOOLS.map(tool => tool.id)] : [target]
     const proxy = state.proxyUrl.trim()
     state.error = ''
-    for (const id of targets) { state.checking[id] = true; delete state.errors[id] }
-    await Promise.all(targets.map(async id => {
-      try {
-        if (id === 'app') { state.app = await backend.checkAppUpdate(proxy); state.appVersion = state.app.localVersion || state.appVersion }
-        else {
-          const result = await backend.listToolVersions(proxy, id as ToolId)
-          const row = result.find(row => row.toolId === id)
-          if (!row) throw new Error('未返回版本信息，请重试')
-          state.rows = patchVersionRow(state.rows, row)
-        }
-      } catch (error) { state.errors[id] = message(error) }
-      finally { state.checking[id] = false }
-    }))
+    await Promise.all(targets.map(id => checkTarget(id, proxy)))
   }
 
   async function start(targets: string[], action: VersionAction) {

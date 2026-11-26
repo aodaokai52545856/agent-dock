@@ -1,4 +1,67 @@
-use tauri::WebviewWindow;
+use tauri::{Emitter, EventTarget, WebviewWindow};
+use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
+use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+use windows_sys::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass};
+use windows_sys::Win32::UI::WindowsAndMessaging::{WA_INACTIVE, WM_ACTIVATE, WM_NCDESTROY};
+
+// WebView2 can keep its page visible and omit GotFocus when the top-level HWND
+// becomes active. Observe the HWND itself, without changing keyboard focus.
+pub fn attach_activation_listener(win: &WebviewWindow) {
+    let handle = win.clone();
+    let _ = win.run_on_main_thread(move || {
+        let Ok(hwnd) = handle.hwnd() else { return };
+        let (sender, mut events) = unbounded_channel::<bool>();
+        let context = Box::into_raw(Box::new(sender));
+        // The subclass owns the sender until WM_NCDESTROY. Its address is also
+        // the subclass ID so a registration can never replace another's data.
+        if unsafe {
+            SetWindowSubclass(
+                hwnd.0 as HWND,
+                Some(activation_proc),
+                context as usize,
+                context as usize,
+            )
+        } == 0
+        {
+            unsafe { drop(Box::from_raw(context)) };
+            return;
+        }
+        // Emit in message order outside the window procedure. A synchronous
+        // activation may be running inside a Tauri window operation already.
+        tauri::async_runtime::spawn(async move {
+            while let Some(active) = events.recv().await {
+                let _ = handle.emit_to(
+                    EventTarget::window(handle.label()),
+                    "agent-dock-window-activation",
+                    active,
+                );
+            }
+        });
+    });
+}
+
+unsafe extern "system" fn activation_proc(
+    hwnd: HWND,
+    message: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+    id: usize,
+    data: usize,
+) -> LRESULT {
+    let sender = data as *mut UnboundedSender<bool>;
+    match message {
+        WM_ACTIVATE => {
+            let active = wparam & 0xffff != WA_INACTIVE as usize && wparam >> 16 == 0;
+            let _ = (*sender).send(active);
+        }
+        WM_NCDESTROY => {
+            RemoveWindowSubclass(hwnd, Some(activation_proc), id);
+            drop(Box::from_raw(sender));
+        }
+        _ => {}
+    }
+    DefSubclassProc(hwnd, message, wparam, lparam)
+}
 
 pub fn attach_webview_position_sync(win: &WebviewWindow) {
     let window = win.as_ref().window();

@@ -12,7 +12,10 @@ static REVEALED: AtomicBool = AtomicBool::new(false);
 pub fn attach(win: &WebviewWindow, on_close: impl Fn() -> bool + Send + Sync + 'static) {
     apply_window_icon(win);
     #[cfg(windows)]
-    windows::attach_webview_position_sync(win);
+    {
+        windows::attach_activation_listener(win);
+        windows::attach_webview_position_sync(win);
+    }
     // Opaque first. Acrylic + a transparent webview before the first paint
     // is the blank gray window.
     let _ = win.set_background_color(Some(tauri::window::Color(11, 15, 19, 255)));

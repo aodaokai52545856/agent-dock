@@ -1,9 +1,10 @@
 type ViewportAnchor = { readonly line: number; dispose: () => void }
 
 type FollowHooks = {
-  canFollow: () => boolean
+  canFollow: (restoring: boolean) => boolean
   atBottom: () => boolean
   scrollToBottom: () => void
+  syncScrollbar?: () => void
   scheduleFrame: (callback: () => void) => number
   cancelFrame: (id: number) => void
   captureAnchor?: () => ViewportAnchor | undefined
@@ -29,9 +30,10 @@ export function createTermFollow(hooks: FollowHooks) {
     if (disposed || frame !== undefined) return
     frame = hooks.scheduleFrame(() => {
       frame = undefined
-      if (suspended || !hooks.canFollow()) return
+      if (suspended || !hooks.canFollow(restoring)) return
       if (following) hooks.scrollToBottom()
       else if (restoring && anchor && anchor.line >= 0) hooks.scrollToLine?.(anchor.line)
+      if (restoring) hooks.syncScrollbar?.()
       restoring = false
     })
   }

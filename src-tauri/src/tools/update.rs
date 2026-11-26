@@ -12,6 +12,8 @@ use std::time::Duration;
 
 const KIMI_DOWNLOAD_BASE: &str = "https://code.kimi.com/kimi-code";
 const KIMI_LATEST_URL: &str = "https://code.kimi.com/kimi-code/latest";
+// The same platform manifests are used by Google's CLI installers and `agy update`.
+const ANTIGRAVITY_MANIFESTS: &str = "https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests";
 const HTTP_CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
 const HTTP_TEXT_READ_TIMEOUT: Duration = Duration::from_secs(30);
 const HTTP_BIN_READ_TIMEOUT: Duration = Duration::from_secs(300);
@@ -98,7 +100,8 @@ pub fn upgrade_tool(tool: ToolId, settings: &AppSettings, proxy_url: Option<&str
         ToolId::Omp => return super::omp_update::upgrade(settings, Some(proxy_url.unwrap_or(&settings.default_proxy_url))),
         ToolId::Opencode => upgrade_via_npm(&mut log, "opencode-ai", &proxy),
         ToolId::Kimi => upgrade_kimi(&mut log, settings, &proxy),
-        ToolId::Grokbuild | ToolId::Antigravity => upgrade_via_cli(tool, &mut log, settings, &proxy),
+        ToolId::Grokbuild => upgrade_via_cli(tool, &mut log, settings, &proxy),
+        ToolId::Antigravity => return upgrade_antigravity(settings, &proxy),
         ToolId::Claude => upgrade_claude(&mut log, settings, &proxy),
         ToolId::Pi => upgrade_via_npm_flags(
             &mut log,
@@ -184,8 +187,23 @@ fn version_info(tool: ToolId, settings: &AppSettings, proxy_url: Option<&str>) -
         .as_ref()
         .map(|path| local_version(tool, path))
         .unwrap_or_else(|| "未安装".into());
-    let latest = remote_version(tool, settings, resolved.as_deref(), proxy_url);
-    let compare = compare_label(&local, &latest);
+    let mut checks = Vec::new();
+    let latest = remote_version(tool, settings, resolved.as_deref(), proxy_url)
+        .unwrap_or_else(|detail| {
+            if tool == ToolId::Antigravity {
+                checks.push(ToolCheck {
+                    name: "官方版本清单".into(),
+                    ok: false,
+                    detail,
+                });
+            }
+            "查询失败".into()
+        });
+    let compare = if resolved.is_some() && !checks.is_empty() {
+        "检测失败".into()
+    } else {
+        compare_label(&local, &latest)
+    };
     ToolVersionInfo {
         tool_id: tool,
         name: tool.display_name().to_string(),
@@ -194,7 +212,7 @@ fn version_info(tool: ToolId, settings: &AppSettings, proxy_url: Option<&str>) -
         local_version: local,
         latest_version: latest,
         compare,
-        checks: Vec::new(),
+        checks,
     }
 }
 
@@ -211,7 +229,8 @@ fn dsh_version_info(settings: &AppSettings, proxy_url: Option<&str>) -> ToolVers
     } else {
         "未通过检查".into()
     };
-    let latest = remote_version(ToolId::Dsh, settings, resolved.as_deref(), proxy_url);
+    let latest = remote_version(ToolId::Dsh, settings, resolved.as_deref(), proxy_url)
+        .unwrap_or_else(|_| "查询失败".into());
     let compare = if report.ok() {
         compare_label(&local, &latest)
     } else if resolved.is_none() {
@@ -305,33 +324,145 @@ fn read_npm_package_version_named(path: &Path, pkg: &str) -> Option<String> {
     Some(ver.to_string())
 }
 
-fn remote_version(tool: ToolId, settings: &AppSettings, exe: Option<&Path>, proxy_url: Option<&str>) -> String {
+fn remote_version(
+    tool: ToolId,
+    settings: &AppSettings,
+    exe: Option<&Path>,
+    proxy_url: Option<&str>,
+) -> Result<String, String> {
     let proxy = proxy_pairs(proxy_url.unwrap_or(&settings.default_proxy_url));
     match tool {
-        ToolId::Opencode => npm_view("opencode-ai", &proxy),
+        ToolId::Opencode => npm_view_result("opencode-ai", &proxy),
         ToolId::Kimi => match exe {
             Some(path) if is_native_kimi(path) => kimi_remote_latest(&proxy)
-                .or_else(|_| npm_view_result("@moonshot-ai/kimi-code", &proxy))
-                .unwrap_or_else(|_| "查询失败".into()),
-            _ => npm_view("@moonshot-ai/kimi-code", &proxy),
+                .or_else(|_| npm_view_result("@moonshot-ai/kimi-code", &proxy)),
+            _ => npm_view_result("@moonshot-ai/kimi-code", &proxy),
         },
-        ToolId::Claude => npm_view("@anthropic-ai/claude-code", &proxy),
-        ToolId::Omp => super::omp_update::latest(Some(proxy_url.unwrap_or(&settings.default_proxy_url))).unwrap_or_else(|_| "查询失败".into()),
-        ToolId::Pi => npm_view("@earendil-works/pi-coding-agent", &proxy),
-        ToolId::Antigravity => "—".into(),
-        ToolId::Dsh => npm_view("@deepseek-ai/dsh", &proxy),
+        ToolId::Claude => npm_view_result("@anthropic-ai/claude-code", &proxy),
+        ToolId::Omp => super::omp_update::latest(Some(proxy_url.unwrap_or(&settings.default_proxy_url))),
+        ToolId::Pi => npm_view_result("@earendil-works/pi-coding-agent", &proxy),
+        ToolId::Antigravity => antigravity_release(&proxy).map(|(version, _)| version),
+        ToolId::Dsh => npm_view_result("@deepseek-ai/dsh", &proxy),
         ToolId::Grokbuild => match exe {
-            Some(path) => match run_capture(path, &["update", "--check"], &proxy) {
-                Ok(text) => parse_remote_from_check(&text).unwrap_or_else(|| "查询失败".into()),
-                Err(_) => "查询失败".into(),
-            },
-            None => "未安装".into(),
+            Some(path) => run_capture(path, &["update", "--check"], &proxy)
+                .and_then(|text| parse_remote_from_check(&text).ok_or_else(|| "查询失败".into())),
+            None => Ok("未安装".into()),
         },
     }
 }
 
-fn npm_view(pkg: &str, proxy: &[(String, String)]) -> String {
-    npm_view_result(pkg, proxy).unwrap_or_else(|_| "查询失败".into())
+fn antigravity_manifest_url(os: &str, arch: &str, musl: bool) -> Result<String, String> {
+    let platform = match os {
+        "windows" | "linux" => os,
+        "macos" => "darwin",
+        _ => return Err(format!("Antigravity CLI 暂无 {os} 版本清单")),
+    };
+    let cpu = match arch {
+        "x86_64" => "amd64",
+        "aarch64" => "arm64",
+        _ => return Err(format!("Antigravity CLI 暂无 {arch} 版本清单")),
+    };
+    let suffix = if os == "linux" && musl { "_musl" } else { "" };
+    Ok(format!(
+        "{ANTIGRAVITY_MANIFESTS}/{platform}_{cpu}{suffix}.json"
+    ))
+}
+
+fn antigravity_release(proxy: &[(String, String)]) -> Result<(String, &[(String, String)]), String> {
+    let url = antigravity_manifest_url(
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+        cfg!(target_env = "musl"),
+    )?;
+    let (bytes, route) = http_get_bytes(&url, proxy)?;
+    Ok((parse_antigravity_manifest(&bytes)?, route))
+}
+
+fn parse_antigravity_manifest(bytes: &[u8]) -> Result<String, String> {
+    #[derive(serde::Deserialize)]
+    struct Manifest {
+        version: String,
+    }
+
+    let manifest: Manifest = serde_json::from_slice(bytes)
+        .map_err(|err| format!("无法读取 Antigravity CLI 版本清单：{err}"))?;
+    let version = manifest.version.trim();
+    let version = version.strip_prefix('v').unwrap_or(version);
+    parse_version(version)
+        .filter(|parsed| parsed == version)
+        .ok_or_else(|| "Antigravity CLI 版本清单中的版本号无效".into())
+}
+
+fn upgrade_antigravity(settings: &AppSettings, proxy: &[(String, String)]) -> UpgradeResult {
+    let tool = ToolId::Antigravity;
+    let exe = match resolve_binary(tool, settings) {
+        Ok(path) => path,
+        Err(log) => {
+            return UpgradeResult {
+                ok: false,
+                log,
+                local_version: "未安装".into(),
+            };
+        }
+    };
+    let mut log = String::new();
+    let (target, route) = match antigravity_release(proxy) {
+        Ok((version, route)) => {
+            let local = local_version(tool, &exe);
+            let compare = compare_label(&local, &version);
+            push_line(&mut log, &format!("本机 {local}，官方最新版 {version}。"));
+            if matches!(compare.as_str(), "已是最新" | "新于远端") {
+                push_line(&mut log, &compare);
+                return UpgradeResult {
+                    ok: true,
+                    log,
+                    local_version: local,
+                };
+            }
+            if !proxy.is_empty() && route.is_empty() {
+                push_line(&mut log, "代理连接失败，已通过直连取得版本清单，本次升级使用直连。");
+            }
+            (Some(version), route)
+        }
+        Err(err) => {
+            push_line(&mut log, &format!("读取官方版本清单失败，交由 agy update 检查：{err}"));
+            (None, proxy)
+        }
+    };
+    // Go's updater also reads inherited proxy variables. Use the route that reached the manifest.
+    let clear: &[&str] = if route.is_empty() {
+        &["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"]
+    } else {
+        &[]
+    };
+    let mut ok = run_cli_update(&exe, &mut log, route, clear);
+    let installed = local_version(tool, &exe);
+    if ok {
+        match verify_antigravity_upgrade(&installed, target.as_deref()) {
+            Ok(()) => push_line(&mut log, &format!("已确认本机版本 {installed}。")),
+            Err(err) => {
+                push_line(&mut log, &err);
+                ok = false;
+            }
+        }
+    }
+    UpgradeResult {
+        ok,
+        log,
+        local_version: installed,
+    }
+}
+
+fn verify_antigravity_upgrade(installed: &str, expected: Option<&str>) -> Result<(), String> {
+    if semver_tuple(installed).is_none() {
+        return Err("无法读取升级后的 agy --version，请检查安装路径后重试。".into());
+    }
+    if let Some(target) = expected {
+        if !matches!(compare_label(installed, target).as_str(), "已是最新" | "新于远端") {
+            return Err(format!("升级后本机仍是 {installed}，目标版本为 {target}。请检查安装路径和上方升级日志后重试。"));
+        }
+    }
+    Ok(())
 }
 
 fn npm_view_result(pkg: &str, proxy: &[(String, String)]) -> Result<String, String> {
@@ -683,10 +814,16 @@ fn http_agent(proxy: &[(String, String)], read_timeout: Duration) -> Result<ureq
     Ok(builder.build())
 }
 
-fn http_get_bytes(url: &str, proxy: &[(String, String)]) -> Result<Vec<u8>, String> {
+fn http_get_bytes<'a>(
+    url: &str,
+    proxy: &'a [(String, String)],
+) -> Result<(Vec<u8>, &'a [(String, String)]), String> {
     match http_get_bytes_once(url, proxy) {
-        Ok(bytes) => Ok(bytes),
-        Err(err) if !proxy.is_empty() => http_get_bytes_once(url, &[]).map_err(|_| err),
+        Ok(bytes) => Ok((bytes, proxy)),
+        Err(err) if !proxy.is_empty() => {
+            let bytes = http_get_bytes_once(url, &[]).map_err(|_| err)?;
+            Ok((bytes, &[]))
+        }
         Err(err) => Err(err),
     }
 }
@@ -802,7 +939,7 @@ fn http_download_sha256_progress(
 }
 
 pub(crate) fn http_get_text(url: &str, proxy: &[(String, String)]) -> Result<String, String> {
-    let bytes = http_get_bytes(url, proxy)?;
+    let (bytes, _) = http_get_bytes(url, proxy)?;
     String::from_utf8(bytes)
         .map(|text| text.trim().to_string())
         .map_err(|_| "远端返回不是文本".into())
@@ -1144,13 +1281,19 @@ fn upgrade_via_cli(tool: ToolId, log: &mut String, settings: &AppSettings, proxy
             return false;
         }
     };
+    run_cli_update(&exe, log, proxy, &[])
+}
+
+fn run_cli_update(
+    exe: &Path,
+    log: &mut String,
+    proxy: &[(String, String)],
+    clear_env: &[&str],
+) -> bool {
     push_line(log, &format!("$ {} update", exe.display()));
-    match run_capture(&exe, &["update"], proxy) {
+    match run_capture_with(exe, &["update"], proxy, clear_env) {
         Ok(text) => {
-            log.push_str(&text);
-            if !text.ends_with('\n') {
-                log.push('\n');
-            }
+            push_line(log, &text);
             true
         }
         Err(err) => {
@@ -1547,6 +1690,44 @@ mod tests {
             parse_version("@deepseek-ai/dsh@0.1.5-rc.1").as_deref(),
             Some("0.1.5-rc.1")
         );
+    }
+
+    #[test]
+    fn antigravity_uses_the_cli_manifest_for_each_desktop_target() {
+        for (os, arch, musl, name) in [
+            ("windows", "x86_64", false, "windows_amd64"),
+            ("windows", "aarch64", false, "windows_arm64"),
+            ("macos", "x86_64", false, "darwin_amd64"),
+            ("macos", "aarch64", false, "darwin_arm64"),
+            ("linux", "x86_64", false, "linux_amd64"),
+            ("linux", "aarch64", true, "linux_arm64_musl"),
+        ] {
+            assert_eq!(
+                antigravity_manifest_url(os, arch, musl).unwrap(),
+                format!("{ANTIGRAVITY_MANIFESTS}/{name}.json")
+            );
+        }
+        assert!(antigravity_manifest_url("windows", "x86", false).is_err());
+    }
+
+    #[test]
+    fn antigravity_compares_the_manifest_version_and_verifies_the_installed_binary() {
+        let release = parse_antigravity_manifest(
+            br#"{"url":"https://example.test/0.1.0/agy.exe","version":"1.5.17"}"#,
+        ).unwrap();
+        assert_eq!(compare_label("1.5.16", &release), "可更新");
+        assert_eq!(compare_label("1.5.17", &release), "已是最新");
+        assert!(verify_antigravity_upgrade("1.5.16", Some(&release)).is_err());
+        assert!(verify_antigravity_upgrade("未知", Some(&release)).is_err());
+        assert!(verify_antigravity_upgrade("1.5.17", Some(&release)).is_ok());
+        assert!(verify_antigravity_upgrade("1.5.18", Some(&release)).is_ok());
+        for invalid in [
+            br#"{"url":"https://example.test/1.5.17/agy.exe"}"#.as_slice(),
+            br#"{"version":"error 1.2.3"}"#,
+            b"not json",
+        ] {
+            assert!(parse_antigravity_manifest(invalid).is_err());
+        }
     }
 
     #[test]

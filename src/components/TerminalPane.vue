@@ -3,6 +3,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import { Terminal } from '@xterm/xterm'
 import '@xterm/xterm/css/xterm.css'
 import { listen, TauriEvent, type UnlistenFn } from '@tauri-apps/api/event'
+import { getCurrentWindow } from '@tauri-apps/api/window'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import * as api from '../lib/api'
 import { clampOverlayBox, isLayoutBusy, paneAnimating, paneDragging, windowMoving, windowResizing } from '../lib/layout'
@@ -50,7 +51,6 @@ type Host = {
   stream: ReturnType<typeof createTermStream>
   recovery?: ReturnType<typeof createTermRecovery>
   follow?: ReturnType<typeof createTermFollow>
-  offViewport?: { dispose: () => void }
   unseenOutput: boolean
   lastCols: number
   lastRows: number
@@ -65,8 +65,11 @@ let unlistenData: UnlistenFn | undefined
 let unlistenExit: UnlistenFn | undefined
 let unlistenConversation: UnlistenFn | undefined
 let unlistenDrop: UnlistenFn | undefined
+const windowListeners: UnlistenFn[] = []
 let observer: ResizeObserver | undefined
 let mounted = false
+let windowActive = true
+let topLevelActive: boolean | undefined
 const workspaceEl = ref<HTMLElement | null>(null)
 const menu = ref<{ x: number; y: number; hasSelection: boolean } | null>(null)
 const MENU_WIDTH = 200
@@ -371,14 +374,25 @@ function configureViewportHost(ptyId: string, host: Host) {
   const toolId = toolForPty(ptyId)
   if (host.follow || (toolId !== 'omp' && toolId !== 'antigravity')) return
   const { term, el } = host
+  const viewport = el.querySelector<HTMLElement>('.xterm-viewport')
   const atBottom = () => term.buffer.active.viewportY === term.buffer.active.baseY
   const inNormalBuffer = () => term.buffer.active.type === 'normal'
   const visible = () => store.appMode === 'console' && store.activePtyId === ptyId
-    && !document.hidden && !el.classList.contains('is-hidden') && el.clientHeight > 0
+    && windowActive && !document.hidden && !el.classList.contains('is-hidden') && el.clientHeight > 0
   const follow = createTermFollow({
-    canFollow: () => visible() && !term.hasSelection() && inNormalBuffer(),
+    // Park live output during a selection. Returning to the saved viewport
+    // moves neither end of that selection and must not require clearing it.
+    canFollow: restoring => visible() && inNormalBuffer() && (restoring || !term.hasSelection()),
     atBottom,
     scrollToBottom: () => term.scrollToBottom(),
+    syncScrollbar: () => {
+      // xterm's scrollTo* is a no-op when its buffer row is already correct,
+      // even if the WebView independently restored the scrollbar to the top.
+      const { baseY, viewportY } = term.buffer.active
+      if (!viewport || !baseY) return
+      const top = (viewport.scrollHeight - viewport.clientHeight) * viewportY / baseY
+      if (Math.abs(viewport.scrollTop - top) > 1) viewport.scrollTop = top
+    },
     scheduleFrame: cb => requestAnimationFrame(cb),
     cancelFrame: id => cancelAnimationFrame(id),
     captureAnchor: () => {
@@ -387,7 +401,6 @@ function configureViewportHost(ptyId: string, host: Host) {
     },
     scrollToLine: line => term.scrollToLine(line)
   })
-  host.follow = follow
   paintHost(el, ptyId)
   term.options.theme = theme(ptyId)
   if (isWindows && toolId === 'omp') {
@@ -410,7 +423,6 @@ function configureViewportHost(ptyId: string, host: Host) {
       const wasFollowing = follow.isFollowing()
       // DOM and buffer positions can disagree after a TUI repaint. A downward
       // gesture at the physical bottom explicitly asks to return to live output.
-      const viewport = el.querySelector('.xterm-viewport') as HTMLElement | null
       if (down && viewport && viewport.scrollTop + viewport.clientHeight >= viewport.scrollHeight - 1) term.scrollToBottom()
       follow.userScroll()
       if (down && follow.isFollowing()) {
@@ -426,7 +438,10 @@ function configureViewportHost(ptyId: string, host: Host) {
   }
   const onKey = (event: KeyboardEvent) => {
     if (!event.shiftKey || !inNormalBuffer()) return
-    if (event.key === 'PageUp' || event.key === 'Home') follow.pause()
+    if (event.key === 'PageUp' || event.key === 'Home') {
+      follow.pause()
+      observeUserScroll(false)
+    }
     if (event.key === 'PageDown' || event.key === 'End') observeUserScroll(true)
   }
   const offParsed = term.onWriteParsed(() => follow.refresh())
@@ -436,10 +451,12 @@ function configureViewportHost(ptyId: string, host: Host) {
     // user scroll intent: sampling that transient viewport can pin it at row 0.
     if (!term.hasSelection()) { follow.refresh(); host.recovery?.request() }
   })
-  const viewport = el.querySelector('.xterm-viewport') as HTMLElement | null
+  let pointerDown = false
   let scrollbarDragging = false
   const onPointerDown = (event: MouseEvent) => {
-    if (!viewport || scrollbarDragging || !inNormalBuffer()) return
+    if (event.button !== 0 || !inNormalBuffer()) return
+    pointerDown = true
+    if (!viewport || scrollbarDragging) return
     const bounds = viewport.getBoundingClientRect()
     if (event.clientX < bounds.left + viewport.clientLeft + viewport.clientWidth || event.clientX > bounds.right) return
     scrollbarDragging = true
@@ -447,36 +464,51 @@ function configureViewportHost(ptyId: string, host: Host) {
   }
   const onViewportScroll = () => {
     if (!visible() || follow.isSuspended() || !inNormalBuffer()) return
-    if (scrollbarDragging || term.hasSelection()) follow.userScroll()
+    if (scrollbarDragging || (pointerDown && term.hasSelection())) follow.userScroll()
     else follow.refresh()
   }
   const onPointerUp = () => {
+    pointerDown = false
     if (!scrollbarDragging) return
     scrollbarDragging = false
     observeUserScroll(true)
   }
-  viewport?.addEventListener('pointerdown', onPointerDown)
-  viewport?.addEventListener('mousedown', onPointerDown)
+  el.addEventListener('pointerdown', onPointerDown, true)
+  el.addEventListener('mousedown', onPointerDown, true)
   viewport?.addEventListener('scroll', onViewportScroll, { passive: true })
   window.addEventListener('pointerup', onPointerUp)
   window.addEventListener('mouseup', onPointerUp)
   window.addEventListener('pointercancel', onPointerUp)
   el.addEventListener('wheel', onWheel, { capture: true, passive: true })
   el.addEventListener('keydown', onKey, true)
-  host.offViewport = {
+  const cancelGesture = () => {
+    if (userFrame !== undefined) cancelAnimationFrame(userFrame)
+    userFrame = undefined
+    pointerDown = false
+    scrollbarDragging = false
+  }
+  host.follow = {
+    ...follow,
+    suspend() {
+      // A frame queued before blur can run after resume, when the WebView's
+      // transient row 0 would otherwise be recorded as the user's position.
+      cancelGesture()
+      follow.suspend()
+    },
     dispose() {
-      if (userFrame !== undefined) cancelAnimationFrame(userFrame)
+      cancelGesture()
       offParsed.dispose()
       offScroll.dispose()
       offSelection.dispose()
-      viewport?.removeEventListener('pointerdown', onPointerDown)
-      viewport?.removeEventListener('mousedown', onPointerDown)
+      el.removeEventListener('pointerdown', onPointerDown, true)
+      el.removeEventListener('mousedown', onPointerDown, true)
       viewport?.removeEventListener('scroll', onViewportScroll)
       window.removeEventListener('pointerup', onPointerUp)
       window.removeEventListener('mouseup', onPointerUp)
       window.removeEventListener('pointercancel', onPointerUp)
       el.removeEventListener('wheel', onWheel, true)
       el.removeEventListener('keydown', onKey, true)
+      follow.dispose()
     }
   }
   follow.refresh()
@@ -591,7 +623,7 @@ async function redrawHost(id: string, host: Host, focus: boolean) {
     if (hosts.get(id) !== host) return
     // Recheck after queued output/resize jobs, since the user may have moved
     // into history or another pane while this automatic repaint was waiting.
-    if (!focus && (store.appMode !== 'console' || store.activePtyId !== id || document.hidden
+    if (!focus && (store.appMode !== 'console' || store.activePtyId !== id || !windowActive || document.hidden
       || isLayoutBusy() || host.term.hasSelection() || !host.follow?.isFollowing())) return
     const { cols, rows } = host.term
     // A genuine size change asks OMP/ConPTY for a full repaint, even when
@@ -619,8 +651,7 @@ function show(ptyId: string | '') {
       void host.stream.resize(async () => {
         await resizeHost(visible, host, true)
         if (hosts.get(visible) !== host || store.activePtyId !== visible) return
-        refreshHost(host)
-        host.term.focus()
+        if (windowActive && !document.hidden && store.appMode === 'console') host.term.focus()
         resumeHostViewport(host)
       })
     })
@@ -634,7 +665,6 @@ function disposeHost(ptyId: string) {
   host.offSurface.dispose()
   host.offClipboard.dispose()
   host.offAccount?.dispose()
-  host.offViewport?.dispose()
   host.recovery?.dispose()
   host.follow?.dispose()
   host.stream.dispose()
@@ -712,7 +742,7 @@ onMounted(async () => {
       if (!mounted) { acknowledge(); return }
       const host = ensureHost(event.payload.ptyId)
       if (host) {
-        if (store.appMode !== 'console' || store.activePtyId !== event.payload.ptyId || document.hidden || !document.hasFocus()) host.unseenOutput = true
+        if (store.appMode !== 'console' || store.activePtyId !== event.payload.ptyId || !windowActive || document.hidden || !document.hasFocus()) host.unseenOutput = true
         host.stream.write(event.payload.data, acknowledge)
         host.recovery?.noteOutput(event.payload.data)
       } else acknowledge()
@@ -738,31 +768,73 @@ onMounted(async () => {
   if (target) {
     observer = new ResizeObserver(() => {
       scheduleFit()
+      if (store.activePtyId) hosts.get(store.activePtyId)?.follow?.refresh()
     })
     observer.observe(target)
   }
   window.addEventListener('ad-appearance', applyTermChrome)
   window.addEventListener('click', closeTermMenu)
   window.addEventListener('blur', closeTermMenu)
-  window.addEventListener('blur', suspendViewports)
+  window.addEventListener('blur', onWindowBlur)
   window.addEventListener('keydown', onTermMenuKey)
-  window.addEventListener('focus', resumeActiveViewport)
-  document.addEventListener('visibilitychange', resumeActiveViewport)
+  window.addEventListener('focus', onWindowFocus)
+  document.addEventListener('visibilitychange', onVisibilityChange)
   if (store.activePtyId) show(store.activePtyId)
+  if (api.isTauri) {
+    if (isWindows) {
+      void listenWindowActivity(() => getCurrentWindow().listen<boolean>('agent-dock-window-activation', ({ payload }) => {
+        topLevelActive = payload
+        setWindowActive(payload)
+      }))
+    }
+    void listenWindowActivity(() => getCurrentWindow().onFocusChanged(({ payload }) => {
+      if (payload) onWindowFocus()
+      else onWindowBlur()
+    }))
+  }
 })
+
+async function listenWindowActivity(register: () => Promise<UnlistenFn>) {
+  try {
+    const off = await register()
+    if (mounted) windowListeners.push(off)
+    else off()
+  } catch { /* DOM focus and visibility listeners are already active. */ }
+}
 
 function onTermMenuKey(event: KeyboardEvent) {
   if (event.key === 'Escape') closeTermMenu()
 }
 
+function onWindowBlur() {
+  // WebView2 sometimes delivers a late child blur after the parent has
+  // already been reactivated. The HWND event owns desktop activation.
+  if (topLevelActive === undefined) setWindowActive(false)
+}
+
+function onWindowFocus() {
+  if (topLevelActive !== false) setWindowActive(true)
+}
+
+function setWindowActive(active: boolean) {
+  windowActive = active
+  if (active) resumeActiveViewport()
+  else suspendViewports()
+}
+
+function onVisibilityChange() {
+  if (document.hidden) suspendViewports()
+  else onWindowFocus()
+}
+
 function resumeActiveViewport() {
-  if (document.hidden) { suspendViewports(); return }
   const host = store.activePtyId ? hosts.get(store.activePtyId) : undefined
-  if (!host || document.hidden || store.appMode !== 'console') return
-  resumeHostViewport(host)
+  if (host) resumeHostViewport(host)
 }
 
 function resumeHostViewport(host: Host) {
+  if (!windowActive || document.hidden || store.appMode !== 'console') return
+  refreshHost(host)
   host.follow?.resume()
   if (host.follow?.isFollowing() && host.unseenOutput) {
     host.unseenOutput = false
@@ -779,14 +851,15 @@ onUnmounted(() => {
   window.removeEventListener('ad-appearance', applyTermChrome)
   window.removeEventListener('click', closeTermMenu)
   window.removeEventListener('blur', closeTermMenu)
-  window.removeEventListener('blur', suspendViewports)
+  window.removeEventListener('blur', onWindowBlur)
   window.removeEventListener('keydown', onTermMenuKey)
-  window.removeEventListener('focus', resumeActiveViewport)
-  document.removeEventListener('visibilitychange', resumeActiveViewport)
+  window.removeEventListener('focus', onWindowFocus)
+  document.removeEventListener('visibilitychange', onVisibilityChange)
   unlistenData?.()
   unlistenExit?.()
   unlistenConversation?.()
   unlistenDrop?.()
+  windowListeners.forEach(off => off())
   observer?.disconnect()
   fitScheduler.dispose()
   hosts.forEach((_, id) => disposeHost(id))

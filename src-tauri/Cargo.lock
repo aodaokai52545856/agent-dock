@@ -45,7 +45,7 @@ dependencies = [
 
 [[package]]
 name = "agent-dock"
-version = "0.1.28"
+version = "0.1.29"
 dependencies = [
  "aes-gcm",
  "arboard",
