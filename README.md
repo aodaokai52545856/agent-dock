@@ -14,13 +14,13 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/aodaokai52545856/agent-dock/releases/tag/v0.1.28"><img src="https://img.shields.io/badge/⬇%20Download-v0.1.28-0A0A0A?style=for-the-badge&logo=github&logoColor=white" alt="Download v0.1.28"></a>
+  <a href="https://github.com/aodaokai52545856/agent-dock/releases/tag/v0.1.29"><img src="https://img.shields.io/badge/⬇%20Download-v0.1.29-0A0A0A?style=for-the-badge&logo=github&logoColor=white" alt="Download v0.1.29"></a>
   &nbsp;
   <a href="#快速开始"><img src="https://img.shields.io/badge/Quick_Start-启动-1a1a1a?style=for-the-badge" alt="Quick Start"></a>
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.1.28-111111?style=flat-square" alt="version">
+  <img src="https://img.shields.io/badge/version-0.1.29-111111?style=flat-square" alt="version">
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-0d0d0d?style=flat-square" alt="platform">
   <img src="https://img.shields.io/badge/stack-Tauri%202%20·%20Vue%203%20·%20Rust-141414?style=flat-square" alt="stack">
   <img src="https://img.shields.io/badge/license-Apache%202.0-3d9a6a?style=flat-square" alt="license">
@@ -366,19 +366,19 @@
 
 ## 下载
 
-> **v0.1.28** · 跨平台安装包 · 无需本机 Rust
+> **v0.1.29** · 跨平台安装包 · 无需本机 Rust
 
 | 文件 | 平台 | 说明 | 大小约 |
 | :---: | :---: | --- | ---: |
-| [**AgentDock-0.1.28-Setup.exe**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.28/AgentDock-0.1.28-Setup.exe) | Windows x64 | NSIS 安装包（推荐） | 9.6 MB |
-| [**AgentDock-0.1.28.exe**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.28/AgentDock-0.1.28.exe) | Windows x64 | 便携版 | 33.0 MB |
-| [**AgentDock-0.1.28.dmg**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.28/AgentDock-0.1.28.dmg) | macOS Apple Silicon | 磁盘映像 | 14.4 MB |
-| [**AgentDock-0.1.28.app.tar.gz**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.28/AgentDock-0.1.28.app.tar.gz) | macOS Apple Silicon | 应用压缩包 | 13.6 MB |
-| [**AgentDock-0.1.28.AppImage**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.28/AgentDock-0.1.28.AppImage) | Linux x64 | 免安装可执行 | 91.7 MB |
-| [**AgentDock-0.1.28.deb**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.28/AgentDock-0.1.28.deb) | Linux x64 | Debian / Ubuntu 安装包 | 14.6 MB |
+| [**AgentDock-0.1.29-Setup.exe**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.29/AgentDock-0.1.29-Setup.exe) | Windows x64 | NSIS 安装包（推荐） | 9.6 MB |
+| [**AgentDock-0.1.29.exe**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.29/AgentDock-0.1.29.exe) | Windows x64 | 便携版 | 33.3 MB |
+| [**AgentDock-0.1.29.dmg**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.29/AgentDock-0.1.29.dmg) | macOS Apple Silicon | 磁盘映像 | 14.4 MB |
+| [**AgentDock-0.1.29.app.tar.gz**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.29/AgentDock-0.1.29.app.tar.gz) | macOS Apple Silicon | 应用压缩包 | 13.6 MB |
+| [**AgentDock-0.1.29.AppImage**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.29/AgentDock-0.1.29.AppImage) | Linux x64 | 免安装可执行 | 91.7 MB |
+| [**AgentDock-0.1.29.deb**](https://github.com/aodaokai52545856/agent-dock/releases/download/v0.1.29/AgentDock-0.1.29.deb) | Linux x64 | Debian / Ubuntu 安装包 | 14.6 MB |
 
 <p align="center">
-  <a href="https://github.com/aodaokai52545856/agent-dock/releases/tag/v0.1.28"><b>→ 打开 Releases · v0.1.28</b></a>
+  <a href="https://github.com/aodaokai52545856/agent-dock/releases/tag/v0.1.29"><b>→ 打开 Releases · v0.1.29</b></a>
 </p>
 
 **运行前提**
@@ -390,7 +390,7 @@
 | **CLI** | `opencode` / `grok` / `kimi` / `claude` 等自行安装并登录；Dock **不代登录** |
 | **编排** | 自动开发需 Cursor API Key；Codex 审查需本机已登录 Codex |
 
-> **macOS 提示** · CI 产物暂未通过 Apple 公证。若提示「已损坏」，终端执行 `xattr -cr ~/Downloads/AgentDock-0.1.28.dmg`，或对 app **右键 → 打开**。
+> **macOS 提示** · CI 产物暂未通过 Apple 公证。若提示「已损坏」，终端执行 `xattr -cr ~/Downloads/AgentDock-0.1.29.dmg`，或对 app **右键 → 打开**。
 
 ---
 
